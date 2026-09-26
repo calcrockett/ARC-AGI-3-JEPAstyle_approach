@@ -81,9 +81,18 @@ before your rule is even considered:
 
 Work on a copy. Never mutate `state` in place.
 
-Here is a COMPLETE, VALID answer -- a model that predicts "nothing \
-changes". Copy this structure exactly and replace only the marked line \
-with your inferred rule:
+goal_hint is what the agent PLAYS with. Once a model is accepted, a search \
+tries each action in your simulator and picks the one whose predicted next \
+board has the HIGHEST goal_hint. It must NOT be constant -- a constant gives \
+the search nothing to choose between, and a model whose goal_hint returns \
+the same value on every board shown is rejected however good predict() is. \
+Only the ORDER of its values matters, never the scale: a raw count or a \
+negative distance is fine, there is no need to normalise. Make it reward \
+progress toward what you think the win condition is.
+
+Here is a COMPLETE, VALID answer. Copy this structure exactly and replace \
+BOTH marked sections -- the rule in predict() and the progress measure in \
+goal_hint():
 
 ```python
 class WorldModel:
@@ -99,7 +108,10 @@ class WorldModel:
         return [layer], 0, False                  # NOTE: [layer], not layer
 
     def goal_hint(self, state):
-        return 0.0
+        layer = state[0]
+        # ---- your progress measure goes here: higher = closer to winning ----
+        # e.g.  return -(abs(px - tx) + abs(py - ty))   # distance to a target
+        return sum(1 for row in layer for c in row if c == 5)   # REPLACE THIS
 ```
 
 Before you answer, check your own code:
@@ -107,6 +119,8 @@ Before you answer, check your own code:
   2. is every index inside 0..63, guarded so no IndexError is possible?
   3. does it run without `import`?
   4. is the class complete, with both `predict` and `goal_hint`?
+  5. does `goal_hint` give DIFFERENT values to boards that are closer to
+     and further from winning -- is it anything but a constant?
 
 Respond with ONLY a single Python code fence containing the `WorldModel` \
 class. No prose before or after it.
@@ -136,10 +150,28 @@ SIGNAL_MISMATCH = "signal_mismatch"  # board right, levels_delta/done wrong
 PASSED = "passed"
 
 
+def predict_passed(result: Optional[ReplayResult]) -> bool:
+    """Did predict() reproduce every step? THE pass criterion of this
+    backtest, and deliberately NOT `result.passed`.
+
+    From 2026-09-25 the engine's `replay()` also gates on goal_hint being
+    usable, and `passed` means both halves. This instrument has always
+    measured the predict half only; reading `.passed` would silently
+    redefine every number it produces -- and would make `identity_baseline`
+    (the do-nothing skeleton, whose goal_hint is constant by definition)
+    fail every segment, zeroing the free-pass count and counting every
+    free-pass segment as informative. Falls back to `.passed` for an engine
+    that predates the split, where the two are identical.
+    """
+    if result is None:
+        return False
+    return bool(getattr(result, "predict_passed", result.passed))
+
+
 def classify_failure(result: Optional[ReplayResult]) -> str:
     """Bucket a failed replay by the first thing that went wrong."""
     if result is None or result.first_failure is None:
-        return PASSED if result is not None and result.passed else NO_RESPONSE
+        return PASSED if predict_passed(result) else NO_RESPONSE
     reason = result.first_failure.reason or ""
     if "raised" in reason:
         return PREDICT_RAISED
@@ -229,10 +261,11 @@ def identity_baseline(segment: LevelSegment) -> tuple[int, bool]:
         # that is a real regression in the sandbox, not a data condition.
         raise RuntimeError(f"WORLD_MODEL_SKELETON failed to load: {load.error}")
     result = replay(_as_transcript(segment), load.world_model)
-    prefix = result.total if result.passed else (
+    ok = predict_passed(result)
+    prefix = result.total if ok else (
         result.first_failure.index if result.first_failure else 0
     )
-    return prefix, result.passed
+    return prefix, ok
 
 
 def run_segment(
@@ -322,14 +355,15 @@ def run_segment(
             continue
 
         replay_result = replay(transcript, load.world_model)
+        ok = predict_passed(replay_result)
         prefix = (
             replay_result.total
-            if replay_result.passed
+            if ok
             else (replay_result.first_failure.index if replay_result.first_failure else 0)
         )
         result.best_prefix = max(result.best_prefix, prefix)
 
-        if replay_result.passed:
+        if ok:
             result.passed = True
             result.outcome = PASSED
             result.source = source

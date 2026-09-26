@@ -815,3 +815,96 @@ def test_prompt_example_does_not_alias_the_input_state():
     returned, _, _ = load.world_model.predict(original, "ACTION1")
     returned[0][0][0] = 99
     assert original[0][0][0] == 7, "example returned an alias of the caller's state"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-25: goal_hint is what the agent plays with
+# ---------------------------------------------------------------------------
+
+
+def _prompt_example_model():
+    from arc3_cwm._engine import load_world_model
+    from arc3_cwm.harness import SYSTEM_PROMPT
+
+    start = SYSTEM_PROMPT.index("```python")
+    end = SYSTEM_PROMPT.index("```", start + 9)
+    load = load_world_model(SYSTEM_PROMPT[start + len("```python"):end])
+    assert load.ok, load.error
+    return load.world_model
+
+
+def test_system_prompt_demands_a_non_constant_ordering_goal_hint():
+    """The previous contract prompt showed `return 0.0` as the complete
+    valid answer and said to replace only the predict() line -- i.e. it
+    taught a flat objective. The planner ranks actions by goal_hint alone,
+    so that is a model the agent can never use."""
+    from arc3_cwm.harness import SYSTEM_PROMPT
+
+    for probe in [
+        "must NOT be constant",
+        "ORDER",
+        "BOTH marked sections",
+        "anything but a constant",
+    ]:
+        assert probe in SYSTEM_PROMPT, f"prompt lost its goal_hint statement: {probe!r}"
+    assert "replace only the marked line" not in SYSTEM_PROMPT
+
+
+def test_prompt_example_goal_hint_is_not_constant():
+    """An example that says 'must not be constant' while returning a
+    constant would teach the opposite of what it states."""
+    m = _prompt_example_model()
+    assert m.goal_hint([[[0, 0], [0, 0]]]) != m.goal_hint([[[5, 5], [0, 0]]])
+
+
+class _Result:
+    """Stands in for engine ReplayResults of both generations."""
+
+    def __init__(self, passed, first_failure=None, **extra):
+        self.passed = passed
+        self.first_failure = first_failure
+        self.__dict__.update(extra)
+
+
+def test_predict_passed_ignores_the_goal_hint_half():
+    """New engine: predict reproduced everything, goal_hint was rejected.
+    This backtest measures predict -- that is a PASS here."""
+    from arc3_cwm.harness import PASSED, classify_failure, predict_passed
+
+    r = _Result(passed=False, predict_passed=True)
+    assert predict_passed(r)
+    assert classify_failure(r) == PASSED
+
+
+def test_predict_passed_falls_back_on_an_old_engine():
+    from arc3_cwm.harness import predict_passed
+
+    assert predict_passed(_Result(passed=True))
+    assert not predict_passed(_Result(passed=False))
+    assert not predict_passed(None)
+
+
+def test_identity_baseline_and_oracle_do_not_depend_on_goal_hint():
+    """Both use stub goal_hints by design. Under the goal-hint-gated engine
+    they must still pass on a segment they reproduce -- otherwise the
+    free-pass floor and the 58/61 ceiling silently collapse. Run this file
+    with ARC3_CWM_ENGINE_DIR pointing at a gated engine to exercise it.
+
+    The ORACLE half is the load-bearing one: its boards change, so its stub
+    goal_hint is constant across >=2 distinct boards and the raw `.passed`
+    is False (verified). The identity half is mostly vacuous -- a segment
+    it reproduces shows one distinct board, where the gate passes anyway;
+    it only bites on segments with a resync discontinuity."""
+    from arc3_cwm import oracle
+    from arc3_cwm.harness import identity_baseline
+
+    still = make_segment([(grid("00", "00"), "ACTION1", grid("00", "00"))] * 2)
+    prefix, ok = identity_baseline(still)
+    assert ok and prefix == len(still.transitions)
+
+    moving = make_segment([
+        (grid("00", "00"), "ACTION1", grid("10", "00")),
+        (grid("10", "00"), "ACTION2", grid("11", "00")),
+    ])
+    ok, why = oracle.verify_oracle(moving)
+    assert ok, why

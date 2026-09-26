@@ -153,10 +153,12 @@ def verify_oracle(segment: LevelSegment) -> tuple[bool, Optional[str]]:
     if not load.ok or load.world_model is None:
         return False, f"oracle failed to load: {load.error}"
 
-    from .harness import _as_transcript
+    from .harness import _as_transcript, predict_passed
 
+    # predict half only: the oracle's goal_hint is a stub by design, and the
+    # engine's `.passed` also gates on goal_hint (see harness.predict_passed).
     result = replay(_as_transcript(segment), load.world_model)
-    if result.passed:
+    if predict_passed(result):
         return True, None
     failure = result.first_failure
     return False, (
