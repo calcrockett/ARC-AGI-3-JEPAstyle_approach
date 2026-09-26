@@ -318,3 +318,77 @@ difference is transcript length: the prototype drafts early, against 9-28
 step transcripts, while these segments run to 40. That suggests **shorter
 transcripts are the lever**, not a better prompt and not a better model --
 untested, and the next thing worth testing.
+
+
+## 11. goal_hint (2026-09-25): the half of the model that plays was never checked
+
+Sections 1-10 measured `predict()`. **Action selection does not run on
+`predict()`.** `planner.plan()` ranks rollouts by `(levels predicted,
+goal_hint)`, and a transcript with no level-up gives `predict()` no basis
+to ever predict one -- so in practice `goal_hint` is the whole objective.
+Three things were wrong with it, and none was visible to any instrument in
+this project, because nothing in `llm_engine/replay.py` or `arc3_cwm`
+ever called `goal_hint`:
+
+1. **The stall test compared its spread against an absolute 0.05.** Both
+   real goal_hints on record (`experiments/stage7_codeworld_live_test_artifacts/`,
+   ar25 and bp35) are cell-count *ratios* over the 4096-cell board, which
+   move by ~0.0012 per five cells changed. Clearing 0.05 needs ~205 cells
+   to differ between the best and worst candidate, so such a model
+   **stalled on every step and was never consulted**.
+2. **On a stall the agent played the planner's pick anyway** whenever the
+   action head had nothing to offer -- always, in this kernel, which runs
+   with `ACTION_LLM_CALL_BUDGET=0`. With a fixed candidate order and a
+   stable sort, a tie went to the first candidate: `ACTION1`, every step.
+3. **Both prompts invited a constant.** The engine skeleton said "return
+   0.0 if you have no idea yet"; the backtest's contract prompt (section
+   9) showed `return 0.0` as the complete valid answer and said to replace
+   only the `predict` line.
+
+Together these are a complete mechanistic account of section 8's headline:
+**16 replay passes, 4 of 12 games with an installed model, 0 levels.**
+The models were installed and then not used.
+
+Also found on the way: a predicted terminal state `break`-ed out of the
+planner's candidate loop, hiding every later candidate.
+
+### What changed (branch `stage7-goal-hint`)
+
+| | before | after |
+|---|---|---|
+| stall test | spread < 0.05 (absolute) | hints tied relative to their own magnitude |
+| stalled pick | played if no action-head answer | discarded; random fallback |
+| ties | first candidate (ACTION1) | random (candidates shuffled) |
+| terminal state | `break`s the candidate loop | ends that rollout only |
+| replay gate | predict only | predict **and** goal_hint: runs, finite, not constant across >=2 observed boards |
+| prompts | "return 0.0 if you have no idea" | goal_hint is what the agent plays with; must not be constant; only order matters |
+
+The backtest (`stage7-codeworld-backtest`, `1c77acb`) now reads
+`predict_passed` explicitly: its oracle positive control has a stub
+goal_hint by design, and under the gated engine the raw `.passed` would
+have collapsed the 58/61 ceiling (verified: oracle `.passed` False,
+predict half True, on a changing-board segment). Every backtest number
+keeps its meaning.
+
+### Pre-registered before the run (free kernel `arc3-cwm-prototype` v3)
+
+Same configuration as section 8 (Flash-Next, thinking off, 12 games, 120
+actions, coder budget 8), same games. Measures, all counted:
+
+- **mechanism** -- of planner calls in games with an installed model, the
+  fraction that decide the action (`planned / calls`). Each call also
+  records whether the OLD rule would have stalled on that same call, so the
+  counterfactual comes from the same run with no noise.
+  *Expectation:* the old rule stalls on a large majority of calls; the new
+  rule on few. If the old rule would NOT have stalled either, defect 1 was
+  not binding and this account is wrong.
+- **gate** -- candidates passing `predict` but rejected on `goal_hint`, and
+  whether a retry recovers them. *Expectation:* few rejections, because
+  the prompt now asks for a non-constant objective; a large number would
+  mean the prompt change did not land.
+- **outcome** -- levels completed (section 8: 0). One draw of a noisy
+  quantity; a nonzero count is weak positive evidence, zero is not
+  evidence the mechanism failed -- the mechanism measure decides that.
+  A model that is used but plays badly is the expected next wall: the gate
+  establishes that goal_hint distinguishes boards, not that it measures
+  progress.
