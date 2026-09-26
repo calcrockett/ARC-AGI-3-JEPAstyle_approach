@@ -89,6 +89,12 @@ class CodeWorldAgent(Agent):
         # usable even when the rest of construction throws.
         self._rng = random.Random()
         self._init_failed = False
+        #: How often a consulted world model actually decided the action.
+        #: "planned" / "calls" is the fraction of steps the model drove;
+        #: "stalled" / "calls" is the fraction where search could not
+        #: distinguish actions at all. Counted, so a run reports whether
+        #: the model was USED, not just whether it was installed.
+        self.plan_stats = {"calls": 0, "stalled": 0, "planned": 0}
 
         self.transcript = GameTranscript(game_id=self.game_id)
         self._probe_plan = opening_probe_plan()
@@ -226,10 +232,21 @@ class CodeWorldAgent(Agent):
         chosen: Optional[EngineAction] = None
         if self.model is not None:
             chosen, plan_result = next_action(self.model, current_grid, depth=self.PLAN_DEPTH, beam_width=self.PLAN_BEAM_WIDTH)
-            if plan_result.stalled or chosen is None or not self._is_available(chosen, available_actions):
+            self.plan_stats["calls"] += 1
+            if plan_result.stalled:
+                self.plan_stats["stalled"] += 1
+                # A stalled search did not distinguish between actions, so
+                # its pick is an arbitrary tie-winner, not a decision. It
+                # used to be played whenever the action head had nothing
+                # to offer (always, with ACTION_LLM_CALL_BUDGET=0) -- with
+                # a fixed candidate order that was ACTION1, every step.
+                chosen = None
+            if chosen is None or not self._is_available(chosen, available_actions):
                 fallback = self._try_action_head(current_grid, available_actions)
                 if fallback is not None:
                     chosen = fallback
+            elif not plan_result.stalled:
+                self.plan_stats["planned"] += 1
 
         if chosen is None or not self._is_available(chosen, available_actions):
             chosen = self._fallback_action(available_actions)

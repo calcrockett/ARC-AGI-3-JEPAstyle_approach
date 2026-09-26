@@ -13,7 +13,7 @@ from typing import Optional
 
 from .diff import format_diff, format_grid
 from .llm_client import LLMClient, extract_code
-from .replay import ReplayResult, describe_failure, replay
+from .replay import ReplayResult, describe_rejection, replay
 from .types import GameTranscript
 from .world_model import LoadResult, WorldModelProtocol, load_world_model
 
@@ -60,9 +60,26 @@ class WorldModel:
         ...
 
     def goal_hint(self, state):
-        # float: higher = closer to a win condition
+        # float: higher = closer to a win condition (see below)
         ...
 ```
+
+goal_hint is not decoration -- it is what the agent PLAYS with. Once your model \
+is accepted, a search tries each action in your simulator and picks the one whose \
+predicted next board has the HIGHEST goal_hint. predict() has to be right; \
+goal_hint() has to be useful. So:
+
+  - goal_hint must NOT be constant. It is run on every board in the transcript, \
+and if it gives them all the same value your model is rejected, however good \
+predict() is -- a constant gives the search nothing to choose between.
+  - Only the ORDER of its values matters, never the scale. A raw count, a negative \
+distance or a sum are all fine; there is no need to normalise.
+  - Make it reward progress toward what you think the win condition is: for example \
+minus the distance from the thing the actions move to a target it seems to be \
+heading for, the number of cells already matching a pattern that looks like a goal, \
+or minus the number of objects left to clear. If the transcript shows \
+levels_completed increasing, the board just before that step is your best evidence \
+of what winning looks like.
 """
 
 
@@ -245,14 +262,17 @@ def draft_world_model(
             return DraftOutcome(ok=True, source=source, world_model=load.world_model, attempts=attempt, replay_result=result)
 
         logger.info(
-            "draft attempt %d: replay failed (%d/%d), first failure at #%d",
-            attempt, result.pass_count, result.total, result.first_failure.index,  # type: ignore[union-attr]
+            "draft attempt %d: rejected -- predict %d/%d%s; goal_hint %s",
+            attempt, result.pass_count, result.total,
+            "" if result.first_failure is None else f", first failure at #{result.first_failure.index}",
+            "ok" if result.goal_hint.ok else f"REJECTED ({result.goal_hint.problem})",
         )
         user_prompt = _retry_prompt(
             transcript,
             source,
-            "it loaded but does not reproduce the transcript. "
-            + describe_failure(transcript, result.first_failure),  # type: ignore[arg-type]
+            ("it loaded but does not reproduce the transcript. " if not result.predict_passed
+             else "it loaded, but was rejected. ")
+            + describe_rejection(transcript, result),
         )
 
     logger.warning(
@@ -299,8 +319,8 @@ def repair_world_model(
     user_prompt = _retry_prompt(
         transcript,
         current_source,
-        "it worked until now, but just failed to predict a new observation. "
-        + describe_failure(transcript, result.first_failure)  # type: ignore[arg-type]
+        "it worked until now, but no longer passes on the latest observation. "
+        + describe_rejection(transcript, result)
         + " Patch it so it handles this new case WITHOUT breaking any earlier "
         "transitions -- your patch will be replayed against the full history above.",
     )
@@ -326,8 +346,9 @@ def repair_world_model(
         user_prompt = _retry_prompt(
             transcript,
             source,
-            "it still does not reproduce the transcript. "
-            + describe_failure(transcript, replay_result.first_failure),  # type: ignore[arg-type]
+            ("it still does not reproduce the transcript. " if not replay_result.predict_passed
+             else "it reproduces the transcript but was rejected. ")
+            + describe_rejection(transcript, replay_result),
         )
 
     logger.warning("repair failed after %d attempts for game %s; keeping last known-good model", max_attempts, transcript.game_id)

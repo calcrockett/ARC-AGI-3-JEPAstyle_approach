@@ -353,6 +353,7 @@ def make_agent(module, coder_responses=None, action_responses=None):
     agent.agent_name = "codeworldagent"
     agent._rng = _random.Random(0)
     agent._init_failed = False
+    agent.plan_stats = {"calls": 0, "stalled": 0, "planned": 0}
     agent.transcript = __import__("llm_engine.types", fromlist=["GameTranscript"]).GameTranscript(game_id="test-game")
     agent._probe_plan = __import__("llm_engine.opening_probes", fromlist=["opening_probe_plan"]).opening_probe_plan()
     agent._probe_index = 0
