@@ -69,9 +69,17 @@ is accepted, a search tries each action in your simulator and picks the one whos
 predicted next board has the HIGHEST goal_hint. predict() has to be right; \
 goal_hint() has to be useful. So:
 
-  - goal_hint must NOT be constant. It is run on every board in the transcript, \
-and if it gives them all the same value your model is rejected, however good \
-predict() is -- a constant gives the search nothing to choose between.
+  - goal_hint must NOT be constant, and it must tell ACTIONS apart: it is checked \
+by predicting where each action leads from boards in the transcript, and if it \
+scores every pair of different outcomes the same, your model is rejected however \
+good predict() is -- the search would have nothing to choose between.
+  - Do NOT score a step counter, timer, or bar/strip along the edge of the board. \
+Those change on every step, but the same way whatever action you take, so they \
+cannot guide the search. Score the part of the board your actions change \
+DIFFERENTLY.
+  - If your actions MOVE things, do not just count colours: a moved object has \
+exactly the same colour counts, so every move scores the same. Measure positions \
+-- e.g. minus the distance from the object you move to where it seems to need to go.
   - Only the ORDER of its values matters, never the scale. A raw count, a negative \
 distance or a sum are all fine; there is no need to normalise.
   - Make it reward progress toward what you think the win condition is: for example \

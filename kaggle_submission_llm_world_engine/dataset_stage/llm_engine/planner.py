@@ -51,10 +51,15 @@ _ACTION6_SAMPLE_POINTS = [(16, 16), (48, 16), (16, 48), (48, 48)]
 _RNG = random.Random()
 
 
-def _candidate_actions() -> list[Action]:
+def candidate_actions() -> list[Action]:
+    """The actions the search considers from any state. Public because the
+    replay gate checks goal_hint against exactly this set."""
     actions = [Action(name=a) for a in ALL_ACTIONS if a != "ACTION6"]
     actions += [Action(name="ACTION6", x=x, y=y) for x, y in _ACTION6_SAMPLE_POINTS]
     return actions
+
+
+_candidate_actions = candidate_actions  # old name, kept for callers
 
 
 @dataclass
@@ -79,7 +84,7 @@ def plan(
     dominates (it's the real signal), goal_hint only breaks ties among
     rollouts that haven't won anything yet.
     """
-    candidates = _candidate_actions()
+    candidates = candidate_actions()
     (rng or _RNG).shuffle(candidates)
 
     # Each beam entry: (score_tuple, action_sequence, resulting_state,

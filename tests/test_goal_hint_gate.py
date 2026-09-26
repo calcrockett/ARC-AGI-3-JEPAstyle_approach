@@ -34,8 +34,8 @@ from conftest import (  # type: ignore[import-not-found]
 )
 
 from llm_engine import drafting
-from llm_engine.planner import _candidate_actions, next_action, plan
-from llm_engine.replay import check_goal_hint, describe_rejection, replay
+from llm_engine.planner import candidate_actions, next_action, plan
+from llm_engine.replay import check_goal_hint, describe_rejection, observed_states, replay
 from llm_engine.types import Action, GameTranscript, Transition
 from llm_engine.world_model import hints_tied, load_world_model, safe_goal_hint
 
@@ -170,7 +170,7 @@ def test_constant_goal_hint_is_rejected_even_with_a_perfect_predict():
     assert result.predict_passed, "predict() is the correct one"
     assert not result.passed
     assert not result.goal_hint.ok
-    assert "same value" in result.goal_hint.problem
+    assert "cannot tell actions apart" in result.goal_hint.problem
     assert result.goal_hint.distinct_values == 1
 
 
@@ -207,13 +207,200 @@ def test_integer_goal_hint_is_accepted():
     assert replay(build_transcript(), load(src)).passed
 
 
-def test_one_distinct_board_passes_vacuously():
-    """Nothing to distinguish -> no evidence either way -> do not reject."""
-    g = with_agent_at(0, 0)
+def test_one_distinct_board_is_no_longer_a_vacuous_pass():
+    """The first gate compared goal_hint across the transcript's history,
+    so a transcript with one distinct board passed automatically -- which is
+    how lp85's model got in. The separation check predicts successors from
+    that board, so a constant objective is caught even here."""
+    g = with_agent_at(2, 2)
     t = GameTranscript(game_id="t")
-    t.append(Transition(g, Action(name="ACTION1"), g, 0, 0, "NOT_FINISHED"))
+    t.append(Transition(g, Action(name="ACTION5"), g, 0, 0, "NOT_FINISHED"))
     check = check_goal_hint(t, load(CONSTANT))
-    assert check.ok and check.states_checked == 1
+    assert not check.ok and check.informative_boards == 1
+
+
+IDENTITY_PREDICT = with_goal_hint("        return 0.0\n").replace(
+    "    def predict(self, state, action_name, x=None, y=None):\n",
+    "    def predict(self, state, action_name, x=None, y=None):\n"
+    "        return [[row[:] for row in state[0]]], 0, False\n",
+)
+
+
+def test_simulator_that_never_distinguishes_actions_is_not_blamed_on_goal_hint():
+    """predict() says every action does the same thing from every board:
+    nothing to separate, so no goal_hint could help and no retry is spent."""
+    g = with_agent_at(2, 2)
+    t = GameTranscript(game_id="t")
+    t.append(Transition(g, Action(name="ACTION5"), g, 0, 0, "NOT_FINISHED"))
+    check = check_goal_hint(t, load(IDENTITY_PREDICT))
+    assert check.ok
+    assert check.predict_distinguishes_actions is False
+    assert check.informative_boards == 0
+
+
+# ---------------------------------------------------------------------------
+# The live failure, 2026-09-26: a goal_hint reading an edge strip that every
+# action advances identically. It varies across the transcript's history --
+# so the first gate passed it -- and ties across every action.
+# ---------------------------------------------------------------------------
+
+HUD_N = 20  # >= replay.MIN_BAND_BOARD, so the edge band applies
+HUD_ROW = HUD_N - 1
+HUD_COLOR = 9
+
+
+def _hud_board(ax: int, ay: int, bar: int):
+    g = [[0] * HUD_N for _ in range(HUD_N)]
+    g[ay][ax] = 3
+    for x in range(min(bar, HUD_N)):
+        g[HUD_ROW][x] = HUD_COLOR
+    return [g]
+
+
+LO, HI = 3, HUD_N - 4  # the agent lives in the interior, outside the edge band
+
+
+def _hud_true_step(ax, ay, bar, action):
+    dx, dy = {"ACTION1": (0, -1), "ACTION2": (0, 1), "ACTION3": (-1, 0), "ACTION4": (1, 0)}.get(action, (0, 0))
+    nx = min(max(ax + dx, LO), HI)
+    ny = min(max(ay + dy, LO), HI)
+    return nx, ny, bar + 1
+
+
+HUD_MODEL_TEMPLATE = """\
+class WorldModel:
+    def _find(self, state):
+        for y in range(%(lo)d, %(hi)d + 1):
+            for x in range(%(lo)d, %(hi)d + 1):
+                if state[0][y][x] == 3:
+                    return x, y
+        return None
+
+    def predict(self, state, action_name, x=None, y=None):
+        n = %(n)d
+        layer = [row[:] for row in state[0]]
+        bar = sum(1 for c in layer[n - 1] if c == %(hud)d)
+        found = self._find(state)
+        if found is not None:
+            px, py = found
+            d = {"ACTION1": (0, -1), "ACTION2": (0, 1), "ACTION3": (-1, 0), "ACTION4": (1, 0)}
+            dx, dy = d.get(action_name, (0, 0))
+            nx = min(max(px + dx, %(lo)d), %(hi)d)
+            ny = min(max(py + dy, %(lo)d), %(hi)d)
+            layer[py][px] = 0
+            layer[ny][nx] = 3
+        if bar < n:
+            layer[n - 1][bar] = %(hud)d
+        return [layer], 0, False
+
+    def goal_hint(self, state):
+%(goal)s
+"""
+
+
+def _hud_model(goal_body: str):
+    return load(HUD_MODEL_TEMPLATE % {"n": HUD_N, "hud": HUD_COLOR, "goal": goal_body, "lo": LO, "hi": HI})
+
+
+def _hud_transcript():
+    t = GameTranscript(game_id="hud")
+    ax, ay, bar = 8, 8, 0
+    for action in ["ACTION4", "ACTION2", "ACTION4", "ACTION1", "ACTION3"]:
+        nx, ny, nbar = _hud_true_step(ax, ay, bar, action)
+        t.append(Transition(_hud_board(ax, ay, bar), Action(name=action),
+                            _hud_board(nx, ny, nbar), 0, 0, "NOT_FINISHED"))
+        ax, ay, bar = nx, ny, nbar
+    return t
+
+
+HUD_COUNTER_GOAL = "        return float(sum(1 for c in state[0][%d] if c == %d))" % (HUD_ROW, HUD_COLOR)
+PLAYFIELD_GOAL = (
+    "        f = self._find(state)\n"
+    "        return 0.0 if f is None else float(f[0])"
+)
+
+
+def test_hud_fixture_predict_is_exact():
+    """The model under test must be a perfect simulator, or the goal_hint
+    tests below would be testing predict() instead."""
+    result = replay(_hud_transcript(), _hud_model(PLAYFIELD_GOAL))
+    assert result.predict_passed
+
+
+def test_hud_counter_varies_over_history_so_the_first_gate_would_pass_it():
+    t = _hud_transcript()
+    m = _hud_model(HUD_COUNTER_GOAL)
+    history = {m.goal_hint(b) for b in observed_states(t)}
+    assert len(history) == len(observed_states(t)) > 1
+
+
+def test_hud_counter_goal_is_rejected_because_it_ties_across_actions():
+    result = replay(_hud_transcript(), _hud_model(HUD_COUNTER_GOAL))
+    assert result.predict_passed
+    assert not result.passed
+    problem = result.goal_hint.problem
+    assert "cannot tell actions apart" in problem
+    assert "edge, where step counters" in problem
+    # It says WHERE the actions' outcomes differ -- the playfield, never the
+    # HUD row -- so the retry is pointed at the part of the board that matters.
+    import re
+    lo, hi = map(int, re.search(r"rows (\d+)-(\d+)", problem).groups())
+    assert 0 <= lo <= hi < HUD_ROW
+
+
+COLOUR_COUNT_GOAL = "        return float(sum(1 for r in state[0] for c in r if c == 3))"
+
+
+def test_colour_count_is_blind_to_movement_and_is_rejected():
+    """Counting colours -- what the live models kept writing -- gives every
+    move the same score: a moved object has the same colour counts."""
+    result = replay(_hud_transcript(), _hud_model(COLOUR_COUNT_GOAL))
+    assert result.predict_passed and not result.passed
+    assert "counting colours will not work" in result.goal_hint.problem
+
+
+def test_objective_reading_both_hud_and_playfield_is_accepted():
+    """Reading the HUD is not banned -- ignoring the playfield is."""
+    both = HUD_COUNTER_GOAL.replace("        return ", "        f = self._find(state)\n        return (0.0 if f is None else f[0]) + ")
+    assert replay(_hud_transcript(), _hud_model(both)).passed
+
+
+def test_playfield_goal_passes():
+    result = replay(_hud_transcript(), _hud_model(PLAYFIELD_GOAL))
+    assert result.passed and result.goal_hint.informative_boards >= 1
+
+
+def test_the_planner_stalls_on_the_hud_goal_and_plans_on_the_playfield_goal():
+    """The gate's verdict matches what the planner actually does."""
+    board = _hud_board(8, 8, 3)
+    assert plan(_hud_model(HUD_COUNTER_GOAL), board, rng=random.Random(0)).stalled
+    assert not plan(_hud_model(PLAYFIELD_GOAL), board, rng=random.Random(0)).stalled
+
+
+def test_separation_probe_is_bounded():
+    from llm_engine import replay as replay_mod
+
+    calls = {"n": 0}
+    m = _hud_model(PLAYFIELD_GOAL)
+    orig = m.predict
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    m.predict = counting
+    t = GameTranscript(game_id="long")
+    ax, ay, bar = 8, 8, 0
+    for i in range(60):
+        action = ["ACTION4", "ACTION2"][i % 2]
+        nx, ny, nbar = _hud_true_step(ax, ay, bar % HUD_N, action)
+        t.append(Transition(_hud_board(ax, ay, bar % HUD_N), Action(name=action),
+                            _hud_board(nx, ny, nbar % HUD_N), 0, 0, "NOT_FINISHED"))
+        ax, ay, bar = nx, ny, nbar
+    check = replay_mod.check_goal_hint(t, m)
+    assert check.ok
+    n_cands = len(candidate_actions())
+    assert calls["n"] <= replay_mod.MAX_SEPARATION_BOARDS * n_cands
 
 
 def test_goal_hint_gets_a_copy_it_may_mutate():
@@ -235,13 +422,13 @@ def test_rejection_text_puts_predict_first_then_goal_hint():
     result = replay(t, load(wrong_predict))
     text = describe_rejection(t, result)
     assert text.index("predict() was wrong") < text.index("Separately:")
-    assert "same value" in text
+    assert "cannot tell actions apart" in text
 
 
 def test_goal_only_rejection_says_keep_predict():
     t = build_transcript()
     text = describe_rejection(t, replay(t, load(CONSTANT)))
-    assert "keep it" in text and "same value" in text
+    assert "keep it" in text and "cannot tell actions apart" in text
     assert "predict() was wrong" not in text
 
 
@@ -256,7 +443,7 @@ def test_draft_rejects_a_constant_goal_hint_then_accepts_the_fix():
     assert outcome.ok and outcome.attempts == 2
     assert outcome.source.strip() == CORRECT_WORLD_MODEL_SOURCE.strip()
     retry_prompt = client.prompts[1][1]
-    assert "same value" in retry_prompt and "keep it" in retry_prompt
+    assert "cannot tell actions apart" in retry_prompt and "keep it" in retry_prompt
 
 
 def test_draft_never_installs_a_constant_goal_hint():
@@ -274,6 +461,8 @@ def test_draft_never_installs_a_constant_goal_hint():
 def test_drafting_prompt_demands_a_non_constant_ordering_objective():
     p = drafting._SYSTEM_PROMPT
     assert "must NOT be constant" in p
+    assert "tell ACTIONS apart" in p
+    assert "edge of the board" in p
     assert "ORDER" in p and "scale" in p
     assert "Return 0.0 if you have no idea" not in p
 
@@ -315,3 +504,26 @@ def test_informative_plan_is_played_and_counted(code_world_agent_module):
     chosen = agent._choose_engine_action(with_agent_at(2, 2), [])
     assert chosen is not None
     assert agent.plan_stats == {"calls": 1, "stalled": 0, "planned": 1}
+
+
+def test_agent_does_not_draft_before_the_board_has_changed(code_world_agent_module):
+    """One distinct board: no rule to infer, no way to check goal_hint."""
+    from test_code_world_agent import make_agent  # type: ignore[import-not-found]
+
+    agent = make_agent(code_world_agent_module, coder_responses=[fenced(CORRECT_WORLD_MODEL_SOURCE)] * 3)
+    g = with_agent_at(2, 2)
+    for _ in range(code_world_agent_module.CodeWorldAgent.REDRAFT_AFTER_NEW_TRANSITIONS + 2):
+        agent.transcript.append(Transition(g, Action(name="ACTION5"), g, 0, 0, "NOT_FINISHED"))
+    agent._maybe_draft_model()
+    assert agent.model is None
+    assert agent.coder_budget.calls_used == 0, "no coder call may be spent on zero evidence"
+    assert agent._last_draft_attempt_len == -1, "the first change must trigger a draft at once"
+
+
+def test_agent_drafts_once_the_board_has_changed(code_world_agent_module):
+    from test_code_world_agent import make_agent  # type: ignore[import-not-found]
+
+    agent = make_agent(code_world_agent_module, coder_responses=[fenced(CORRECT_WORLD_MODEL_SOURCE)] * 3)
+    agent.transcript = build_transcript()
+    agent._maybe_draft_model()
+    assert agent.model is not None

@@ -46,6 +46,7 @@ from llm_engine.llm_client import make_client  # noqa: E402
 from llm_engine.opening_probes import opening_probe_plan  # noqa: E402
 from llm_engine.persistence import save_revision  # noqa: E402
 from llm_engine.planner import next_action  # noqa: E402
+from llm_engine.replay import observed_states  # noqa: E402
 from llm_engine.types import ALL_ACTIONS, Action as EngineAction, GameTranscript, Transition  # noqa: E402
 from llm_engine.world_model import WorldModelProtocol, safe_predict  # noqa: E402
 
@@ -314,6 +315,14 @@ class CodeWorldAgent(Agent):
         retried once enough new evidence has accumulated.
         """
         if self.coder_client is None or not self.coder_budget.has_budget():
+            return
+        # Nothing has changed yet: there is no rule to infer and no way to
+        # check a goal_hint, so a draft here can only install a model that
+        # was never tested (lp85, 2026-09-26: "nothing ever changes",
+        # admitted on one distinct board, then stalled 112/112). Wait for
+        # evidence; the draft-length marker is untouched so the first
+        # change triggers a draft immediately.
+        if len(observed_states(self.transcript)) < 2:
             return
         # Re-drafting on identical evidence just repeats the same failure.
         if len(self.transcript) - self._last_draft_attempt_len < self.REDRAFT_AFTER_NEW_TRANSITIONS:
