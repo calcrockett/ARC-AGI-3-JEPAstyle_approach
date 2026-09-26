@@ -45,6 +45,8 @@ DIAG_NOTEBOOK = (
 #: setup_commands.json, which is what starts vLLM on 127.0.0.1:1234.
 SETUP_THROUGH = 9
 
+from _cwm_driver_patches import DRIVER_REQUIRED, driver_text, patch_driver_cell  # noqa: E402
+
 KERNEL_SLUG = "arc3-cwm-prototype"
 OWNER = "calamitychasm"
 
@@ -110,6 +112,13 @@ def build() -> dict:
             "the token cap and none contained a `class WorldModel`);\n",
             "* the transcript now **resets per level**, so clearing a level no ",
             "longer makes the replay gate permanently unsatisfiable.\n",
+            "\n",
+            "2026-09-25 -- **goal_hint run.** The planner ranks actions by goal_hint ",
+            "alone; it was never validated and its stall test used an absolute 0.05 ",
+            "that the real (ratio-scaled) goal_hints could never clear, so installed ",
+            "models were never consulted. Engine now: scale-free stall test, replay ",
+            "gate on goal_hint, prompts that ask for a non-constant objective. This ",
+            "run records, per planner call, whether the OLD rule would have stalled.\n",
         ],
     }
 
@@ -120,6 +129,7 @@ def build() -> dict:
             for old, new in {**ENV_PATCHES, **ASSERT_PATCHES}.items():
                 if old in source:
                     source = source.replace(old, new)
+            source = patch_driver_cell(source)
         diag_cells.append({**cell, "source": source.splitlines(True)})
 
     notebook = dict(anim)
@@ -155,6 +165,13 @@ def main() -> int:
     ]
     failures = [name for name, probe in required if probe not in body]
     failures += [name for name, probe in forbidden if probe in body]
+    driver = driver_text(notebook)
+    for name, probe in DRIVER_REQUIRED:
+        if probe in driver:
+            required.append((name, probe))
+            body += probe
+        else:
+            failures.append(name)
     if failures:
         print("REFUSING TO SHIP -- checks failed: " + ", ".join(failures))
         return 1
