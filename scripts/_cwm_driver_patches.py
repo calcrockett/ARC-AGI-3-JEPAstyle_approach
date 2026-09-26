@@ -47,6 +47,9 @@ GOAL_HINT_CHECKS = {
     # history-variation one that a step counter passed.
     "replay gate is counterfactual (_transplant)": hasattr(replay_mod, "_transplant"),
     "drafting prompt warns colour counts are blind to movement": "do not just count colours" in _draft_src,
+    # 2026-09-26: legal moves only.
+    "planner searches only available actions":
+        "available_actions" in open(_planner_mod.__file__, encoding="utf-8").read(),
 }
 checks.update(GOAL_HINT_CHECKS)
 for k, v in checks.items():
@@ -141,6 +144,9 @@ EVIDENCE["summary"]["goal_hint_run"] = {
     "plan_calls_old_rule_would_stall": sum(1 for c in _pc if c["old_rule_would_stall"]),
     "plan_calls_rescued_by_new_rule": sum(
         1 for c in _pc if c["old_rule_would_stall"] and not c["stalled"]
+    ),
+    "planner_decisions_played": sum(
+        ((g.get("plan_stats") or {}).get("planned") or 0) for g in EVIDENCE["games"]
     ),
     "levels_completed_total": sum((g.get("levels_completed") or 0) for g in EVIDENCE["games"]),
     "games_with_installed_model": sum(1 for g in EVIDENCE["games"] if g.get("world_model_installed")),

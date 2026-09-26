@@ -551,3 +551,29 @@ spending it on moves the game will not accept.
 Next: restrict the planner's candidates (and the gate's) to the actions the
 game currently allows. 0 levels stands; it is one draw, and until the
 planner can only choose legal moves it is not yet a test of the plan.
+
+## 13. Legal moves only (2026-09-26)
+
+Planner and gate now search only the frame's `available_actions`;
+inapplicable opening probes are skipped (`f1b57e6`, 261 tests).
+Counterfactual on v4's real boards with its installed models, before any
+run: legal decisions dc22 26 -> **31/31**, ls20 22 -> **31/31**; ft09 and
+lp85 **0/31** either way -- their simulators predict that no action changes
+anything (ft09: none of 256 click points), which the gate records as
+`predict_distinguishes_actions=False` rather than blaming goal_hint.
+
+### Pre-registered before kernel v5
+
+Same configuration as v3/v4.
+
+- **mechanism** -- in games whose installed simulator distinguishes
+  actions, the fraction of plan calls whose decision is played.
+  *Prediction:* >= 90% (the counterfactual above says ~100%).
+  **Falsifier:** below 60%.
+- **click-only games** -- expected 0 decisions wherever the simulator
+  predicts no click effect; that is the predict-side wall, not this fix.
+- **outcome** -- levels completed. This is the first run in which the
+  model's own plan actually chooses the moves, so it is the first real test
+  of whether these objectives measure progress. Honest prior: probably
+  still 0 -- the gate establishes that goal_hint responds to the playfield,
+  not that it points toward a win.
