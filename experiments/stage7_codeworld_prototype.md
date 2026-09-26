@@ -461,3 +461,58 @@ transcript contained one distinct board, where the gate passes vacuously.
 - Steps 1-3 stay: they are correct and were necessary (a constant or
   unvalidated objective would stall regardless), but they were not
   sufficient, and the 0-levels outcome is unchanged.
+
+
+## 12. A gate that tests what the planner needs (2026-09-26)
+
+Section 11 asked the wrong question of goal_hint ("does it vary across the
+transcript?"). Two stronger versions were measured against the live run's
+real models and boards before one was built:
+
+| criterion | dc22 (HUD objective) | ls20 (HUD objective) |
+|---|---:|---:|
+| varies across history (section 11's gate) | passes | passes |
+| separates the successors of different actions | separates 13/31 boards | 11/31 |
+| ...among actions that change the board | 11/31 | 2/31 |
+| ...ignoring a 3-cell edge band | 9/31 | 2/31 |
+| **counterfactual: same edge band, different interior** | **0/31** | **0/31** |
+
+The separation variants are all gamed by the strip: an action that only
+ticks the counter scores differently from one that moves something. On
+dc22's 13 separating boards, **the preferred action left the playfield
+unchanged 13 times out of 13** -- the objective's only signal was a
+preference for doing nothing.
+
+The counterfactual check gives two actions' predicted boards the same edge
+band and lets them differ only in the interior; goal_hint must respond to
+that somewhere. Controls on the same boards: a position-weighted sum over
+the whole board responds on **31/31** (both games); the same sum restricted
+to rows >= 58 on **0/31**. Colour-count controls also scored 0/31 -- a moved
+object has the same colour counts -- which is itself a finding: counting
+colours, the models' habit, is blind to movement. The prompt now says so.
+
+Also: the agent no longer drafts before its transcript shows two distinct
+boards (lp85's model was admitted on one and stalled 112/112), and a
+simulator whose predict() never changes the playfield differently is not
+blamed on goal_hint.
+
+Engine `39842e4`; 255 tests; the engine's own check, on the real models:
+dc22 and ls20 REJECTED, position control ACCEPTED, lp85 not blamed.
+
+### Pre-registered before kernel v4
+
+Same configuration as v3 (Flash-Next, thinking off, 12 games, 120 actions,
+coder budget 8). v3 for reference: 3 games with a model, 320 plan calls,
+**21 planned (6.6%)**, 0 levels.
+
+- **mechanism** -- fraction of plan calls that decide the action, in games
+  with an installed model. *Prediction:* a majority. **Falsifier:** below
+  25% means the gate did not change what gets installed in a way the
+  planner feels, and the account in this section is wrong or incomplete.
+- **gate** -- candidates rejected as "cannot tell actions apart", and
+  whether a retry in the same game then passes.
+- **installs** -- the honest risk. A stricter gate can mean fewer models
+  (v3: 3/12). If installs fall to 0, the model cannot write a playfield
+  objective under these prompts, and that is the result.
+- **outcome** -- levels completed (v3: 0). One draw; the mechanism measure
+  decides the question, not this.

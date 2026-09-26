@@ -43,6 +43,10 @@ GOAL_HINT_CHECKS = {
         "hints_tied(first_ply_hints" in open(_planner_mod.__file__, encoding="utf-8").read(),
     "replay gates goal_hint (check_goal_hint)": hasattr(replay_mod, "check_goal_hint"),
     "drafting prompt demands non-constant goal_hint": "must NOT be constant" in _draft_src,
+    # 2026-09-26: the counterfactual (playfield-response) gate, not the
+    # history-variation one that a step counter passed.
+    "replay gate is counterfactual (_transplant)": hasattr(replay_mod, "_transplant"),
+    "drafting prompt warns colour counts are blind to movement": "do not just count colours" in _draft_src,
 }
 checks.update(GOAL_HINT_CHECKS)
 for k, v in checks.items():
@@ -64,6 +68,8 @@ DRIVER_PATCHES[
         "goal_hint_ok": getattr(getattr(res, "goal_hint", None), "ok", None),
         "goal_hint_distinct": getattr(getattr(res, "goal_hint", None), "distinct_values", None),
         "goal_hint_problem": (getattr(getattr(res, "goal_hint", None), "problem", None) or "")[:400],
+        "goal_hint_informative_boards": getattr(getattr(res, "goal_hint", None), "informative_boards", None),
+        "predict_distinguishes_actions": getattr(getattr(res, "goal_hint", None), "predict_distinguishes_actions", None),
 '''
 
 # -- 3. per planner call: new decision + old rule's decision ---------------
@@ -124,6 +130,12 @@ EVIDENCE["summary"]["goal_hint_run"] = {
         1 for r in _rr if r.get("predict_passed") and r.get("goal_hint_ok") is False
     ),
     "candidates_accepted_both_halves": sum(1 for r in _rr if r.get("passed")),
+    "goal_rejected_cannot_tell_actions_apart": sum(
+        1 for r in _rr if r.get("predict_passed") and "cannot tell actions apart" in (r.get("goal_hint_problem") or "")
+    ),
+    "accepted_but_predict_never_distinguishes": sum(
+        1 for r in _rr if r.get("passed") and r.get("predict_distinguishes_actions") is False
+    ),
     "plan_calls": len(_pc),
     "plan_calls_stalled_new_rule": sum(1 for c in _pc if c["stalled"]),
     "plan_calls_old_rule_would_stall": sum(1 for c in _pc if c["old_rule_would_stall"]),
