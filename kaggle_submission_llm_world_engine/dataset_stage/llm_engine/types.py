@@ -7,7 +7,7 @@ the framework's classes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 # A frame is a list of one or more 64x64 grids of integers 0-15. In
 # practice almost every public game uses a single grid, but the API allows
@@ -17,6 +17,16 @@ Grid = list[list[list[int]]]
 SIMPLE_ACTIONS = ["ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION7"]
 COMPLEX_ACTIONS = ["ACTION6"]
 ALL_ACTIONS = SIMPLE_ACTIONS + COMPLEX_ACTIONS
+
+
+def allowed_action_names(available_ids: "Optional[Iterable[int]]") -> "Optional[set[str]]":
+    """GameAction ids (1..7) -> action names. None means "no restriction":
+    an empty or missing list is how the framework says it is not reporting
+    one, which the agent already treats as "everything is legal"."""
+    if not available_ids:
+        return None
+    names = {f"ACTION{i}" for i in available_ids if f"ACTION{i}" in ALL_ACTIONS}
+    return names or None
 
 
 @dataclass(frozen=True)
@@ -70,6 +80,10 @@ class GameTranscript:
 
     game_id: str
     transitions: list[Transition] = field(default_factory=list)
+    #: The framework's `available_actions` (GameAction ids) as last seen.
+    #: The replay gate checks goal_hint only against moves the game accepts.
+    #: None/empty means "not reported" -- every action is assumed legal.
+    available_actions: Optional[list[int]] = None
 
     def append(self, t: Transition) -> None:
         self.transitions.append(t)

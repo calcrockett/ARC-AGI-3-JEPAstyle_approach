@@ -240,7 +240,13 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
     with that simulator, and rejecting it would only spend retries.
     """
     from .planner import candidate_actions  # planner does not import replay
+    from .types import allowed_action_names
 
+    # Only moves the game accepts: a goal_hint that separates actions the
+    # planner can never choose is no use to it.
+    candidates = candidate_actions(
+        allowed_action_names(getattr(transcript, "available_actions", None))
+    )
     states = _observed_states(transcript)
     values: list[float] = []
     for i, board in enumerate(states):
@@ -258,7 +264,7 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
         band = _band(board)
         here = repr(_interior(board, band))
         outcomes: dict[str, tuple[Any, Any]] = {}
-        for action in candidate_actions():
+        for action in candidates:
             nxt, _delta, _done, error = safe_predict(model, board, action)
             if error is not None or nxt is None:
                 continue

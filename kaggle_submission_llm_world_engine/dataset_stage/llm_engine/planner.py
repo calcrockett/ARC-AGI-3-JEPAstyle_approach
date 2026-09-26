@@ -18,7 +18,7 @@ import random
 from dataclasses import dataclass
 from typing import Optional
 
-from .types import ALL_ACTIONS, Action, Grid
+from .types import ALL_ACTIONS, Action, Grid, allowed_action_names
 from .world_model import HINT_REL_TOL, WorldModelProtocol, hints_tied, safe_goal_hint, safe_predict
 
 # Coordinates to try for ACTION6 -- a coarse grid rather than all 4096
@@ -51,11 +51,21 @@ _ACTION6_SAMPLE_POINTS = [(16, 16), (48, 16), (16, 48), (48, 48)]
 _RNG = random.Random()
 
 
-def candidate_actions() -> list[Action]:
-    """The actions the search considers from any state. Public because the
-    replay gate checks goal_hint against exactly this set."""
-    actions = [Action(name=a) for a in ALL_ACTIONS if a != "ACTION6"]
-    actions += [Action(name="ACTION6", x=x, y=y) for x, y in _ACTION6_SAMPLE_POINTS]
+def candidate_actions(allowed: "Optional[set[str]]" = None) -> list[Action]:
+    """The actions the search considers from any state, restricted to
+    `allowed` names when given. Public because the replay gate checks
+    goal_hint against exactly this set.
+
+    The restriction was missing until 2026-09-26: the planner searched all
+    seven actions in every game, and on the live run 164 of 324 of its
+    decisions were moves the game does not accept (ACTION5/ACTION7 in games
+    without them; non-click actions in click-only ft09, 96 of 96) -- each
+    discarded by the agent and replaced with a random action.
+    """
+    names = [a for a in ALL_ACTIONS if allowed is None or a in allowed]
+    actions = [Action(name=a) for a in names if a != "ACTION6"]
+    if "ACTION6" in names:
+        actions += [Action(name="ACTION6", x=x, y=y) for x, y in _ACTION6_SAMPLE_POINTS]
     return actions
 
 
@@ -78,13 +88,14 @@ def plan(
     beam_width: int = 4,
     stall_rel_tol: float = HINT_REL_TOL,
     rng: Optional[random.Random] = None,
+    available_actions: Optional[list[int]] = None,
 ) -> PlanResult:
     """Beam search over predicted futures. Score = (levels gained so far
     in this rollout, goal_hint of the resulting state) -- levels gained
     dominates (it's the real signal), goal_hint only breaks ties among
     rollouts that haven't won anything yet.
     """
-    candidates = candidate_actions()
+    candidates = candidate_actions(allowed_action_names(available_actions))
     (rng or _RNG).shuffle(candidates)
 
     # Each beam entry: (score_tuple, action_sequence, resulting_state,
@@ -155,13 +166,14 @@ def plan(
 
 
 def next_action(
-    model: WorldModelProtocol, state: Grid, depth: int = 2, beam_width: int = 4
+    model: WorldModelProtocol, state: Grid, depth: int = 2, beam_width: int = 4,
+    available_actions: Optional[list[int]] = None,
 ) -> tuple[Optional[Action], PlanResult]:
     """Convenience wrapper: plan, then return the first action of the best
     sequence (re-planning every step against the latest real state is
     cheap since this never calls the LLM) alongside the full PlanResult so
     the caller can inspect `stalled` and decide whether to consult the
     action-head fallback."""
-    result = plan(model, state, depth=depth, beam_width=beam_width)
+    result = plan(model, state, depth=depth, beam_width=beam_width, available_actions=available_actions)
     action = result.actions[0] if result.actions else None
     return action, result

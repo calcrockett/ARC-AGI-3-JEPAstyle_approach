@@ -222,17 +222,30 @@ class CodeWorldAgent(Agent):
     # -- internals ---------------------------------------------------
 
     def _choose_engine_action(self, current_grid: Any, available_actions: list[int]) -> EngineAction:
-        if self._probe_index < len(self._probe_plan):
+        # Kept on the transcript so the replay gate checks goal_hint against
+        # the moves this game accepts. Re-set every step: a level reset
+        # replaces the transcript, and availability can change.
+        if available_actions:
+            self.transcript.available_actions = list(available_actions)
+
+        # Probes the game does not accept are skipped, not played: in a
+        # click-only game they were six wasted actions recorded as
+        # transitions in which nothing happens.
+        while self._probe_index < len(self._probe_plan):
             action = self._probe_plan[self._probe_index]
             self._probe_index += 1
-            return action
+            if self._is_available(action, available_actions):
+                return action
 
         if self.model is None:
             self._maybe_draft_model()
 
         chosen: Optional[EngineAction] = None
         if self.model is not None:
-            chosen, plan_result = next_action(self.model, current_grid, depth=self.PLAN_DEPTH, beam_width=self.PLAN_BEAM_WIDTH)
+            chosen, plan_result = next_action(
+                self.model, current_grid, depth=self.PLAN_DEPTH, beam_width=self.PLAN_BEAM_WIDTH,
+                available_actions=available_actions,
+            )
             self.plan_stats["calls"] += 1
             if plan_result.stalled:
                 self.plan_stats["stalled"] += 1

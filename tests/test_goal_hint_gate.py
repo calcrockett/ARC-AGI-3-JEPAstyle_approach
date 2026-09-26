@@ -527,3 +527,66 @@ def test_agent_drafts_once_the_board_has_changed(code_world_agent_module):
     agent.transcript = build_transcript()
     agent._maybe_draft_model()
     assert agent.model is not None
+
+
+# =====================================================================
+# legal moves only (2026-09-26): on kernel v4, 164 of 324 planner decisions
+# were actions the game does not accept -- ft09, click-only, 96 of 96
+# =====================================================================
+
+from llm_engine.types import allowed_action_names  # noqa: E402
+
+
+def test_allowed_action_names():
+    assert allowed_action_names(None) is None
+    assert allowed_action_names([]) is None, "empty = not reported = no restriction"
+    assert allowed_action_names([6]) == {"ACTION6"}
+    assert allowed_action_names([0, 1, 2, 99]) == {"ACTION1", "ACTION2"}, "RESET/unknown ids ignored"
+
+
+def test_candidates_respect_the_allowed_set():
+    assert {a.name for a in candidate_actions({"ACTION6"})} == {"ACTION6"}
+    assert len(candidate_actions({"ACTION6"})) == 4, "the four click sample points"
+    names = {a.name for a in candidate_actions({"ACTION1", "ACTION2", "ACTION3", "ACTION4"})}
+    assert names == {"ACTION1", "ACTION2", "ACTION3", "ACTION4"}
+    assert len(candidate_actions()) == len(candidate_actions(None))
+
+
+def test_planner_never_picks_a_move_the_game_does_not_accept():
+    model = load(CORRECT_WORLD_MODEL_SOURCE)
+    for seed in range(30):
+        for avail, legal in (([1, 2, 3, 4], {"ACTION1", "ACTION2", "ACTION3", "ACTION4"}),
+                             ([6], {"ACTION6"})):
+            r = plan(model, with_agent_at(2, 2), rng=random.Random(seed), available_actions=avail)
+            assert all(a.name in legal for a in r.actions), (avail, [a.name for a in r.actions])
+
+
+def test_gate_checks_goal_hint_only_against_accepted_moves():
+    """HUD fixture: the playfield goal separates the arrow keys. If the game
+    only accepts ACTION5 -- which moves nothing -- there is nothing the
+    planner could choose between, so the gate must see no informative board."""
+    m = _hud_model(PLAYFIELD_GOAL)
+    t = _hud_transcript()
+    t.available_actions = [1, 2, 3, 4]
+    assert check_goal_hint(t, m).informative_boards >= 1
+    t.available_actions = [5]
+    c = check_goal_hint(t, m)
+    assert c.ok and c.informative_boards == 0 and c.predict_distinguishes_actions is False
+
+
+def test_agent_skips_probes_the_game_does_not_accept(code_world_agent_module):
+    from test_code_world_agent import make_agent  # type: ignore[import-not-found]
+
+    agent = make_agent(code_world_agent_module)
+    first = agent._choose_engine_action(with_agent_at(2, 2), [6])
+    assert first.name == "ACTION6", "simple-action probes must be skipped in a click-only game"
+    assert agent.transcript.available_actions == [6]
+
+
+def test_agent_passes_available_actions_to_the_planner(code_world_agent_module):
+    agent = _stall_agent(code_world_agent_module, CORRECT_WORLD_MODEL_SOURCE)
+    agent._fallback_action = lambda available: pytest.fail("a legal planner decision was discarded")
+    for _ in range(10):
+        chosen = agent._choose_engine_action(with_agent_at(2, 2), [6])
+        assert chosen.name == "ACTION6"
+    assert agent.plan_stats["planned"] == 10
