@@ -392,3 +392,72 @@ actions, coder budget 8), same games. Measures, all counted:
   A model that is used but plays badly is the expected next wall: the gate
   establishes that goal_hint distinguishes boards, not that it measures
   progress.
+
+### Result (kernel v3, 2026-09-26 03:18-04:08 UTC): the falsifier fired
+
+Ran clean: all stale-engine checks OK, 0 errors, 1,634 s wall clock, 296
+LLM completions returning text, 12 games x 121 actions.
+
+| pre-registered measure | value |
+|---|---:|
+| planner calls (3 games with an installed model) | 320 |
+| stalled under the NEW rule | 299 |
+| the OLD 0.05 rule would have stalled on | 299 |
+| **rescued by the new rule** | **0** |
+| candidates passing predict | 15 |
+| of those, rejected on goal_hint | 1 |
+| levels completed | **0** |
+
+**The scale explanation is refuted for this run.** Every spread was either
+exactly 0 (299 calls) or >= 1.0 (21): nothing in between, so the absolute
+threshold never decided anything. Caveat that limits what this refutes:
+the new prompt says "no need to normalise", and every goal_hint in this run
+is a raw count. So this run cannot say whether the absolute threshold was
+binding in section 8's run (whose two recorded hints were ratios). What it
+does say: **fixing the scale does not fix stalling**, because the stalls
+are exact ties.
+
+### Why the hints tie exactly: they measure the HUD
+
+| game | installed goal_hint |
+|---|---|
+| dc22 | count of color 3 in **row 63** |
+| ls20 | minus count of color 11 in **rows 61-62** |
+| lp85 | count of non-3/4 cells; accepted **vacuously** (1 distinct board) |
+
+The bottom strip is the one thing that changes on every step of every
+transcript, so a goal_hint reading it passes the "not constant" gate --
+and is exactly the kind of objective that gate was always going to admit
+(this failure was named as a risk in the design and not guarded against).
+Every candidate advances the strip identically, so the hints tie.
+
+Then the decisive check -- is it the objective or the simulator? Replaying
+each installed model over every 4th recorded board, all 13 candidates:
+
+| game | frames | goal_hint tied across candidates | predicted playfield (rows < 60) identical across candidates | some candidate changes the playfield |
+|---|---:|---:|---:|---:|
+| dc22 v7 | 31 | 18 | **0** | **31** |
+| ls20 v6 | 31 | 20 | **0** | **31** |
+| lp85 v1 | 31 | 31 | 31 | 0 |
+
+For dc22 and ls20, **predict() distinguishes the actions on the playfield
+on every frame, and goal_hint throws that away.** The simulator is doing
+its job; the objective is looking at the wrong part of the board. lp85 is
+a different failure: its model predicts that nothing ever changes, so no
+objective could plan with it -- and it was admitted because its probe
+transcript contained one distinct board, where the gate passes vacuously.
+
+### What this changes
+
+- The gate tested the wrong property. The planner needs goal_hint to
+  **distinguish the boards predict() says different actions lead to**, not
+  to vary across the transcript's history (which a step counter satisfies
+  trivially). That property is directly checkable at gate time: from each
+  observed board, predict every candidate's successor and require
+  goal_hint to separate them somewhere.
+- A single-distinct-board transcript gives no evidence about goal_hint and
+  should not be a pass; nor, arguably, should a predict() that is the
+  identity everywhere.
+- Steps 1-3 stay: they are correct and were necessary (a constant or
+  unvalidated objective would stall regardless), but they were not
+  sufficient, and the 0-levels outcome is unchanged.
