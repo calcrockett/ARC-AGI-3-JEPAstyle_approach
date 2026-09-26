@@ -516,3 +516,38 @@ coder budget 8). v3 for reference: 3 games with a model, 320 plan calls,
   objective under these prompts, and that is the result.
 - **outcome** -- levels completed (v3: 0). One draw; the mechanism measure
   decides the question, not this.
+
+### Result (kernel v4, 2026-09-26 12:36-13:27 UTC): the stall is gone; a new wall behind it
+
+Clean run: all engine checks OK, 0 errors, 300 LLM completions with text.
+
+| | v3 (history gate) | v4 (counterfactual gate) |
+|---|---:|---:|
+| games with an installed model | 3 | 4 |
+| plan calls | 320 | 324 |
+| **stalled** | **299 (93%)** | **31 (9.6%)** |
+| **planner's pick actually played** | **21 (6.6%)** | **129 (39.8%)** |
+| predict passes rejected on goal_hint | 1 | 4 ("cannot tell actions apart") |
+| accepted with a simulator that never distinguishes actions | -- | 2 |
+| levels completed | 0 | 0 |
+
+Per game: dc22 80/104 played, 0 stalled; ls20 49/96 played, 3 stalled;
+lp85 28/28 stalled (its simulator never distinguishes actions, as
+predicted); **ft09 96 calls, 0 stalled, 0 played.**
+
+**Against the pre-registration:** the falsifier (< 25% played) did not
+fire -- 39.8%. The prediction (a majority) did not come true either. The
+stall -- the thing this section set out to remove -- fell from 93% to 9.6%.
+
+**Where the other half went: the planner never receives
+`available_actions`.** It searches all seven actions in every game. Of its
+non-stalled picks, 63 were ACTION5 or ACTION7, which none of the four games
+allow (dc22 [1,2,3,4,6], ls20 [1,2,3,4], ft09 and lp85 [6] only). In ft09,
+click-only, it chose a non-click action on every one of 96 calls. Every
+such pick is discarded by the agent and replaced with a random action: 164
+of 324 calls (51%). The objective is now working and the search is
+spending it on moves the game will not accept.
+
+Next: restrict the planner's candidates (and the gate's) to the actions the
+game currently allows. 0 levels stands; it is one draw, and until the
+planner can only choose legal moves it is not yet a test of the plan.
