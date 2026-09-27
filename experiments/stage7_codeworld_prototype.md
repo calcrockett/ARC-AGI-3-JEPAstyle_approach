@@ -643,3 +643,41 @@ object to (34,40) and nothing happened; the goal is something else" --
 turning each wrong guess into evidence rather than a place to park.
 
 Watchdog: `driver_stacks.txt` was written; not needed this time.
+
+## 14. Goal falsification (2026-09-27)
+
+v6 showed the agent reaching its model's goal and nothing happening. So:
+reaching a goal's peak without a level-up falsifies it (engine
+`stage7-goal-hint`, 274 tests).
+
+A move is "at peak" when no legal move improves goal_hint over staying put
+**with the edge band held equal** -- without that, dc22's
+`1000 * counter - distance` objective looks like it improves forever (996
+-> 60998 over v6), which hid that its player parked beside an item from
+frame ~7 (peak on 115/121 frames). Peaks on 3 of the last 6 consulted
+moves falsify the goal; the board goes on the transcript, and the replay
+gate then rejects any goal_hint under which it is still a peak. The agent
+asks for a revision with the evidence; if that fails it explores instead
+of following the falsified plan; at most 3 revisions per level.
+
+Replayed on v6's real frames (final model versions, so approximate for
+early frames): fires at frame 9 on dc22, frame 35 on ls20 -- the latter at
+a local peak (-15, held 9 frames) before the true peak (0) was reached.
+
+### Pre-registered before kernel v7
+
+Same configuration as v6.
+
+- **mechanism** -- in games with a model that distinguishes actions: goals
+  falsified, revisions accepted, and whether a revised goal leads the
+  agent somewhere new (the falsified boards are not revisited as peaks).
+  *Prediction:* >= 1 falsification in each of dc22 and ls20 if they get
+  models again. **Falsifier for the detector:** a game with a model that
+  sits at a peak on most consulted moves (as both did in v6) and is never
+  falsified.
+- **revision quality** -- how many revisions pass the gate (a different
+  goal that also responds to the playfield), and how many fail.
+- **outcome** -- levels completed. Honest prior: still likely 0 --
+  falsification says the goal is wrong, not what the right goal is; the
+  model still has never seen a win. Any level at all would be the first in
+  this arm.

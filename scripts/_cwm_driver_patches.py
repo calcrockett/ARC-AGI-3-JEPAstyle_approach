@@ -50,6 +50,9 @@ GOAL_HINT_CHECKS = {
     # 2026-09-26: legal moves only.
     "planner searches only available actions":
         "available_actions" in open(_planner_mod.__file__, encoding="utf-8").read(),
+    # 2026-09-27: goal falsification.
+    "replay has band-corrected peak test (peak_escape)": hasattr(replay_mod, "peak_escape"),
+    "drafting has revise_goal_hint": hasattr(drafting, "revise_goal_hint"),
 }
 checks.update(GOAL_HINT_CHECKS)
 for k, v in checks.items():
@@ -112,10 +115,11 @@ DRIVER_PATCHES[
 '''
 ] = '''        "model_source": src,
         "plan_stats": getattr(a, "plan_stats", None),
+        "goal_stats": getattr(a, "goal_stats", None),
         "levels_seen": getattr(a, "levels_seen", None),
     }
     EVIDENCE["games"].append(rec)
-    say("plan stats               :", rec["plan_stats"], "levels_seen:", rec["levels_seen"])
+    say("plan stats               :", rec["plan_stats"], "goal:", rec["goal_stats"], "levels_seen:", rec["levels_seen"])
 '''
 
 # -- 5. the pre-registered summary ------------------------------------------
@@ -145,6 +149,9 @@ EVIDENCE["summary"]["goal_hint_run"] = {
     "plan_calls_rescued_by_new_rule": sum(
         1 for c in _pc if c["old_rule_would_stall"] and not c["stalled"]
     ),
+    "goals_falsified": sum(((g.get("goal_stats") or {}).get("falsified") or 0) for g in EVIDENCE["games"]),
+    "goals_revised": sum(((g.get("goal_stats") or {}).get("revised") or 0) for g in EVIDENCE["games"]),
+    "goal_revisions_failed": sum(((g.get("goal_stats") or {}).get("revision_failed") or 0) for g in EVIDENCE["games"]),
     "planner_decisions_played": sum(
         ((g.get("plan_stats") or {}).get("planned") or 0) for g in EVIDENCE["games"]
     ),
