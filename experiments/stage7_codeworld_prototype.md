@@ -604,3 +604,42 @@ tested locally: a sleeping driver was killed at its limit; the real
 selftest completed normally with the stacks file written.
 
 The pre-registration above stands unchanged for the rerun (v6).
+
+### Result (kernel v6, rerun of v5, 2026-09-27): the planner works; the goal is a guess
+
+Clean: 1,927 s, no hang, all engine checks OK, 0 errors, 326 LLM
+completions. Games with a model: dc22, ls20, lp85.
+
+| pre-registered measure | value |
+|---|---:|
+| **decisions played, games whose simulator distinguishes actions** | **194 / 196 (99%)** -- dc22 114/114, ls20 80/82 |
+| lp85 (simulator never distinguishes actions) | 45 / 45 stalled, as predicted |
+| predict passes rejected on goal_hint | 1 of 8 |
+| levels completed | **0** |
+
+Prediction (>= 90%) met; falsifier (< 60%) not triggered. For the first
+time in this arm, the model's own plan chose the moves -- ~100 of 121 in
+two games -- and both games' objectives read the playfield (the gate and
+the prompt landed).
+
+**And the agent achieved what its model told it to.** ls20's goal_hint
+climbed -11.3 -> -6.7 -> -0.2 -> 0.0 (its maximum) over the four quarters
+of the game, and stayed there. Its code states the target outright:
+*"Target is the 5x5 area at x=34, y=40 (where the object started)"*.
+With no win anywhere in its transcript, the model guessed that the goal
+is to return the object to its start; the planner did exactly that, and
+nothing happened. dc22's objective is `1000 * counter - distance to the
+nearest item of colour 8/9/11/13` -- the counter term is action-invariant,
+so it walks the player toward items; no level either.
+
+**The wall is now win-condition inference, and it is a clean one**: search,
+legality, and objective plumbing all work, so what remains is that the
+model has never seen a win and is guessing. That also suggests the next
+lever, which uses information the agent already produces: **reaching the
+maximum of goal_hint without a level-up falsifies that goal.** The agent
+can detect it (the objective plateaus at a value no move improves, with
+no levels_delta) and trigger a redraft that says so -- "you drove the
+object to (34,40) and nothing happened; the goal is something else" --
+turning each wrong guess into evidence rather than a place to park.
+
+Watchdog: `driver_stacks.txt` was written; not needed this time.
