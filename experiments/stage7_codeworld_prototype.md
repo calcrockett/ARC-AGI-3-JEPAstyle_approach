@@ -681,3 +681,47 @@ Same configuration as v6.
   falsification says the goal is wrong, not what the right goal is; the
   model still has never seen a win. Any level at all would be the first in
   this arm.
+
+### Result (kernel v7, 2026-09-27 18:07-18:34 UTC): the detector works; revision is the bottleneck; and a long-standing state bug
+
+Clean: 1,636 s, all engine checks OK, 0 errors, 283 LLM completions.
+
+| | v6 | v7 |
+|---|---:|---:|
+| games with a model | 3 | 4 (dc22, ls20, lp85, m0r0) |
+| goals falsified | -- | **4** (dc22 x2, ls20, m0r0) |
+| revisions accepted / failed | -- | **1 / 3** |
+| predict passes rejected for re-proposing a falsified goal | -- | 8 (all dc22) |
+| planner decisions played | 196 | **27** |
+| levels completed | 0 | **0** |
+
+**Detector: prediction met** -- falsified in both dc22 and ls20 (and m0r0);
+the falsifier (a game parked at a peak and never falsified) did not fire.
+
+**Revision is the bottleneck.** Asked for a different goal, the model
+mostly rewrote the one it was told had failed: 8 dc22 candidates were
+rejected by the gate for making the falsified board a peak again (the
+guard worked). The one accepted revision is a genuinely new hypothesis --
+*"Target: the 8x8 area of 8s in the right panel"*. When revision fails the
+agent explores at random instead of following a falsified plan, so planner
+decisions played fell from 196 to 27: most of v7 was random play, as the
+design implies. That was predictable and I did not predict it.
+
+**ls20 never got to revise: its coder budget was gone** -- 7 "repairs",
+every one returning `ok` with **0 LLM attempts**, each charged a budget
+unit. A repair returns with 0 attempts only when the current source,
+freshly loaded, already reproduces the whole transcript: the divergence
+that triggered it was not real. Cause, verified: ls20's model keeps hidden
+state (`self.counter_x += 1` in `predict`), and **the planner searches on
+the installed instance itself** -- one `plan()` call moved `counter_x` from
+13 to 34, writing 21 imagined moves into the real simulator. Whenever the
+counter matters, the installed instance mispredicts the real move, the
+agent "repairs", and a fresh instance replays perfectly. This has been
+live in every run of this arm; the replay gate's hypothetical probes and
+`peak_escape` do the same to the instance they return.
+
+Fixes indicated, not yet made: plan, probe and peak-test on copies of the
+model (`copy.deepcopy`) so only real transitions advance its state; do not
+charge coder budget for a repair that made no LLM call; instrument
+`revise_goal_hint` rounds in the driver (they are invisible in `rounds`,
+which wraps only draft/repair).
