@@ -590,3 +590,171 @@ def test_agent_passes_available_actions_to_the_planner(code_world_agent_module):
         chosen = agent._choose_engine_action(with_agent_at(2, 2), [6])
         assert chosen.name == "ACTION6"
     assert agent.plan_stats["planned"] == 10
+
+
+# =====================================================================
+# goal falsification (2026-09-27): on kernel v6 the planner drove ls20 to
+# the exact peak of its model's goal -- "where the object started" -- and
+# parked there; no level. Reaching a goal's peak without a level-up
+# falsifies the goal.
+# =====================================================================
+
+from llm_engine.replay import peak_escape  # noqa: E402
+from llm_engine.types import FalsifiedGoal  # noqa: E402
+
+TARGET = (10, 8)
+
+
+def _target_goal(tx, ty):
+    return (
+        "        f = self._find(state)\n"
+        "        if f is None:\n"
+        "            return -1000.0\n"
+        f"        return -float(abs(f[0] - {tx}) + abs(f[1] - {ty}))"
+    )
+
+
+ARROWS = candidate_actions({"ACTION1", "ACTION2", "ACTION3", "ACTION4"})
+
+
+def test_peak_escape():
+    at_target = _hud_board(*TARGET, 3)
+    assert peak_escape(_hud_model(_target_goal(*TARGET)), at_target, ARROWS) is False
+    assert peak_escape(_hud_model(_target_goal(14, 14)), at_target, ARROWS) is True
+
+
+def _falsified_transcript():
+    t = _hud_transcript()
+    t.available_actions = [1, 2, 3, 4]
+    t.falsified_goals.append(FalsifiedGoal(
+        board=_hud_board(*TARGET, 3), step=4, value=0.0, start_value=-6.0, stalled_moves=6,
+    ))
+    return t
+
+
+def test_gate_rejects_a_goal_that_would_park_on_a_falsified_board():
+    result = replay(_falsified_transcript(), _hud_model(_target_goal(*TARGET)))
+    assert result.predict_passed and not result.passed
+    p = result.goal_hint.problem
+    assert "already shown NOT to be a win" in p and "after step 4" in p
+
+
+def test_gate_accepts_a_different_goal():
+    assert replay(_falsified_transcript(), _hud_model(_target_goal(14, 14))).passed
+
+
+def test_falsified_board_where_text():
+    f = FalsifiedGoal(board=None, step=None, value=0.0, start_value=0.0, stalled_moves=6)
+    assert f.where() == "the opening board"
+
+
+def _goal_agent(code_world_agent_module, goal_body, coder_responses=()):
+    from test_code_world_agent import make_agent  # type: ignore[import-not-found]
+
+    agent = make_agent(code_world_agent_module, coder_responses=list(coder_responses))
+    agent._probe_index = len(agent._probe_plan)
+    agent.transcript = _hud_transcript()
+    src = HUD_MODEL_TEMPLATE % {"n": HUD_N, "hud": HUD_COLOR, "goal": goal_body, "lo": LO, "hi": HI}
+    agent.model = load(src)
+    agent.model_source = src
+    agent.action_budget.max_calls_per_game = 0
+    return agent
+
+
+def _park(agent, board, n):
+    for _ in range(n):
+        agent._choose_engine_action(board, [1, 2, 3, 4])
+
+
+def test_parking_on_the_peak_falsifies_the_goal_and_installs_a_revision(code_world_agent_module):
+    revised = HUD_MODEL_TEMPLATE % {"n": HUD_N, "hud": HUD_COLOR, "goal": _target_goal(14, 14), "lo": LO, "hi": HI}
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET), [fenced(revised)])
+    v0 = agent.model_version
+    Stall = code_world_agent_module.CodeWorldAgent.GOAL_WINDOW_MOVES
+    _park(agent, _hud_board(*TARGET, 3), Stall + 1)
+    assert agent.goal_stats == {"falsified": 1, "revised": 1, "revision_failed": 0}
+    assert agent.model_version == v0 + 1
+    assert agent.model_source.strip() == revised.strip()
+    assert len(agent.transcript.falsified_goals) == 1
+    prompt = agent.coder_client.prompts[-1][1]
+    assert "not a win" in prompt and "already shown NOT to be a win" in prompt
+    assert not agent._goal_falsified, "a revised goal is followed again"
+
+
+def test_one_move_short_of_the_window_does_not_falsify(code_world_agent_module):
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET))
+    Stall = code_world_agent_module.CodeWorldAgent.GOAL_WINDOW_MOVES
+    _park(agent, _hud_board(*TARGET, 3), Stall - 1)
+    assert agent.goal_stats["falsified"] == 0
+
+
+def test_stuck_below_a_peak_is_not_evidence_against_the_goal(code_world_agent_module):
+    """Same board every move, but a legal move WOULD score higher: that is
+    a search/simulator problem, so the goal is not falsified."""
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET))
+    _park(agent, _hud_board(5, 5, 3), 20)
+    assert agent.goal_stats["falsified"] == 0
+
+
+def test_a_failed_revision_stops_following_the_falsified_plan(code_world_agent_module):
+    same = HUD_MODEL_TEMPLATE % {"n": HUD_N, "hud": HUD_COLOR, "goal": _target_goal(*TARGET), "lo": LO, "hi": HI}
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET), [fenced(same)] * 10)
+    Stall = code_world_agent_module.CodeWorldAgent.GOAL_WINDOW_MOVES
+    _park(agent, _hud_board(*TARGET, 3), Stall + 1)
+    assert agent.goal_stats["falsified"] == 1 and agent.goal_stats["revision_failed"] == 1
+    assert agent._goal_falsified
+    sentinel = Action(name="ACTION2")
+    agent._fallback_action = lambda available: sentinel
+    calls_before = agent.plan_stats["calls"]
+    assert agent._choose_engine_action(_hud_board(*TARGET, 3), [1, 2, 3, 4]) is sentinel
+    assert agent.plan_stats["calls"] == calls_before, "the falsified plan must not be consulted"
+
+
+def test_revisions_are_capped_per_level(code_world_agent_module):
+    same = HUD_MODEL_TEMPLATE % {"n": HUD_N, "hud": HUD_COLOR, "goal": _target_goal(*TARGET), "lo": LO, "hi": HI}
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET), [fenced(same)] * 50)
+    cap = code_world_agent_module.CodeWorldAgent.MAX_GOAL_REVISIONS_PER_LEVEL
+    agent._goal_revisions_this_level = cap
+    Stall = code_world_agent_module.CodeWorldAgent.GOAL_WINDOW_MOVES
+    before = agent.coder_budget.calls_used
+    _park(agent, _hud_board(*TARGET, 3), Stall + 1)
+    assert agent.goal_stats["falsified"] == 1
+    assert agent.coder_budget.calls_used == before, "no coder budget past the cap"
+
+
+def test_level_boundary_clears_falsifications(code_world_agent_module):
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET), [])
+    agent.transcript.falsified_goals.append(FalsifiedGoal(None, None, 0.0, 0.0, 6))
+    agent._goal_falsified = True
+    agent.levels_seen = 0
+    agent._start_new_level()
+    assert agent.transcript.falsified_goals == []
+    assert not agent._goal_falsified and agent._goal_revisions_this_level == 0
+
+
+def test_oscillating_around_the_peak_falsifies_the_goal(code_world_agent_module):
+    """ls20 on v6 did not sit still: 0 -> -1 -> 0 around its target."""
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET), [])
+    at, off = _hud_board(*TARGET, 3), _hud_board(TARGET[0] + 1, TARGET[1], 4)
+    for i in range(code_world_agent_module.CodeWorldAgent.GOAL_WINDOW_MOVES):
+        agent._choose_engine_action(at if i % 2 == 0 else off, [1, 2, 3, 4])
+    assert agent.goal_stats["falsified"] == 1
+
+
+def test_a_rising_counter_term_cannot_hide_the_peak(code_world_agent_module):
+    """dc22 on v6: `1000 * counter - distance`. The counter ticks on every
+    move, so every move naively 'beats' the current board. With the edge
+    band held equal the peak is still found."""
+    goal = ("        bar = sum(1 for c in state[0][%d] if c == %d)\n" % (HUD_ROW, HUD_COLOR)
+            + _target_goal(*TARGET).replace("        return -float(", "        return 1000.0 * bar - float("))
+    agent = _goal_agent(code_world_agent_module, goal, [])
+    for bar in range(code_world_agent_module.CodeWorldAgent.GOAL_WINDOW_MOVES):
+        agent._choose_engine_action(_hud_board(*TARGET, bar), [1, 2, 3, 4])  # parked, counter rising
+    assert agent.goal_stats["falsified"] == 1
+
+
+def test_steady_progress_is_never_falsified(code_world_agent_module):
+    agent = _goal_agent(code_world_agent_module, _target_goal(*TARGET), [])
+    for i, x in enumerate(range(LO, TARGET[0])):  # walking toward the target
+        agent._choose_engine_action(_hud_board(x, TARGET[1], i), [1, 2, 3, 4])
+    assert agent.goal_stats["falsified"] == 0

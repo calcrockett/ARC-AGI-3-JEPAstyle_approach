@@ -108,6 +108,21 @@ def replay(transcript: GameTranscript, model: WorldModelProtocol) -> ReplayResul
             first_failure = check
 
     goal = check_goal_hint(transcript, model)
+    if goal.ok and getattr(transcript, "falsified_goals", None):
+        from .planner import candidate_actions
+        from .types import allowed_action_names
+
+        problem = _check_falsified(
+            transcript, model,
+            candidate_actions(allowed_action_names(getattr(transcript, "available_actions", None))),
+        )
+        if problem is not None:
+            goal = GoalHintCheck(
+                ok=False, states_checked=goal.states_checked,
+                distinct_values=goal.distinct_values,
+                informative_boards=goal.informative_boards,
+                problem=problem,
+            )
     return ReplayResult(
         passed=first_failure is None and goal.ok,
         checks=checks,
@@ -310,6 +325,58 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
         )
 
     board_idx, a1, a2, s1, s2, v, band = example  # type: ignore[misc]
+    return _playfield_rejection(states, distinct, informative, board_idx, a1, a2, s1, s2, v, band)
+
+
+def peak_escape(model: WorldModelProtocol, board: Any, candidates: list) -> Optional[bool]:
+    """Does some legal move from `board` improve goal_hint -- i.e. is
+    `board` NOT a peak? None when no move changes the board or goal_hint
+    fails (nothing to judge).
+
+    Each move is compared with STAYING PUT UNDER THE SAME EDGE BAND: its
+    predicted board against `board`'s interior wearing that prediction's
+    edge. A step counter along the edge ticks on every move; compared
+    naively, every move "beats" the current board and nothing is ever a
+    peak (dc22 on kernel v6: `1000 * counter - distance`, 996 -> 60998 over
+    the game). With the edge held equal the counter cancels and only what
+    the move does to the playfield counts. On boards too small for a band
+    this is the plain comparison.
+    """
+    band = _band(board)
+    judged = False
+    for action in candidates:
+        nxt, _d, _done, error = safe_predict(model, board, action)
+        if error is not None or nxt is None or nxt == board:
+            continue
+        v_move, p1 = _score(model, nxt)
+        v_stay, p2 = _score(model, _transplant(board, nxt, band))
+        if p1 is not None or p2 is not None:
+            continue
+        judged = True
+        if v_move > v_stay and not hints_tied([v_move, v_stay]):  # type: ignore[operator,list-item]
+            return True
+    return False if judged else None
+
+
+def _check_falsified(transcript: GameTranscript, model: WorldModelProtocol, candidates: list) -> Optional[str]:
+    """A goal_hint must not rate any already-falsified board as a peak."""
+    for f in getattr(transcript, "falsified_goals", None) or []:
+        if peak_escape(model, f.board, candidates) is False:
+            return (
+                f"goal_hint() still treats a board already shown NOT to be a win as "
+                f"the goal. The agent followed goal_hint to {f.where()}, where no "
+                f"legal move improves it (goal_hint {f.value!r} there); it stayed at "
+                f"or around that peak for {f.stalled_moves} moves, and no level was "
+                f"completed. Under this "
+                f"goal_hint, no legal move from that board scores higher, so the agent "
+                f"would stop there again. The win condition is something else. Ask "
+                f"what that board is still missing, and write a goal_hint under which "
+                f"it is NOT a peak -- one that rates some other board higher."
+            )
+    return None
+
+
+def _playfield_rejection(states, distinct, informative, board_idx, a1, a2, s1, s2, v, band) -> GoalHintCheck:
     where = _where_they_differ(_transplant(s2, s1, band), s1)
     edge_note = (
         f" It ignores every change your actions make away from the outer {band} "

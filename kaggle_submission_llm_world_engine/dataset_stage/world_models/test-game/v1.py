@@ -1,39 +1,30 @@
 class WorldModel:
-    def __init__(self):
-        super().__init__()
-        self.seen = {}
-
     def _find(self, state):
-        for y in range(len(state[0])):
-            for x in range(len(state[0][y])):
+        for y in range(3, 16 + 1):
+            for x in range(3, 16 + 1):
                 if state[0][y][x] == 3:
                     return x, y
         return None
 
     def predict(self, state, action_name, x=None, y=None):
-        n = len(state[0])
+        n = 20
+        layer = [row[:] for row in state[0]]
+        bar = sum(1 for c in layer[n - 1] if c == 9)
         found = self._find(state)
-        if found is None:
-            return state, 0, False
-        px, py = found
-        nx, ny = px, py
-        if action_name == "ACTION1":
-            ny = max(0, py - 1)
-        elif action_name == "ACTION2":
-            ny = min(n - 1, py + 1)
-        elif action_name == "ACTION3":
-            nx = max(0, px - 1)
-        elif action_name == "ACTION4":
-            nx = min(n - 1, px + 1)
-        elif action_name == "ACTION6":
-            nx, ny = x % n, y % n
-        ns = [[row[:] for row in state[0]]]
-        ns[0][py][px] = 0
-        ns[0][ny][nx] = 3
-        return ns, 0, False
+        if found is not None:
+            px, py = found
+            d = {"ACTION1": (0, -1), "ACTION2": (0, 1), "ACTION3": (-1, 0), "ACTION4": (1, 0)}
+            dx, dy = d.get(action_name, (0, 0))
+            nx = min(max(px + dx, 3), 16)
+            ny = min(max(py + dy, 3), 16)
+            layer[py][px] = 0
+            layer[ny][nx] = 3
+        if bar < n:
+            layer[n - 1][bar] = 9
+        return [layer], 0, False
 
     def goal_hint(self, state):
-        found = self._find(state)
-        if found is None:
-            return 0.0
-        return float(found[0] + found[1])
+        f = self._find(state)
+        if f is None:
+            return -1000.0
+        return -float(abs(f[0] - 14) + abs(f[1] - 14))

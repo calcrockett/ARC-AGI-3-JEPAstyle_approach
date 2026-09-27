@@ -299,11 +299,33 @@ def draft_world_model(
     )
 
 
+def revise_goal_hint(
+    client: LLMClient,
+    transcript: GameTranscript,
+    current_source: str,
+    max_attempts: int = 3,
+) -> DraftOutcome:
+    """The agent reached the peak of the model's goal_hint and no level
+    followed (recorded in `transcript.falsified_goals`). Ask for a
+    different goal. predict() is known good -- it is what got the agent
+    there -- so the prompt says to keep it; the replay gate still checks
+    both halves, and rejects a goal_hint that would park on a falsified
+    board again."""
+    return repair_world_model(
+        client, transcript, current_source, max_attempts=max_attempts,
+        intro=(
+            "its predict() works -- keep it -- but its goal_hint led the agent to a "
+            "board that is not a win. "
+        ),
+    )
+
+
 def repair_world_model(
     client: LLMClient,
     transcript: GameTranscript,
     current_source: str,
     max_attempts: int = 3,
+    intro: str = "it worked until now, but no longer passes on the latest observation. ",
 ) -> DraftOutcome:
     """Online repair loop (architecture.md step 5): called when a
     known-good model's prediction diverged from a *new* real observation
@@ -327,7 +349,7 @@ def repair_world_model(
     user_prompt = _retry_prompt(
         transcript,
         current_source,
-        "it worked until now, but no longer passes on the latest observation. "
+        intro
         + describe_rejection(transcript, result)
         + " Patch it so it handles this new case WITHOUT breaking any earlier "
         "transitions -- your patch will be replayed against the full history above.",

@@ -73,6 +73,24 @@ class Transition:
 
 
 @dataclass
+class FalsifiedGoal:
+    """A board the agent drove its model's goal_hint to the peak of --
+    no legal move scored higher -- after which no level was completed.
+    Evidence that the win condition is something else."""
+
+    board: "Grid"
+    #: Transcript index of the transition whose frame_after is `board`, or
+    #: None for the opening board. Rendered to the LLM as "after step N".
+    step: Optional[int]
+    value: float
+    start_value: float
+    stalled_moves: int
+
+    def where(self) -> str:
+        return "the opening board" if self.step is None else f"the board after step {self.step}"
+
+
+@dataclass
 class GameTranscript:
     """The full observed history for one game instance, in order. This is
     what gets serialized into prompts and replayed against candidate
@@ -84,6 +102,9 @@ class GameTranscript:
     #: The replay gate checks goal_hint only against moves the game accepts.
     #: None/empty means "not reported" -- every action is assumed legal.
     available_actions: Optional[list[int]] = None
+    #: Goals already shown not to be wins, this level. The replay gate
+    #: rejects any goal_hint that would park on one of these boards again.
+    falsified_goals: list["FalsifiedGoal"] = field(default_factory=list)
 
     def append(self, t: Transition) -> None:
         self.transitions.append(t)
