@@ -188,3 +188,71 @@ def driver_text(notebook: dict) -> str:
         if m:
             return base64.b64decode(m.group(1)).decode("utf-8")
     return ""
+
+
+# -- 6. hang diagnosis (2026-09-27) ------------------------------------------
+# Kernel v5 froze ~24 min in: all 12 game threads stopped within milliseconds,
+# between two adjacent prints in one thread, while vLLM had already answered
+# every outstanding request -- and sat silent until Kaggle's 12 h session limit.
+# Some thread held the GIL (or a lock every thread needs) for 11 h. Nothing
+# recorded thread stacks, so the culprit is unknown. faulthandler's watchdog
+# is a C thread that needs no GIL: if this recurs, the stacks file names the
+# exact line.
+DRIVER_PATCHES[
+    '''T0 = time.time()
+'''
+] = '''T0 = time.time()
+
+import faulthandler  # noqa: E402
+
+_STACKS = open(os.getenv("DIAG_STACKS", "/kaggle/working/driver_stacks.txt"), "w")
+faulthandler.dump_traceback_later(600, repeat=True, file=_STACKS)
+'''
+
+DRIVER_REQUIRED.append(("driver: faulthandler watchdog", "dump_traceback_later"))
+
+#: Patches to the notebook cell that LAUNCHES the driver. The driver writes
+#: to a file, not the notebook's stdout pipe, and is killed at a hard wall
+#: clock limit -- a hang must not burn a 12 h GPU session again. The
+#: evidence file is flushed after every LLM call, so a killed run still
+#: leaves everything recorded up to the kill.
+DRIVER_HARD_LIMIT_MIN = 200
+CELL_PATCHES = {
+    '''result = subprocess.run(
+    [sys.executable, "-u", "/kaggle/working/diag_driver.py"],
+    cwd="/kaggle/working/ARC-AGI-3-Agents",
+    env=run_env,
+)
+print(f"[{_el()}] === diag driver exited with code {result.returncode} ===", flush=True)
+''':
+    f'''import time as _t
+_LOG = "/kaggle/working/diag_driver.log"
+_LIMIT_S = {DRIVER_HARD_LIMIT_MIN} * 60
+with open(_LOG, "w") as _fh:
+    _proc = subprocess.Popen(
+        [sys.executable, "-u", "/kaggle/working/diag_driver.py"],
+        cwd="/kaggle/working/ARC-AGI-3-Agents",
+        env=run_env,
+        stdout=_fh,
+        stderr=subprocess.STDOUT,
+    )
+    _t0 = _t.time()
+    while True:
+        try:
+            _proc.wait(timeout=60)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        _size = os.path.getsize(_LOG)
+        with open(_LOG, "rb") as _r:
+            _r.seek(max(0, _size - 400))
+            _tail = _r.read().decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+        print(f"[{{_el()}}] heartbeat: driver alive, log {{_size/1e6:.2f}} MB, last: {{_tail[0][:160]}}", flush=True)
+        if _t.time() - _t0 > _LIMIT_S:
+            print(f"[{{_el()}}] HARD LIMIT {DRIVER_HARD_LIMIT_MIN} min reached -- killing the driver", flush=True)
+            _proc.kill()
+            _proc.wait()
+            break
+print(f"[{{_el()}}] === diag driver exited with code {{_proc.returncode}} ===", flush=True)
+'''
+}

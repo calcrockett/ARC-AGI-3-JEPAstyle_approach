@@ -45,7 +45,7 @@ DIAG_NOTEBOOK = (
 #: setup_commands.json, which is what starts vLLM on 127.0.0.1:1234.
 SETUP_THROUGH = 9
 
-from _cwm_driver_patches import DRIVER_REQUIRED, driver_text, patch_driver_cell  # noqa: E402
+from _cwm_driver_patches import CELL_PATCHES, DRIVER_REQUIRED, driver_text, patch_driver_cell  # noqa: E402
 
 KERNEL_SLUG = "arc3-cwm-prototype"
 OWNER = "calamitychasm"
@@ -129,6 +129,9 @@ def build() -> dict:
             for old, new in {**ENV_PATCHES, **ASSERT_PATCHES}.items():
                 if old in source:
                     source = source.replace(old, new)
+            for old, new in CELL_PATCHES.items():
+                if old in source:
+                    source = source.replace(old, new)
             source = patch_driver_cell(source)
         diag_cells.append({**cell, "source": source.splitlines(True)})
 
@@ -166,6 +169,9 @@ def main() -> int:
     failures = [name for name, probe in required if probe not in body]
     failures += [name for name, probe in forbidden if probe in body]
     driver = driver_text(notebook)
+    for name, probe in [("launch: hard wall-clock limit", "HARD LIMIT"),
+                        ("launch: driver output to file, not pipe", "stdout=_fh")]:
+        (required.append((name, probe)) if probe in body else failures.append(name))
     for name, probe in DRIVER_REQUIRED:
         if probe in driver:
             required.append((name, probe))

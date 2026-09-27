@@ -577,3 +577,30 @@ Same configuration as v3/v4.
   of whether these objectives measure progress. Honest prior: probably
   still 0 -- the gate establishes that goal_hint responds to the playfield,
   not that it points toward a win.
+
+### Kernel v5 (2026-09-26 21:35 -> 09-27 09:40 UTC): hung, no result
+
+Not a measurement. The driver froze 24 minutes in (log t = 1,475 s,
+~440 s into play) and the kernel sat silent until Kaggle's 12-hour session
+limit cancelled it -- **~11.5 GPU-hours burned for nothing.** Evidence
+captured to the freeze: 85 replays, 2 plan calls, no per-game records.
+
+What is established: all 12 game threads stopped within milliseconds,
+between two adjacent `print`s in one thread; vLLM had already answered
+every outstanding request and went idle at 22:01:15; the 900 s client
+timeout never fired. So some thread held the GIL, or a lock every thread
+needs, for 11 hours. **The culprit is unknown** -- nothing recorded thread
+stacks. Ruled out: the vLLM server; loading response #90's code
+(reproduced locally, 1 ms); a full stdout pipe (v4's capture was truncated
+at 0.39 MB yet its driver finished; v3 captured 3.96 MB, v5 froze at 2.38).
+
+Fixes to the harness, not the agent: `faulthandler` dumps every thread's
+stack to `driver_stacks.txt` every 10 minutes (a C watchdog; needs no
+GIL); the driver writes to a file rather than the notebook's stdout; the
+notebook heartbeats every minute and kills the driver at 200 minutes
+(clean runs take ~27), so a hang costs at most ~3.5 GPU-hours and the
+evidence file flushed up to the kill is still collected. Both paths
+tested locally: a sleeping driver was killed at its limit; the real
+selftest completed normally with the stacks file written.
+
+The pre-registration above stands unchanged for the rerun (v6).
