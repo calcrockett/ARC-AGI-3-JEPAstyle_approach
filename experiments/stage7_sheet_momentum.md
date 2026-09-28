@@ -58,3 +58,17 @@ tested here.
   falsifier for "this is our new incumbent" is a draw below 4.37.
 - The momentum gain was simulated for the anim solver's level-up timing; this
   agent's timing is unmeasured, so the policy may help less (or more) here.
+
+## 4. Check run (kernel v1, 2026-09-28 16:26-18:56 UTC): PASSED
+
+Log shows `AGENTFIX LIVE` (F1, F3, F13, F19 on; F2/F4/F5/F7/F10/F11 off --
+identical to upstream), `ARM P installed: MULTIMODAL_UPSCALE 4 -> 12`,
+`MOMENTUM_TIME installed` at production settings, 457 frame-sheet events.
+25/25 games ended `gave_up` (9) or `cancelled` (16, upstream's 7,200 s
+validation cap) -- none crashed. Public-25 9.86 (upstream's own capped run:
+10.02). The only tracebacks are the keithtyser `serving_teardown.py` gate after
+the run, which the anim runs log too. Momentum: 8 stall stops (6,016-7,191 s);
+no extension could fire under the 7,200 s cap
+(`experiments/stage7_sheet_momentum_public25_decisions.json`).
+
+Submission scheduled for 2026-09-29 00:02 UTC.
