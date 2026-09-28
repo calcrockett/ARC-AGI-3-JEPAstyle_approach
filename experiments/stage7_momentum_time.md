@@ -163,3 +163,22 @@ unmodified anim run logs it too. Decisions
 **Submitted: ref 56631362, 2026-09-28 06:19 UTC** -- draw 1 of the momentum
 arm, to be compared with anim (n=6, mean 3.258, sd 0.385). Next draws
 alternate with plain anim so both arms are measured in the same period.
+
+## 8. Result, draw 1 (2026-09-28): **4.37**
+
+Ref 56631362, COMPLETE, public score **4.37** -- the project's best real score
+(previous best 3.79, an anim draw).
+
+| arm | n | scores | mean | sd |
+|---|---:|---|---:|---:|
+| anim | 6 | 3.43, 3.79, 3.37, 3.02, 2.66, 3.28 | 3.258 | 0.385 |
+| **anim + momentum** | **1** | **4.37** | -- | -- |
+
++1.11 over the anim mean (2.9 anim-sd), and above anim's best draw. **Not yet
+evidence at the standard this project holds itself to**: with n=1 vs 6, the
+exact permutation p cannot go below 1/7 = 0.14 however high the draw, and
+three earlier effects here shrank as n grew (anim's own first two draws were
+3.43 and 3.79). It is also a larger gain than the simulation projected
+(+9.9%, band to +21.8%; this is +34%) -- consistent with a favourable draw on
+top of a real effect, or with the simulation understating the value of time
+past 7,920 s. Only more draws, interleaved with anim, separate those.

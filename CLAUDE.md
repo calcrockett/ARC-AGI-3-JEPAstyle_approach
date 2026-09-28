@@ -317,6 +317,26 @@ solvability**. **Stop spending slots on this lineage.** The remaining directions
 are perception (their stated gap, where our measured 9-155 s analyzer timeouts
 also live) and model capability -- not more serving tuning.
 
+### 10. Momentum time allocation (2026-09-28): first draw **4.37**, best ever
+
+Branch `stage7-momentum-time`, write-up `experiments/stage7_momentum_time.md`.
+The run is time-bound (every game plays to its 7,920 s clock). Measured on 225
+game-runs: a turn in a game stuck 10+ turns earns 2.7x less than a turn in a
+progressing game, and momentum does not fade with depth. Simulated on a
+110-game queue, merely stopping stuck games HURTS; what helps is the opposite:
+**at 7,920 s a game that leveled up in the last 45 min keeps going (cap 1.5x),
+paid for by stopping games stuck 100 min** (+9.9% projected). Installed by a
+notebook cell replacing `_HarnessGameSession.runtime_limit_reached` /
+`timing_payload`; the model sees the baseline's time until 7,920 s.
+
+Verified before submitting: 12 unit tests; a Haiku-subagent relay smoke test on
+the REAL solver locally (queue refill + stall stops work); a public-25 GPU run
+(25/25 clean, 11 stall stops, 6 extensions, tr87 +1 level).
+
+**Draw 1: 4.37** (ref 56631362) vs anim n=6 mean 3.258 sd 0.385. n=1: the exact
+permutation p cannot go below 1/7. **Interleave with anim; no claim before n>=3.**
+Incumbent config for new draws: anim + momentum, if it holds.
+
 ## Repo / branch layout
 
 - `master` -- Stage 0 (harness) is complete and stable here. Don't rebase
