@@ -111,3 +111,35 @@ in the same period.
   Haiku run and, if needed, a free public-25 run are where the decisions are
   counted.
 - *Falsifier* -- anim-momentum below the anim mean after 3 draws each.
+
+## 6. Haiku relay smoke test (2026-09-28): PASSED on plumbing
+
+`scripts/momentum/haiku_relay_smoke.py`, run locally. The REAL anim solver --
+the unpickled `HarnessSolver`, its semaphore queue, `_HarnessGameSession.play()`,
+the real `ToolAgent` (system prompt, board rendering, history, trimming to the
+served model's 32,768-token window) and the real Python-tool sandbox -- with the
+policy installed and one substitution: `ToolAgent._chat_completion`. Each LLM
+call was written to a file holding exactly the messages and tool schemas the
+served model would receive, and answered by a fresh Claude Haiku subagent that
+read only that file. Haiku carries its own system prompt, so it is a rough
+stand-in for Qwen, not a replica. Time was simulated (150 s per batch) so the
+policy's clock did not depend on subagent latency.
+
+4 games (ft09, vc33, tu93, sk48) on 2 slots; base 900 s, momentum 450 s, stall
+630 s, cap 1.5x. Result (`experiments/stage7_momentum_time_haiku_smoke.json`):
+
+- no error; all 4 games finalized as `gave_up` (none crashed), scored;
+- the policy saw all 4 and recorded 4 stall stops (at 750 s, limit 630 s);
+- **the queue refilled**: tu93 and sk48 started in the slots ft09 and vc33
+  vacated -- the path a public-25 GPU run cannot exercise;
+- 24 relayed calls: 20 tool calls, 4 no-action replies, 0 unparseable
+  (Haiku's hand-written JSON needed a repair for `\'` escapes and a missing
+  brace -- a relay artifact, not a harness one).
+
+**Not exercised: extension.** Haiku did not level up within ~5 turns per game,
+so no game had momentum at the base time. That path is covered by unit tests
+and will be counted in the real-kernel GPU run on the 25 public games.
+
+Two relay replies per pair were written by the operator, not Haiku: requests
+created a moment before the clock passed the stall limit, which the harness
+stops at its next check whatever the reply. They carried no action.
