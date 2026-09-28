@@ -171,11 +171,16 @@ def strip_magics(source: str) -> str:
 
 def check_source(source: str, label: str = "<cell>") -> list[str]:
     """Return a list of problem descriptions; empty means clean."""
-    source = strip_magics(source)
+    # Plain Python first: a continuation line may legitimately start with
+    # `%` (the format operator), and blanking it as a "magic" would break a
+    # valid cell. Magics are stripped only when the raw cell does not parse.
     try:
         tree = ast.parse(source)
-    except SyntaxError as exc:
-        return [f"{label}: SyntaxError line {exc.lineno}: {exc.msg}"]
+    except SyntaxError:
+        try:
+            tree = ast.parse(strip_magics(source))
+        except SyntaxError as exc:
+            return [f"{label}: SyntaxError line {exc.lineno}: {exc.msg}"]
 
     bound: set[str] = set(_BUILTINS)
     problems: list[str] = []
