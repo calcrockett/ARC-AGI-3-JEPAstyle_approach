@@ -143,3 +143,23 @@ and will be counted in the real-kernel GPU run on the 25 public games.
 Two relay replies per pair were written by the operator, not Haiku: requests
 created a moment before the clock passed the stall limit, which the harness
 stops at its next check whatever the reply. They carried no action.
+
+## 7. Real kernel, public-25 check run (2026-09-28 02:56-06:17 UTC)
+
+`arc3-duck-nvfp4-anim-momentum` v1 on the production stack. A catastrophe and
+mechanism check, not a ranking (public-25 SE +/-2.46): 25/25 games finalized
+(`gave_up`), none crashed; audit passed; public-25 score 11.72 (prior anim runs
+9.97, 8.71). The vLLM teardown traceback in the log is pre-existing -- the
+unmodified anim run logs it too. Decisions
+(`experiments/stage7_momentum_time_public25_decisions.json`):
+
+- **11 stall stops** at 6,032-7,662 s. On public-25 there is no queue (25
+  games < 28 slots), so this time goes unused here; on the hidden run it
+  starts queued games sooner.
+- **6 extensions** past 7,920 s: tr87 ran to 10,810 s and went **4 -> 5
+  levels**; ft09 lost momentum within a minute; s5i5, sc25, r11l, sp80 ran
+  to 8,571-10,424 s with no further level. One level from six extensions.
+
+**Submitted: ref 56631362, 2026-09-28 06:19 UTC** -- draw 1 of the momentum
+arm, to be compared with anim (n=6, mean 3.258, sd 0.385). Next draws
+alternate with plain anim so both arms are measured in the same period.
