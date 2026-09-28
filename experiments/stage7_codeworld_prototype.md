@@ -750,3 +750,39 @@ Same configuration as v7.
   revise (v7: ls20 had none).
 - **revision rounds**, now instrumented: attempted, accepted.
 - **outcome** -- levels. Prior unchanged: likely 0.
+
+### Result (kernel v8, 2026-09-28): the state fix holds; hypotheses are anchored
+
+Clean: 1,719 s, all engine checks OK, 0 errors, 316 LLM completions.
+
+| | v7 | v8 |
+|---|---:|---:|
+| repairs with 0 LLM attempts (charged) | 7 | **0** |
+| hidden-state resyncs | -- | **0** |
+| goals falsified | 4 | 4 (ls20 x3, dc22 x1) |
+| revision rounds / accepted | (not instrumented) | 4 / 2 |
+| planner decisions played | 27 | 27 |
+| levels completed | 0 | **0** |
+
+**Fix: prediction met; falsifier did not fire.** Zero zero-attempt repairs
+and zero resyncs -- the planner was the only thing writing imagined moves
+into the installed model. ls20 kept its budget and used it: 3 goal
+revisions, 2 accepted.
+
+**What it revised to.** ls20's successive goals, all falsified in play:
+v2 "move left (x=14)"; v3 "x=14 ... prefer rows 25-49"; v4 "around
+(14, 30), bottom-left". The gate forced each to differ from the last
+falsified board, and each did -- by a few cells. The model is anchored on
+one idea ("go left to x=14") and perturbs its coordinates. That is the
+wall now: not search, not legality, not state, not the plumbing between a
+falsification and a revision, but **the diversity of the hypotheses
+themselves**, with no observed win to learn from.
+
+Budget use is also lopsided: 7 of 12 games spent all 8 coder calls on
+drafts that never produced an acceptable model, and never played a planned
+move. Planner decisions played stay at 27 because after a falsification
+the agent explores at random until a revision is accepted.
+
+Where this arm stands after sections 11-15: every mechanism between an
+LLM-written simulator and a played action has been instrumented, fixed and
+verified; across v3-v8 it has completed 0 levels.
