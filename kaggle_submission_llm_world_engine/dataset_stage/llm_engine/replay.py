@@ -40,7 +40,7 @@ from typing import Any, Optional
 
 from .diff import format_diff
 from .types import GameTranscript, Transition
-from .world_model import WorldModelProtocol, hints_tied, safe_predict
+from .world_model import WorldModelProtocol, hints_tied, isolated, safe_predict
 
 
 @dataclass
@@ -265,7 +265,7 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
     states = _observed_states(transcript)
     values: list[float] = []
     for i, board in enumerate(states):
-        value, problem = _score(model, board)
+        value, problem = _score(isolated(model), board)
         if problem is not None:
             return GoalHintCheck(
                 ok=False, states_checked=i, problem=f"{problem} on observed board #{i}",
@@ -280,7 +280,7 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
         here = repr(_interior(board, band))
         outcomes: dict[str, tuple[Any, Any]] = {}
         for action in candidates:
-            nxt, _delta, _done, error = safe_predict(model, board, action)
+            nxt, _delta, _done, error = safe_predict(isolated(model), board, action)
             if error is not None or nxt is None:
                 continue
             key = repr(_interior(nxt, band))
@@ -291,7 +291,7 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
         informative += 1
         picked = list(outcomes.values())[:MAX_OUTCOMES_PER_BOARD]
         for i, (a_i, s_i) in enumerate(picked):
-            v_i, problem = _score(model, s_i)
+            v_i, problem = _score(isolated(model), s_i)
             if problem is not None:
                 return GoalHintCheck(
                     ok=False, states_checked=len(states), distinct_values=distinct,
@@ -302,7 +302,7 @@ def check_goal_hint(transcript: GameTranscript, model: WorldModelProtocol) -> Go
             for j, (a_j, s_j) in enumerate(picked):
                 if i == j:
                     continue
-                v_c, problem = _score(model, _transplant(s_j, s_i, band))
+                v_c, problem = _score(isolated(model), _transplant(s_j, s_i, band))
                 if problem is not None:
                     return GoalHintCheck(
                         ok=False, states_checked=len(states), distinct_values=distinct,
@@ -345,11 +345,11 @@ def peak_escape(model: WorldModelProtocol, board: Any, candidates: list) -> Opti
     band = _band(board)
     judged = False
     for action in candidates:
-        nxt, _d, _done, error = safe_predict(model, board, action)
+        nxt, _d, _done, error = safe_predict(isolated(model), board, action)
         if error is not None or nxt is None or nxt == board:
             continue
-        v_move, p1 = _score(model, nxt)
-        v_stay, p2 = _score(model, _transplant(board, nxt, band))
+        v_move, p1 = _score(isolated(model), nxt)
+        v_stay, p2 = _score(isolated(model), _transplant(board, nxt, band))
         if p1 is not None or p2 is not None:
             continue
         judged = True

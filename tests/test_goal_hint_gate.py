@@ -758,3 +758,84 @@ def test_steady_progress_is_never_falsified(code_world_agent_module):
     for i, x in enumerate(range(LO, TARGET[0])):  # walking toward the target
         agent._choose_engine_action(_hud_board(x, TARGET[1], i), [1, 2, 3, 4])
     assert agent.goal_stats["falsified"] == 0
+
+
+# =====================================================================
+# model state isolation (2026-09-27): 70 of 83 saved LLM-written models keep
+# instance state; the planner searched on the installed instance, writing
+# imagined moves into it (ls20: counter_x 13 -> 34 in one plan() call)
+# =====================================================================
+
+from conftest import GRID_N, true_step  # type: ignore[import-not-found]  # noqa: E402
+
+# Correct for the toy game only while its own call count is small -- so any
+# imagined call that leaks into the installed instance corrupts it.
+FRAGILE = CORRECT_WORLD_MODEL_SOURCE.replace(
+    "        self.seen = {}\n",
+    "        self.seen = {}\n        self.calls = 0\n",
+).replace(
+    "    def predict(self, state, action_name, x=None, y=None):\n",
+    "    def predict(self, state, action_name, x=None, y=None):\n"
+    "        self.calls += 1\n"
+    "        if self.calls > 6:\n"
+    "            return [[row[:] for row in state[0]]], 0, False\n",
+)
+
+
+def test_planning_does_not_touch_the_installed_instance():
+    m = load(FRAGILE)
+    before = dict(vars(m))
+    plan(m, with_agent_at(2, 2), rng=random.Random(0))
+    assert vars(m) == before
+
+
+def test_sibling_branches_do_not_share_imagined_state():
+    """ONLY_FIRST moves the agent on an instance's first predict() call and
+    never again. On a shared instance only whichever action the shuffled
+    search tries first can move; with isolation every branch starts fresh,
+    so the planner reliably finds the improving move."""
+    only_first = FRAGILE.replace("        if self.calls > 6:\n", "        if self.calls > 1:\n")
+    m = load(only_first)
+    for seed in range(20):
+        r = plan(m, with_agent_at(2, 2), depth=1, rng=random.Random(seed))
+        assert not r.stalled, seed
+        nxt, _, _ = load(only_first).predict(with_agent_at(2, 2), r.actions[0].name, r.actions[0].x, r.actions[0].y)
+        assert m.goal_hint(nxt) > m.goal_hint(with_agent_at(2, 2))
+
+
+def test_gate_and_peak_test_do_not_touch_the_instance():
+    m = load(FRAGILE)
+    t = build_transcript()
+    before = dict(vars(m))
+    check_goal_hint(t, m)
+    peak_escape(m, with_agent_at(2, 2), candidate_actions())
+    assert vars(m) == before
+
+
+def _short_transcript(n):
+    t = GameTranscript(game_id="t")
+    state = with_agent_at(1, 1)
+    for name in ["ACTION4", "ACTION2", "ACTION4"][:n]:
+        a = Action(name=name)
+        nxt = true_step(state, a)
+        t.append(Transition(state, a, nxt, 0, 0, "NOT_FINISHED"))
+        state = nxt
+    return t, state
+
+
+def test_hidden_state_divergence_is_resynced_without_an_llm_call(code_world_agent_module):
+    from test_code_world_agent import make_agent  # type: ignore[import-not-found]
+
+    agent = make_agent(code_world_agent_module, coder_responses=[])
+    agent.transcript, state = _short_transcript(2)
+    agent.model = load(FRAGILE)
+    agent.model_source = FRAGILE
+    agent.model.calls = 50  # imagined calls leaked in, as the old planner did
+    v0, used0 = agent.model_version, agent.coder_budget.calls_used
+    a = Action(name="ACTION2")
+    agent._handle_new_transition(Transition(state, a, true_step(state, a), 0, 0, "NOT_FINISHED"))
+    assert agent.state_resyncs == 1
+    assert agent.coder_budget.calls_used == used0, "no LLM call, no budget"
+    assert agent.model_version == v0, "same source: not a new revision"
+    assert agent.model.calls == len(agent.transcript), "resynced instance advanced by real transitions only"
+    assert agent.coder_client.prompts == []

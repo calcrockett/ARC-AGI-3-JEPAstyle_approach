@@ -188,6 +188,29 @@ def _describe_bad_prediction(result: Any) -> Optional[str]:
     return None
 
 
+def isolated(model: WorldModelProtocol) -> WorldModelProtocol:
+    """A private copy of `model` for HYPOTHETICAL calls.
+
+    LLM-written models keep instance state -- 70 of the 83 installed or
+    candidate models saved from kernels v3-v7 do -- and `predict()` updates
+    it (ls20: `self.counter_x += 1`). The planner used to search on the
+    installed instance itself: one plan() call moved ls20's counter from 13
+    to 34, writing 21 imagined moves into the real simulator. It then
+    mispredicted real moves, and each false "divergence" triggered a repair
+    that a freshly loaded copy passed with no LLM call at all -- 7 on ls20
+    in kernel v7, each charged against the coder budget.
+
+    Only REAL transitions may advance the installed instance. Everything
+    imagined -- search, gate probes, peak tests -- runs on a copy. All 83
+    saved models deep-copy cleanly (worst 0.45 ms); if one ever does not,
+    the original is returned, which is the old behaviour.
+    """
+    try:
+        return copy.deepcopy(model)
+    except Exception:  # noqa: BLE001 -- LLM-authored object
+        return model
+
+
 def safe_goal_hint(model: WorldModelProtocol, state: Grid) -> float:
     """goal_hint for use inside search: never raises, never returns a
     non-finite value. A NaN in a beam's sort key makes the ordering

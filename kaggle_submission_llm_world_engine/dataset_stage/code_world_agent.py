@@ -116,6 +116,8 @@ class CodeWorldAgent(Agent):
         self.plan_stats = {"calls": 0, "stalled": 0, "planned": 0}
         #: Goal falsification counters, reported by the run.
         self.goal_stats = {"falsified": 0, "revised": 0, "revision_failed": 0}
+        #: Divergences that were hidden-state artifacts, fixed without an LLM call.
+        self.state_resyncs = 0
         self._goal_revisions_this_level = 0
         self._reset_goal_tracking()
 
@@ -360,11 +362,12 @@ class CodeWorldAgent(Agent):
             return
         self._goal_falsified_at_len = len(self.transcript)
         self._goal_revisions_this_level += 1
-        self.coder_budget.record("goal-revision")
         outcome = revise_goal_hint(
             self.coder_client, self.transcript, self.model_source,  # type: ignore[arg-type]
             max_attempts=self.REPAIR_MAX_ATTEMPTS,
         )
+        if outcome.attempts > 0:
+            self.coder_budget.record("goal-revision")
         if outcome.ok and outcome.world_model is not None and outcome.source and outcome.attempts > 0:
             self.model_version += 1
             self.model = outcome.world_model
@@ -543,8 +546,20 @@ class CodeWorldAgent(Agent):
             return
 
         logger.info("%s: prediction diverged at transition #%d, repairing", self.game_id, len(self.transcript) - 1)
-        self.coder_budget.record("repair")
         outcome = repair_world_model(self.coder_client, self.transcript, self.model_source, max_attempts=self.REPAIR_MAX_ATTEMPTS)
+        if outcome.ok and outcome.world_model is not None and outcome.attempts == 0:
+            # A freshly loaded copy of the SAME source reproduces the whole
+            # transcript: the divergence came from the installed instance's
+            # hidden state, not from the rule. Resync to the fresh instance
+            # (replay has advanced it through every real transition). No
+            # LLM call was made, so no budget is charged and no revision is
+            # recorded. Kernel v7: ls20 spent 7 of its 8 budget units here.
+            self.model = outcome.world_model
+            self.state_resyncs += 1
+            self._consecutive_repair_failures = 0
+            logger.info("%s: hidden-state resync (no LLM call)", self.game_id)
+            return
+        self.coder_budget.record("repair")
         if outcome.ok and outcome.world_model is not None and outcome.source:
             self._consecutive_repair_failures = 0
             self.model_version += 1

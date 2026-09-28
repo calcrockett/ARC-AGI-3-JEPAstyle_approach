@@ -357,6 +357,7 @@ def make_agent(module, coder_responses=None, action_responses=None):
     agent.goal_stats = {"falsified": 0, "revised": 0, "revision_failed": 0}
     agent._goal_revisions_this_level = 0
     agent._reset_goal_tracking()
+    agent.state_resyncs = 0
     agent.transcript = __import__("llm_engine.types", fromlist=["GameTranscript"]).GameTranscript(game_id="test-game")
     agent._probe_plan = __import__("llm_engine.opening_probes", fromlist=["opening_probe_plan"]).opening_probe_plan()
     agent._probe_index = 0

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .types import ALL_ACTIONS, Action, Grid, allowed_action_names
-from .world_model import HINT_REL_TOL, WorldModelProtocol, hints_tied, safe_goal_hint, safe_predict
+from .world_model import HINT_REL_TOL, WorldModelProtocol, hints_tied, isolated, safe_goal_hint, safe_predict
 
 # Coordinates to try for ACTION6 -- a coarse grid rather than all 4096
 # (x, y) pairs, matching the opening-probe's spread-sample approach. Kept
@@ -99,29 +99,32 @@ def plan(
     (rng or _RNG).shuffle(candidates)
 
     # Each beam entry: (score_tuple, action_sequence, resulting_state,
-    # cumulative_levels, terminal)
-    beam: list[tuple[tuple[int, float], list[Action], Grid, int, bool]] = [
-        ((0, safe_goal_hint(model, state)), [], state, 0, False)
-    ]
+    # cumulative_levels, terminal, model_copy). Every branch runs on its own
+    # copy of the model: the installed instance is never touched (only real
+    # transitions may advance it), and sibling branches cannot see each
+    # other's imagined moves through shared hidden state.
+    root = isolated(model)
+    beam: list = [((0, safe_goal_hint(root, state)), [], state, 0, False, root)]
 
     first_ply_hints: list[float] = []
     first_ply_any_levels = False
 
     for depth_idx in range(depth):
-        expanded: list[tuple[tuple[int, float], list[Action], Grid, int, bool]] = []
+        expanded: list = []
         for entry in beam:
-            _score, seq, cur_state, cum_levels, terminal = entry
+            _score, seq, cur_state, cum_levels, terminal, branch_model = entry
             if cum_levels > 0 or terminal:
                 # Already predicts a level, or reached a predicted terminal
                 # state -- carry it forward without extending it.
                 expanded.append(entry)
                 continue
             for action in candidates:
-                next_state, levels_delta, done, error = safe_predict(model, cur_state, action)
+                child = isolated(branch_model)
+                next_state, levels_delta, done, error = safe_predict(child, cur_state, action)
                 if error is not None or next_state is None:
                     continue
                 new_cum = cum_levels + (levels_delta or 0)
-                hint = safe_goal_hint(model, next_state)
+                hint = safe_goal_hint(child, next_state)
                 if depth_idx == 0:
                     first_ply_hints.append(hint)
                     if new_cum > 0:
@@ -130,10 +133,10 @@ def plan(
                 # used to `break` out of the candidate loop, which silently
                 # skipped every candidate listed after the first action
                 # predicting `done` -- and thinned the stall test's sample.
-                expanded.append(((new_cum, hint), seq + [action], next_state, new_cum, bool(done)))
+                expanded.append(((new_cum, hint), seq + [action], next_state, new_cum, bool(done), child))
         if not expanded:
             break
-        expanded.sort(key=lambda e: e[0], reverse=True)
+        expanded.sort(key=lambda e: e[0], reverse=True)  # score only: never compare models
         beam = expanded[:beam_width]
 
     goal_hint_spread = (max(first_ply_hints) - min(first_ply_hints)) if first_ply_hints else 0.0
@@ -147,7 +150,7 @@ def plan(
             stalled=True, goal_hint_spread=goal_hint_spread,
         )
 
-    best_score, best_seq, _, best_levels, _terminal = beam[0]
+    best_score, best_seq, _, best_levels, _terminal, _m = beam[0]
     stalled = (
         best_levels == 0
         and not first_ply_any_levels
