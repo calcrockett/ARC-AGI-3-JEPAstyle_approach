@@ -725,3 +725,28 @@ model (`copy.deepcopy`) so only real transitions advance its state; do not
 charge coder budget for a repair that made no LLM call; instrument
 `revise_goal_hint` rounds in the driver (they are invisible in `rounds`,
 which wraps only draft/repair).
+
+## 15. Imagined moves no longer touch the real model (2026-09-27)
+
+Section 14's v7 result exposed it; the fix is on `stage7-goal-hint`
+(278 tests). Imagined calls -- search, gate probes, peak tests -- run on
+deep copies of the model; only real transitions advance the installed
+instance. A repair that needs no LLM call is recognised as a hidden-state
+resync and costs nothing. Mutation-checked (the isolation tests fail with
+the copy disabled); on ls20's real model the counter now stays at 13
+across 13 plan() calls. **Every free-run number in sections 8-14 was
+produced with this bug live**, on 70 of 83 models that keep state.
+
+### Pre-registered before kernel v8
+
+Same configuration as v7.
+
+- **the fix** -- repair rounds with 0 LLM attempts: v7 had 7 (ls20). The
+  resync path should absorb any residue. *Prediction:* 0 zero-attempt
+  repairs charged to budget; `state_resyncs` small.
+  **Falsifier:** repeated resyncs in one game would mean something other
+  than the planner is still mutating the instance.
+- **budget** -- games reaching a goal falsification with budget left to
+  revise (v7: ls20 had none).
+- **revision rounds**, now instrumented: attempted, accepted.
+- **outcome** -- levels. Prior unchanged: likely 0.

@@ -53,6 +53,8 @@ GOAL_HINT_CHECKS = {
     # 2026-09-27: goal falsification.
     "replay has band-corrected peak test (peak_escape)": hasattr(replay_mod, "peak_escape"),
     "drafting has revise_goal_hint": hasattr(drafting, "revise_goal_hint"),
+    # 2026-09-27: imagined calls run on copies of the model.
+    "model state isolated from hypothetical calls (isolated)": hasattr(wm_mod, "isolated"),
 }
 checks.update(GOAL_HINT_CHECKS)
 for k, v in checks.items():
@@ -263,3 +265,31 @@ with open(_LOG, "w") as _fh:
 print(f"[{{_el()}}] === diag driver exited with code {{_proc.returncode}} ===", flush=True)
 '''
 }
+
+
+# -- 7. state isolation + goal-revision rounds (2026-09-27) --------------------
+DRIVER_PATCHES[
+    """cwa_mod.next_action = _instr_next_action
+"""
+] = """cwa_mod.next_action = _instr_next_action
+# Goal revisions call drafting.repair_world_model internally, so the
+# draft/repair round wrappers never saw them (v7: invisible in `rounds`).
+if hasattr(cwa_mod, "revise_goal_hint"):
+    cwa_mod.revise_goal_hint = _wrap_round("revise", cwa_mod.revise_goal_hint)
+"""
+DRIVER_PATCHES[
+    """        "goal_stats": getattr(a, "goal_stats", None),
+"""
+] = """        "goal_stats": getattr(a, "goal_stats", None),
+        "state_resyncs": getattr(a, "state_resyncs", None),
+"""
+DRIVER_PATCHES[
+    """    "planner_decisions_played": sum("""
+] = """    "state_resyncs_no_llm": sum((g.get("state_resyncs") or 0) for g in EVIDENCE["games"]),
+    "revise_rounds": sum(1 for r in EVIDENCE["rounds"] if r.get("kind") == "revise"),
+    "revise_rounds_ok": sum(1 for r in EVIDENCE["rounds"] if r.get("kind") == "revise" and r.get("ok")),
+    "repair_rounds_zero_attempts": sum(
+        1 for r in EVIDENCE["rounds"] if r.get("kind") == "repair" and r.get("attempts") == 0
+    ),
+    "planner_decisions_played": sum("""
+DRIVER_REQUIRED.append(("driver: revise rounds wrapped", '_wrap_round("revise"'))
