@@ -114,6 +114,11 @@ def build_haiku() -> Path:
     nb = json.loads((ANIM_DIR / "arc3-duck-nvfp4-anim.ipynb").read_text(encoding="utf-8"))
     src = cells_of(nb)
 
+    # --- cell 1: upstream GPU diagnostic (runs nvidia-smi) -- diagnostic only; no GPU here
+    assert "nvidia-smi" in src[1], "cell 1 moved"
+    set_src(nb, 1, "# [calamitychasm] Haiku smoke test runs on CPU: the upstream nvidia-smi diagnostic is skipped.\n"
+                   "print('HAIKU_SMOKE cpu run: no GPU diagnostic', flush=True)\n")
+
     # --- cell 9: no vLLM boot; the analyzer is Haiku under the served model's harness settings
     cut = src[9].index("# Solver setup commands (wheels, vLLM server startup, ...) run before the benchmark loads.")
     haiku_env = {
