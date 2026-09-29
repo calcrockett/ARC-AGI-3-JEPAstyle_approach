@@ -72,3 +72,23 @@ no extension could fire under the 7,200 s cap
 (`experiments/stage7_sheet_momentum_public25_decisions.json`).
 
 Submission scheduled for 2026-09-29 00:02 UTC.
+
+## 5. Result, draw 1 (2026-09-29): **3.89**
+
+Ref 56655708, submitted 00:02 UTC, COMPLETE 09:02 UTC, public score **3.89**.
+
+| arm | n | scores | mean |
+|---|---:|---|---:|
+| anim | 6 | 3.43, 3.79, 3.37, 3.02, 2.66, 3.28 | 3.258 |
+| anim + momentum | 1 | 4.37 | -- |
+| **sheetu12b + momentum** | **1** | **3.89** | -- |
+| sheetu12b (upstream, not ours) | 1 | 5.19 | -- |
+
+**Pre-registered falsifier met: 3.89 < 4.37, so this is not the new incumbent.**
+It is above the anim mean (+0.63, 1.6 anim-sd) and 1.30 below upstream's own
+5.19. At n=1 per arm none of these gaps is separable from draw-to-draw noise
+(anim's own range is 2.66-3.79). Three readings, not distinguishable yet:
+upstream's 5.19 was a high or selected draw; momentum helps this agent less
+than anim, or hurts it (its level-up timing was never measured); or this draw
+landed low. A plain-upstream draw of our own is what would separate the
+first two.

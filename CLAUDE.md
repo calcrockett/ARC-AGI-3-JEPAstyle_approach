@@ -337,6 +337,19 @@ the REAL solver locally (queue refill + stall stops work); a public-25 GPU run
 permutation p cannot go below 1/7. **Interleave with anim; no claim before n>=3.**
 Incumbent config for new draws: anim + momentum, if it holds.
 
+### 11. sheetu12b + momentum (2026-09-29): **3.89** -- not the new incumbent
+
+Branch `stage7-sheet-momentum`, write-up `experiments/stage7_sheet_momentum.md`.
+Public notebook `scottlegrand/taaf-flashnext-sheetu12b-0922` scored 5.19 (n=1,
+theirs): same stack, plain Duck solver plus agent patches (animation frames in
+the sandbox, an all-frames contact-sheet image, 12x board upscale, 2 history
+images, tolerant world-model parser). Forked verbatim + our momentum cell,
+check run clean, submitted: **3.89** (ref 56655708). Below anim + momentum's
+4.37, so the pre-registered falsifier holds; above the anim mean. n=1 each --
+nothing ranked. Measured in anim along the way: 63% of world-model updates are
+dropped by its exact-prefix label parser, and images are charged ~5x their real
+token cost -- both untested fixes. Incumbent stays anim + momentum.
+
 ## Repo / branch layout
 
 - `master` -- Stage 0 (harness) is complete and stable here. Don't rebase
