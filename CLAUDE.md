@@ -337,7 +337,7 @@ the REAL solver locally (queue refill + stall stops work); a public-25 GPU run
 permutation p cannot go below 1/7. **Interleave with anim; no claim before n>=3.**
 Incumbent config for new draws: anim + momentum, if it holds.
 
-### 11. sheetu12b + momentum (2026-09-29): **3.89** -- not the new incumbent
+### 11. sheetu12b + momentum (2026-09-29 / 10-01): **3.89, 4.38** (mean 4.135)
 
 Branch `stage7-sheet-momentum`, write-up `experiments/stage7_sheet_momentum.md`.
 Public notebook `scottlegrand/taaf-flashnext-sheetu12b-0922` scored 5.19 (n=1,
@@ -348,7 +348,9 @@ check run clean, submitted: **3.89** (ref 56655708). Below anim + momentum's
 4.37, so the pre-registered falsifier holds; above the anim mean. n=1 each --
 nothing ranked. Measured in anim along the way: 63% of world-model updates are
 dropped by its exact-prefix label parser, and images are charged ~5x their real
-token cost -- both untested fixes. Incumbent stays anim + momentum.
+token cost -- both untested fixes. Draw 2 (byte-identical, ref 56713526):
+**4.38**. vs anim n=6: p = 1/28 = 0.036. Not separable from anim + momentum
+(4.37, n=1); neither arm's two components are separated.
 
 ## Repo / branch layout
 

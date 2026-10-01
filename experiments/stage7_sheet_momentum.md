@@ -92,3 +92,23 @@ upstream's 5.19 was a high or selected draw; momentum helps this agent less
 than anim, or hurts it (its level-up timing was never measured); or this draw
 landed low. A plain-upstream draw of our own is what would separate the
 first two.
+
+## 6. Result, draw 2 (2026-10-01): **4.38**
+
+Ref 56713526, kernel v1 byte-identical resubmit, submitted 2026-09-30 16:42 UTC,
+COMPLETE 01:44 UTC, public score **4.38** -- tied with the project's best.
+
+| arm | n | scores | mean |
+|---|---:|---|---:|
+| anim | 6 | 3.43, 3.79, 3.37, 3.02, 2.66, 3.28 | 3.258 |
+| anim + momentum | 1 | 4.37 | 4.37 |
+| **sheetu12b + momentum** | **2** | **3.89, 4.38** | **4.135** |
+
+Draw-to-draw spread on identical code: 0.49 (anim's own range is 1.13).
+sheetu12b + momentum vs anim: both draws above every anim draw, exact
+permutation p = 1/28 = 0.036 (one-sided). This is evidence the arm beats plain
+anim; it does NOT separate the two parts (their agent vs our momentum), and it
+does NOT rank it against anim + momentum (4.135 vs 4.37, n=2 vs n=1). Every
+momentum-bearing draw so far (3 of 3) beats every plain-anim draw (p = 1/84),
+but the two momentum arms use different agents, so that pooled figure is a
+pattern, not a test of momentum.
