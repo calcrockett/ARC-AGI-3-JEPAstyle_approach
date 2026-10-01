@@ -337,7 +337,7 @@ the REAL solver locally (queue refill + stall stops work); a public-25 GPU run
 permutation p cannot go below 1/7. **Interleave with anim; no claim before n>=3.**
 Incumbent config for new draws: anim + momentum, if it holds.
 
-### 11. sheetu12b + momentum (2026-09-29 / 10-01): **3.89, 4.38** (mean 4.135)
+### 11. sheetu12b + momentum (2026-09-29..10-01): **3.89, 4.38, 4.58** (mean 4.283) -- incumbent
 
 Branch `stage7-sheet-momentum`, write-up `experiments/stage7_sheet_momentum.md`.
 Public notebook `scottlegrand/taaf-flashnext-sheetu12b-0922` scored 5.19 (n=1,
@@ -351,6 +351,8 @@ dropped by its exact-prefix label parser, and images are charged ~5x their real
 token cost -- both untested fixes. Draw 2 (byte-identical, ref 56713526):
 **4.38**. vs anim n=6: p = 1/28 = 0.036. Not separable from anim + momentum
 (4.37, n=1); neither arm's two components are separated.
+Draw 3 (ref 56750615): **4.58**, the project's best. n=3 mean 4.283, sd 0.355;
+vs anim p = 1/84 = 0.012. **Incumbent config for new draws: sheetu12b + momentum.**
 
 ## Repo / branch layout
 

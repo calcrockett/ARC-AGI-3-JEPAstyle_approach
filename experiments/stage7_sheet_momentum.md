@@ -112,3 +112,20 @@ does NOT rank it against anim + momentum (4.135 vs 4.37, n=2 vs n=1). Every
 momentum-bearing draw so far (3 of 3) beats every plain-anim draw (p = 1/84),
 but the two momentum arms use different agents, so that pooled figure is a
 pattern, not a test of momentum.
+
+## 7. Result, draw 3 (2026-10-01): **4.58** -- the project's best
+
+Ref 56750615, kernel v1 byte-identical resubmit, submitted 12:04 UTC, COMPLETE
+21:06 UTC, public score **4.58** (previous best 4.38 / 4.37).
+
+| arm | n | scores | mean | sd |
+|---|---:|---|---:|---:|
+| anim | 6 | 3.43, 3.79, 3.37, 3.02, 2.66, 3.28 | 3.258 | 0.385 |
+| anim + momentum | 1 | 4.37 | 4.37 | -- |
+| **sheetu12b + momentum** | **3** | **3.89, 4.38, 4.58** | **4.283** | **0.355** |
+
+vs anim: all three draws above every anim draw, exact permutation p = 1/84 =
+0.012 (one-sided); mean +1.03 (+31%). Spread on identical code is similar to
+anim's (sd 0.355 vs 0.385). This arm is now the incumbent on evidence (n=3).
+Still open: whether momentum or the upstream agent carries the gain, and
+where it stands against anim + momentum (n=1).
