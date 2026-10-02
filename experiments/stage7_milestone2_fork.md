@@ -32,3 +32,18 @@ Harness patch applied cleanly (all 16 files), `priority gate active: 10
 concurrent streams`, zero tracebacks. 10/10 public games finished (2 won, 8
 gave_up); mean 46.22 (upstream's own check run: 36.56) -- public games, not
 a ranking. **Submitted: ref 56763055, 2026-10-02 01:29 UTC.**
+
+## Result (2026-10-02): **24.99** -- rank 249, top ~7%
+
+Ref 56763055, COMPLETE 10:33 UTC (9h04m after submission), public score
+**24.99**. Team "How bad can it go?" now **rank 249** of >=3,564 teams
+(top ~7%; the top-10% cutoff is rank ~356). Previous best 4.58 -> 24.99
+(5.5x).
+
+Above the pre-registered falsifier (10), so the fork works; 6.5 below
+upstream's own 31.47 (n=1 each). Not separable from draw noise on one
+draw, but the gap is ~21% -- larger than this project's measured
+identical-code spread on other stacks (sd ~8-12%). Candidate reasons, none
+tested: a high upstream draw (published notebooks are often a best run),
+or environment differences (GPU/host on the day). A second byte-identical
+draw would separate those.

@@ -317,6 +317,20 @@ solvability**. **Stop spending slots on this lineage.** The remaining directions
 are perception (their stated gap, where our measured 9-155 s analyzer timeouts
 also live) and model capability -- not more serving tuning.
 
+### 12. Milestone-2 fork (2026-10-02): **24.99**, rank 249 -- top ~7%
+
+Branch `stage7-milestone2-fork`, write-up `experiments/stage7_milestone2_fork.md`.
+The leaderboard jumped after `dfranzen/arc-agi-3-milestone-2-solution`
+(public 31.47) was published: #1 52.51, #99 27.36 on 2026-10-02. A
+byte-identical fork (kernel `calamitychasm/arc3-milestone2-fork` v1; W4A16
+Qwen3.8-Flash-Next + MTP drafter on an SGLang fork, 128K context, an
+8,400-line harness patch, and a harness-side priority gate that runs all
+~110 games with 10 active streams ranked by expected level value) scored
+**24.99** (ref 56763055) -- 5.5x our previous best 4.58. Team "How bad can it
+go?" is rank 249. Our momentum cell does not apply to this solver; its
+priority gate is the stronger version of the same idea. **Incumbent config for
+new draws: the milestone-2 fork.**
+
 ## Repo / branch layout
 
 - `master` -- Stage 0 (harness) is complete and stable here. Don't rebase
