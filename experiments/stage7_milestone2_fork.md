@@ -25,3 +25,10 @@ min each) must complete with no crashed games. Submission authorised by
 the user on 2026-10-02 ("Submit it"). Expectation: well above 4.58; a score
 below 10 would point at a fork/environment defect, not variance, and is the
 falsifier.
+
+## Check run (kernel v1, 2026-10-02 00:53-01:28 UTC): PASSED
+
+Harness patch applied cleanly (all 16 files), `priority gate active: 10
+concurrent streams`, zero tracebacks. 10/10 public games finished (2 won, 8
+gave_up); mean 46.22 (upstream's own check run: 36.56) -- public games, not
+a ranking. **Submitted: ref 56763055, 2026-10-02 01:29 UTC.**
