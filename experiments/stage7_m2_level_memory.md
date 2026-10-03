@@ -42,3 +42,15 @@ run cell, which only gains a counter dump; one install cell before it.
 - Submission authorised by the user on 2026-10-02 ("Run a submission when
   it's ready"); next slot 2026-10-03 00:00 UTC, fired by a detached
   scheduled task, not by this chat.
+
+## Submission plumbing (2026-10-03)
+
+Kernel v1 pushed ~03:57 UTC (check run in progress). Submission is fired by a
+detached one-shot scheduled task (`ARC3Submit_arc3-m2-level-memory`,
+`scripts/kaggle_submit_when_ready.py --job ...`), armed for 04:02 UTC: it
+waits for the check run, downloads its output, and submits only if the gate
+passes -- markers `LEVEL_MEMORY installed`, `priority gate active`, `harness
+patch applied successfully`; no traceback outside serving teardown; every game
+`won`/`gave_up`/`cancelled`; `level_memory_summary.json` with `errors == 0`.
+Steps go to `logs/kaggle_submit.log`; the score lands in
+`logs/kaggle_watch_latest.txt` via the watcher.
