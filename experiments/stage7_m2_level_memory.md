@@ -54,3 +54,21 @@ patch applied successfully`; no traceback outside serving teardown; every game
 `won`/`gave_up`/`cancelled`; `level_memory_summary.json` with `errors == 0`.
 Steps go to `logs/kaggle_submit.log`; the score lands in
 `logs/kaggle_watch_latest.txt` via the watcher.
+
+## Result (2026-10-03): **33.29**, rank 10
+
+Check run: `levels_recorded 47, asks 61, rules_captured 32, rules_missing 12,
+blocks_applied 15, block_chars_max 6413, errors 0`; gate passed 04:37 UTC;
+the detached task submitted ref **56789553** at 04:37; COMPLETE, **33.29**.
+Team rank **10**.
+
+Against the baseline notebook's draw distribution (hundreds of one-shot
+copies: mean 25.77, sd 3.93): z = 1.91, **one-sided p = 0.028** that an
+unchanged notebook draws >= 33.29. Empirically even rarer: only two teams
+outside the prize leaders score above 33.29. But one draw puts the effect at
++7.5 with a 95% interval of [-0.2, +15.2], and the point estimate is inflated
+by selection (we report it because it is high). If the true effect were +2.8
+(M85 on sirikilohit's stack), P(no effect | this draw) = 0.25 at a 50/50 prior.
+Draws for 95% confidence / 80% power: 13 at +2.8, 6 at +4, 4 at +5, 2 at +7.5.
+A second draw >= 27.4 makes the two-draw mean significant at p < 0.05
+(>= 31.2 for p < 0.01).

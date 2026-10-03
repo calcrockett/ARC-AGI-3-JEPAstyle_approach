@@ -331,6 +331,17 @@ go?" is rank 249. Our momentum cell does not apply to this solver; its
 priority gate is the stronger version of the same idea. **Incumbent config for
 new draws: the milestone-2 fork.**
 
+### 13. Solved-level memory (2026-10-03): **33.29**, rank 10
+
+`experiments/stage7_m2_level_memory.md`. sirikilohit's M85 ported onto the
+milestone-2 fork (runtime patch on ToolAgent; block pinned into the system
+prompt only at history eviction, so no extra prefill). Check run: 32/44 rules
+captured, 15 blocks applied, 0 errors. Submitted by the detached gated
+submitter (`scripts/kaggle_submit_when_ready.py`), ref 56789553: **33.29**
+vs the copies' 25.77 +/- 3.93 -> p = 0.028 for "no effect" (n=1). Incumbent
+for new draws. Submissions/polling now run as Windows scheduled tasks
+(`ARC3KaggleWatch`, `ARC3Submit_*`), independent of any chat session.
+
 ## Repo / branch layout
 
 - `master` -- Stage 0 (harness) is complete and stable here. Don't rebase
