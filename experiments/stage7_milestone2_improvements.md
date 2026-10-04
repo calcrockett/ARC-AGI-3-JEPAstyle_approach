@@ -42,3 +42,22 @@ Hidden-run arithmetic: ~700 tok/s x 532 min = ~22M tokens / ~110 games =
 Also from that thread: one team reports **NVFP4 KV** costs very little NLL
 versus FP8 (halves KV memory again); another moved from 14.5 to 22.5 mainly by
 spending freed KV memory on longer retained history.
+
+## 3. Why 4.58 -> 24.99 [MEASURED, both check runs' server metrics]
+
+| | old stack (sheetu12b + momentum) | milestone-2 fork |
+|---|---|---|
+| model | Qwen3.8-Flash-Next NVFP4, vLLM | Qwen3.8-Flash-Next W4A16 + drafter, SGLang |
+| context window | 32K | 128K (trim to ~59K in one block) |
+| prefix-cache hits | **0** (caching disabled) | **94.4%** of prompt tokens |
+| prompt tokens re-processed | 22.8M in 2 h (all of them) | 1.9M of 33.9M in 25 min |
+| generated tokens / s | **~250** | **~590** |
+| preemptions | 112 | n/a (bounded admission, 10 streams) |
+
+Same base model; ~2.4x the generated tokens per second while carrying 4x
+the context. Consistent with other teams' published ablations on this stack:
+FP8 KV spent on longer history took one team 14.5 -> 22.5, and
+sirikilohit's biggest single step was the same change (14.49 -> 22.53);
+dfranzen credits model, context, animations, 10x images and UNDO. Our own
+switch changed all of these at once, so the split between serving efficiency
+and harness/perception changes is not measured here.
