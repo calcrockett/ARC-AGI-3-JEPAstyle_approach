@@ -72,3 +72,11 @@ by selection (we report it because it is high). If the true effect were +2.8
 Draws for 95% confidence / 80% power: 13 at +2.8, 6 at +4, 4 at +5, 2 at +7.5.
 A second draw >= 27.4 makes the two-draw mean significant at p < 0.05
 (>= 31.2 for p < 0.01).
+
+## Draw 2 (2026-10-04): **28.18**
+
+Ref 56809165 (kernel v1, byte-identical), submitted 00:02 UTC by the detached
+task after the gate passed again. Two draws 33.29, 28.18, mean **30.74**;
+vs the copies' 25.77 +/- 3.93: z = 1.79, **one-sided p = 0.037** -- clears the
+pre-registered p < 0.05 bar (second draw >= 27.4). Effect estimate +5.0
+(95% CI about -0.5 .. +10.4 from two draws).

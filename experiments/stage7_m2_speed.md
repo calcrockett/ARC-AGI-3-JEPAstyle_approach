@@ -30,3 +30,19 @@ base) and prefix reuse >= 90%. spec4 is lossless, so it may ship on speed alone;
 stream/memory variants change cache pressure and are judged on all four.
 s14hic must show `hicache_attached=True`, else it is a no-op, not a result.
 Public-game scores are reported but cannot rank (one 25-game run each).
+
+## Round 1 results (2026-10-04)
+
+- **spec4: impossible on this model.** Server start failed in CUDA-graph
+  capture: "Qwen QSA requires speculative_num_draft_tokens <= the QSA compress
+  ratio (4) ... got 5". The incumbent's 3 steps (4 draft tokens) is already the
+  architectural maximum. Option closed.
+- **base** (25 games, 10 streams): 577.8 generated tok/s; decode 779 tok/s at
+  10 running (median running 10); accept length 2.62; prefix reuse 92.4%;
+  **KV pool peak 0.99** (0.91 in the 10-game check) -- with more games than
+  streams the cache, not compute, is the binding constraint.
+- **s12 / s14 / s14hic: not run.** All three died at setup: the bundle dataset
+  was not mounted (`cp: cannot stat .../taaf-kaggle-source-bundle-copy`),
+  despite identical metadata and an unchanged dataset (last updated 09-28);
+  base/spec4, pushed ~1 h earlier, mounted it. Treated as a transient Kaggle
+  mount failure; re-queued 15:00 UTC (s12 pushed as v2).

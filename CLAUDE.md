@@ -339,7 +339,7 @@ prompt only at history eviction, so no extra prefill). Check run: 32/44 rules
 captured, 15 blocks applied, 0 errors. Submitted by the detached gated
 submitter (`scripts/kaggle_submit_when_ready.py`), ref 56789553: **33.29**
 vs the copies' 25.77 +/- 3.93 -> p = 0.028 for "no effect" (n=1). Incumbent
-for new draws. Submissions/polling now run as Windows scheduled tasks
+for new draws. **Draw 2: 28.18** (two-draw mean 30.74, p = 0.037). Submissions/polling now run as Windows scheduled tasks
 (`ARC3KaggleWatch`, `ARC3Submit_*`), independent of any chat session.
 
 ## Repo / branch layout
