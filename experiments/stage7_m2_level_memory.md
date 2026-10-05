@@ -80,3 +80,13 @@ task after the gate passed again. Two draws 33.29, 28.18, mean **30.74**;
 vs the copies' 25.77 +/- 3.93: z = 1.79, **one-sided p = 0.037** -- clears the
 pre-registered p < 0.05 bar (second draw >= 27.4). Effect estimate +5.0
 (95% CI about -0.5 .. +10.4 from two draws).
+
+## Draw 3 (2026-10-05): **31.03**
+
+Ref 56842120 (kernel v1, byte-identical), submitted 04:19 UTC by the detached
+task. Three draws: 33.29, 28.18, 31.03 -- mean **30.83**, sd 2.56.
+- vs the copies' distribution (25.77, sd 3.93 known from hundreds of draws):
+  z = 2.23, **one-sided p = 0.013**; effect **+5.1, 95% CI +0.6 .. +9.5**.
+- t-test using only our own spread (df = 2): t = 3.42, p = 0.038.
+Both clear p < 0.05; the interval now excludes zero. A 4th draw at the same
+mean would reach p < 0.01.
