@@ -30,6 +30,20 @@ def log(msg: str) -> None:
         fh.write(f"{dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M:%S UTC} {msg}\n")
 
 
+def _busy_sessions() -> int:
+    """Running/queued kernels among those the watcher tracks. Pushing into a full GPU-session
+    limit can leave a new kernel unable to mount its datasets, so never push blind."""
+    kernels = ROOT / "logs" / "kaggle_watch_kernels.txt"
+    busy = 0
+    for k in (kernels.read_text().splitlines() if kernels.exists() else []):
+        k = k.strip()
+        if not k or k.startswith("#"):
+            continue
+        out = subprocess.run([str(KAGGLE), "kernels", "status", k], capture_output=True, text=True).stdout
+        busy += any(s in out for s in ("RUNNING", "QUEUED"))
+    return busy
+
+
 def tick() -> None:
     if not QUEUE.exists():
         return
@@ -37,6 +51,10 @@ def tick() -> None:
     if not lines:
         return
     target = lines[0]
+    busy = _busy_sessions()
+    if busy >= 2:
+        log(f"waiting ({busy} watched kernels running/queued): {target}")
+        return
     res = subprocess.run([str(KAGGLE), "kernels", "push", "-p", str(ROOT / target)],
                          capture_output=True, text=True)
     out = (res.stdout + res.stderr).strip().splitlines()

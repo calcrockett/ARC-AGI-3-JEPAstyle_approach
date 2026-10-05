@@ -29,6 +29,8 @@ OUT = ROOT / "kaggle_submission_m2_speed"
 HICACHE = ('args += ["--enable-hierarchical-cache", "--hicache-size", "32", '
            '"--hicache-write-policy", "write_through", "--hicache-io-backend", "kernel"]\n')
 
+# s12/s14/s14hic were first created by pushes rejected at the 2-GPU-session limit and could
+# never mount the bundle dataset afterwards (3 attempts each); they get fresh slugs (spd2).
 VARIANTS = {
     "base":   dict(),
     "spec4":  dict(SPEC_STEPS=4),
@@ -84,7 +86,8 @@ def build(name: str, knobs: dict) -> Path:
     path = d / f"arc3-m2-speed-{name}.ipynb"
     path.write_text(json.dumps(nb, indent=1), encoding="utf-8")
     meta = json.loads((SRC / "kernel-metadata.json").read_text(encoding="utf-8"))
-    meta.update(id=f"calamitychasm/arc3-m2-speed-{name}", title=f"arc3-m2-speed-{name}",
+    slug = f"arc3-m2-speed-{name}" if name in ("base", "spec4") else f"arc3-m2-spd2-{name}"
+    meta.update(id=f"calamitychasm/{slug}", title=slug,
                 code_file=path.name, is_private=True)
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return path
