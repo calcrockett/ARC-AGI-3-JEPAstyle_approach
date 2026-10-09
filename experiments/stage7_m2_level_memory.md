@@ -101,3 +101,76 @@ task. Four draws: 33.29, 28.18, 31.03, 29.38 -- mean **30.47**, sd 2.21.
 Past the p < 0.01 bar on the known-sigma test. Our own draw-to-draw spread
 (sd 2.21) is smaller than the copies' (3.93), so the copies' sd is the
 conservative choice for the interval.
+
+## Variant: tried facts (`arc3-m2-lm-triedfacts`, flag `LEVEL_MEMORY_TRIED_FACTS=1`)
+
+**Why.** When history is evicted, the agent loses what it already tried on the level it is still
+stuck on: how many actions and game overs it has spent, how far each life got, what the fatal runs
+looked like, and what it was thinking. The solved-level block only covers *cleared* levels.
+Inspired by lordhansolo's `game_overs` objects (his `solver.py` `record_life_action`).
+
+**Mechanism.** At the SAME eviction point as the solved-level block (`apply_on_evict`, only when the
+harness says history was dropped, so the prefix is being rebuilt anyway) the system-prompt pin also
+gets a facts-only block about the CURRENT level, appended after the solved-level block:
+- actions spent on the level (resets included) and the game-over count;
+- the action count at each game over, or a plain line when all are equal ("All 3 game overs
+  occurred after exactly 42 actions.");
+- the last 10 actions of the 3 most recent fatal runs, in the harness's own action notation
+  (`HistoryEntry.action`, e.g. `ACTION6(31,14)`);
+- the last ~600 chars of the model's own reasoning from the previous turn.
+
+Game overs come from `HistoryEntry.result["game_over"]` (the dfranzen patch stores it per action);
+the RESET after a death is not part of any life. Everything is worded as fact, no advice (advice
+text hurt scores before). Hard cap 3000 utf-8 bytes: reasoning, then fatal runs, then listed counts
+degrade in order before any raw cut. The facts are snapshotted once per turn in the user-prompt
+wrapper, so repeated trims inside one turn rebuild the identical block and do not rewrite the
+prompt. Nothing before the eviction point is touched; with the flag off none of this runs and
+`summary()` has no new keys. `tests/test_level_memory_tried_facts.py` covers content, the cap,
+flag-off equivalence, and no mutation of pre-eviction messages. Not run against the real patched
+ToolAgent (`ARC3_M2_SRC` not available when this was written): the harness fields used
+(`history_entries[i].result["game_over"]`, `.action`, `.frame.level`; `_history_messages`) were read
+from the dfranzen patch.
+
+Example (3 deaths at 42 actions on level 2):
+
+```
+=== CURRENT LEVEL FACTS (recorded by the harness when older history was trimmed) ===
+Level 2: 149 actions spent on it so far (resets included); 3 game overs on it.
+All 3 game overs occurred after exactly 42 actions.
+Game over #1, last 10 of 42 actions (32 earlier not shown): RIGHT, ACTION6(31,14), DOWN, ...
+Game over #2, last 10 of 42 actions (32 earlier not shown): RIGHT, ACTION5, UP, ...
+Game over #3, last 10 of 42 actions (32 earlier not shown): DOWN, ACTION5, ACTION5, ...
+Your reasoning in the turn before older history was trimmed (tail): ...
+=== END CURRENT LEVEL FACTS ===
+```
+
+**Build.** `python scripts/_build_m2_level_memory_kernel.py --tried-facts` writes
+`kaggle_submission_m2_lm_triedfacts/notebook/` (kernel `calamitychasm/arc3-m2-lm-triedfacts`;
+metadata identical to the incumbent except id/title/code_file). The only differences from the
+incumbent notebook are the markdown header and the install cell (sets the env flag, asserts it,
+prints `TRIED_FACTS installed`). Variant flags compose: each adds a suffix in `VARIANT_ORDER`, so
+histcache + triedfacts becomes `arc3-m2-lm-histcache-triedfacts` in
+`kaggle_submission_m2_lm_histcache_triedfacts/`. The incumbent notebook in git was not regenerated
+(it is what ran as v1); rebuilding it now would embed the new module with the flag off.
+
+**Check-run pass criteria** (10 public games x 25 min, same as the incumbent's check):
+- log has `LEVEL_MEMORY installed` and `TRIED_FACTS installed`, plus the incumbent's markers
+  (`priority gate active`, `harness patch applied successfully`); every game
+  `won`/`gave_up`/`cancelled`;
+- `level_memory_summary.json`: `errors == 0`; `blocks_applied` > 0 and `tried_facts_blocks` > 0
+  (a short check run may hold few evictions; 0 is inconclusive, not a pass);
+- `tried_facts_bytes_max <= 3000`; `tried_facts_truncations` small relative to blocks;
+  `tried_facts_avg_bytes` roughly 0.5-3 KB.
+
+Score pre-registration is as for the incumbent: one draw is a catastrophe check (< 18 fails);
+effects need several draws against the incumbent's mean 30.47 (sd 2.21, n=4).
+
+**Push / submit** (Kaggle was unreachable when this was written):
+
+```
+kaggle kernels push -p kaggle_submission_m2_lm_triedfacts/notebook
+python scripts/kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-lm-triedfacts --version 1 \
+    --message "m2 + level memory + tried facts" --marker "LEVEL_MEMORY installed" \
+    --marker "TRIED_FACTS installed" --marker "priority gate active" \
+    --marker "harness patch applied successfully" --counters level_memory_summary.json
+```

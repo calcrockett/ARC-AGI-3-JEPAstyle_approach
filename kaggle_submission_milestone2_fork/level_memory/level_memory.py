@@ -21,10 +21,17 @@ Cache-aware deviation from M85: changing the system prompt invalidates the
 game's cached prefix, so the block is only (re)applied at the moment history is
 evicted -- when the prefix is being rebuilt anyway. Until the first eviction the
 same information is still in the conversation, so nothing is lost by waiting.
+
+Optional TRIED FACTS (env LEVEL_MEMORY_TRIED_FACTS=1, default OFF): at the same eviction point, also pin a
+compact facts-only block about the CURRENT unsolved level -- actions spent, game-over count and the action
+count at each, the last actions of the most recent fatal runs, and the tail of the model's own reasoning
+from the previous turn. Everything is stated as fact, never as advice. Nothing before the eviction point is
+touched, and with the flag off none of this code runs.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 
@@ -39,9 +46,27 @@ ASK = ("\n\nLEVEL {n} SOLVED. In your reply this turn, before acting, write one 
        "starts exactly with 'Rule for level {n}:' -- the goal, what each control/action did, and the "
        "plan that won (at most 5 lines). It is pinned for every later level.")
 
+# ---- tried facts (flag-gated; see module docstring)
+TRIED_FACTS_ENV = "LEVEL_MEMORY_TRIED_FACTS"
+TRIED_FACTS_MAX_BYTES = 3000
+TRIED_RUNS = 3              # most recent fatal runs shown
+TRIED_RUN_ACTIONS = 10      # actions shown per fatal run
+TRIED_REASONING_CHARS = 600
+TRIED_COUNTS_SHOWN = 12     # per-game-over action counts listed
+TF_HEADER = "=== CURRENT LEVEL FACTS (recorded by the harness when older history was trimmed) ==="
+TF_FOOTER = "=== END CURRENT LEVEL FACTS ==="
+
 _LOCK = threading.Lock()
 STATS = {"levels_recorded": 0, "rules_captured": 0, "rules_missing": 0, "asks": 0,
          "blocks_applied": 0, "block_chars_max": 0, "errors": 0, "last_error": ""}
+
+
+TF_STATS = {"tried_facts_blocks": 0, "tried_facts_bytes_total": 0, "tried_facts_bytes_max": 0,
+            "tried_facts_truncations": 0}
+
+
+def tried_facts_enabled() -> bool:
+    return os.environ.get(TRIED_FACTS_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _bump(key, n=1):
@@ -121,11 +146,132 @@ def render_block(levels: list) -> str:
     return "\n".join(lines)
 
 
+# ----------------------------------------------------------------------------- tried facts
+def level_life_facts(history_entries, level: int) -> dict:
+    """Facts about `level` from the harness history: actions spent (resets included) and, for every game
+    over on it, the actions of the life that ended there. history[i].frame is the frame AFTER
+    history[i].action, so an action belongs to the level of the frame before it. A game over is the entry
+    whose result carries game_over; the RESET that follows it opens the next life and is not part of one."""
+    total, life, overs, prev = 0, [], [], None
+    for e in history_entries or []:
+        act = str(getattr(e, "action", "") or "").strip()
+        if act and prev == level:
+            total += 1
+            res = getattr(e, "result", None)
+            res = res if isinstance(res, dict) else {}
+            if act.upper() == "RESET":
+                life = []
+            else:
+                life.append(act)
+                if res.get("game_over"):
+                    overs.append(life)
+                    life = []
+        lv = getattr(getattr(e, "frame", None), "level", None)
+        if isinstance(lv, int):
+            prev = lv
+    return {"level": level, "actions": total, "game_overs": overs}
+
+
+def reasoning_tail(messages, chars: int = TRIED_REASONING_CHARS) -> str:
+    """Last `chars` characters of the model's own reasoning in its most recent assistant message
+    (its visible reply when that message carries no reasoning)."""
+    for m in reversed(messages or []):
+        if not (isinstance(m, dict) and m.get("role") == "assistant"):
+            continue
+        parts = []
+        for k in ("reasoning_content", "reasoning"):
+            v = m.get(k)
+            if isinstance(v, str):
+                parts.append(v)
+            elif isinstance(v, list):
+                parts += [p.get("text", "") for p in v if isinstance(p, dict) and isinstance(p.get("text"), str)]
+        text = " ".join(" ".join(parts).split())
+        if not text:
+            c = m.get("content")
+            if isinstance(c, list):
+                c = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and isinstance(p.get("text"), str))
+            text = " ".join(c.split()) if isinstance(c, str) else ""
+        if text:
+            return text[-chars:]
+    return ""
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _render_tried(snap: dict, reasoning_chars: int, runs: int, run_actions: int, counts_shown: int) -> str:
+    overs = snap["game_overs"]
+    lines = [TF_HEADER]
+    lines.append(f"Level {snap['level']}: {snap['actions']} actions spent on it so far (resets included); "
+                 f"{len(overs)} game over{'' if len(overs) == 1 else 's'} on it.")
+    if overs:
+        counts = [len(g) for g in overs]
+        if len(counts) >= 2 and len(set(counts)) == 1:
+            lines.append(f"All {len(counts)} game overs occurred after exactly {counts[0]} actions.")
+        else:
+            shown = counts[-counts_shown:] if counts_shown > 0 else []
+            if shown:
+                omitted = len(counts) - len(shown)
+                lines.append("Actions taken before each game over, in order"
+                             + (f" ({omitted} earlier omitted)" if omitted > 0 else "")
+                             + ": " + ", ".join(str(c) for c in shown) + ".")
+        recent = overs[-runs:] if runs > 0 else []
+        first_no = len(overs) - len(recent) + 1
+        for i, g in enumerate(recent):
+            tail = g[-run_actions:] if run_actions > 0 else []
+            earlier = len(g) - len(tail)
+            lines.append(f"Game over #{first_no + i}, last {len(tail)} of {len(g)} actions"
+                         + (f" ({earlier} earlier not shown)" if earlier > 0 else "") + ": " + ", ".join(tail))
+    if reasoning_chars > 0 and snap.get("reasoning"):
+        lines.append("Your reasoning in the turn before older history was trimmed (tail): "
+                     + snap["reasoning"][-reasoning_chars:].lstrip())
+    lines.append(TF_FOOTER)
+    return "\n".join(lines)
+
+
+def render_tried_facts(snap, max_bytes: int = TRIED_FACTS_MAX_BYTES):
+    """The facts-only block, hard-capped at `max_bytes` (utf-8). Returns (text, truncated)."""
+    if not snap or not snap.get("actions"):
+        return "", False
+    full = (TRIED_REASONING_CHARS, TRIED_RUNS, TRIED_RUN_ACTIONS, TRIED_COUNTS_SHOWN)
+    text = _render_tried(snap, *full)
+    if _utf8_len(text) <= max_bytes:
+        return text, False
+    # degrade in order: shorter reasoning, fewer fatal runs / actions, fewer listed counts
+    for params in ((300, 3, 10, 12), (100, 3, 10, 12), (0, 3, 10, 12), (0, 2, 10, 8), (0, 2, 6, 6),
+                   (0, 1, 6, 4), (0, 1, 3, 2), (0, 0, 0, 0)):
+        text = _render_tried(snap, *params)
+        if _utf8_len(text) <= max_bytes:
+            return text, True
+    cut = text.encode("utf-8")[: max(0, max_bytes - 4)].decode("utf-8", "ignore")
+    return cut + " ...", True
+
+
+def snapshot_tried_facts(agent, current_frame, history_entries):
+    level = getattr(current_frame, "level", None)
+    if not isinstance(level, int):
+        return None
+    snap = level_life_facts(history_entries or [], level)
+    snap["reasoning"] = reasoning_tail(getattr(agent, "_history_messages", None))
+    return snap
+
+
+def compose_block(st: dict) -> str:
+    """Everything pinned at an eviction: the solved-level block, plus the current-level facts if enabled."""
+    block = render_block(st["levels"])
+    if not tried_facts_enabled():
+        return block
+    facts, truncated = render_tried_facts(st.get("facts"))
+    st["_facts_text"], st["_facts_truncated"] = facts, truncated
+    return "\n\n".join(p for p in (block, facts) if p)
+
+
 # ----------------------------------------------------------------------------- per-agent state
 def _state(agent) -> dict:
     st = getattr(agent, "_lm_state", None)
     if st is None:
-        st = {"levels": [], "base_sp": getattr(agent, "_system_prompt", "") or "", "applied": ""}
+        st = {"levels": [], "base_sp": getattr(agent, "_system_prompt", "") or "", "applied": "", "facts": None}
         agent._lm_state = st
     return st
 
@@ -164,6 +310,8 @@ def after_user_prompt(agent, out: str, *, previous_step_summary=None, current_fr
     """Record a just-cleared level, capture pending rules, and append the rule request."""
     st = _state(agent)
     capture_rules(agent)
+    if tried_facts_enabled():
+        st["facts"] = snapshot_tried_facts(agent, current_frame, history_entries)
     summary = previous_step_summary or {}
     level_now = getattr(current_frame, "level", None)
     if summary.get("level_transition") and not summary.get("run_complete") and isinstance(level_now, int):
@@ -197,7 +345,7 @@ def apply_on_evict(agent, messages: list) -> list:
     if not getattr(agent, "_context_was_trimmed", False):
         return messages
     st = _state(agent)
-    block = render_block(st["levels"])
+    block = compose_block(st)
     if block == st["applied"]:
         return messages
     agent._system_prompt = (st["base_sp"].rstrip("\n") + "\n\n" + block) if block else st["base_sp"]
@@ -205,6 +353,12 @@ def apply_on_evict(agent, messages: list) -> list:
     with _LOCK:
         STATS["blocks_applied"] += 1
         STATS["block_chars_max"] = max(STATS["block_chars_max"], len(block))
+        if tried_facts_enabled() and st.get("_facts_text"):
+            n = _utf8_len(st["_facts_text"])
+            TF_STATS["tried_facts_blocks"] += 1
+            TF_STATS["tried_facts_bytes_total"] += n
+            TF_STATS["tried_facts_bytes_max"] = max(TF_STATS["tried_facts_bytes_max"], n)
+            TF_STATS["tried_facts_truncations"] += int(bool(st.get("_facts_truncated")))
     if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
         return [{**messages[0], "content": agent._system_prompt}, *messages[1:]]
     return messages
@@ -253,4 +407,9 @@ def install(tool_agent_cls) -> None:
 
 def summary() -> dict:
     with _LOCK:
-        return dict(STATS)
+        out = dict(STATS)
+        if tried_facts_enabled():
+            out.update(TF_STATS)
+            n = TF_STATS["tried_facts_blocks"]
+            out["tried_facts_avg_bytes"] = round(TF_STATS["tried_facts_bytes_total"] / n, 1) if n else 0
+        return out
