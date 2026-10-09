@@ -33,6 +33,7 @@ sys.path.insert(0, str(SCRIPTS))
 from _m2_input_resolver import apply_input_resolver  # noqa: E402
 
 SRC = ROOT / "kaggle_submission_m2_level_memory" / "notebook"
+DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type (same as the other m2 variant builders)
 
 # Flags verified against the Pennyroyal v2.5.3 source (d00d88e, server_args.py) and against
 # sirikilohit's working run (--hicache-size 48, same write policy / io backend, hicache_attached=True).
@@ -146,6 +147,10 @@ def build(name: str, knobs: dict, root: Path = ROOT) -> Path:
     meta = json.loads((SRC / "kernel-metadata.json").read_text(encoding="utf-8"))
     meta.update(id=f"calamitychasm/{slug}", title=slug,
                 code_file=path.name, is_private=True)
+    # Pin the session to `docker_image` explicitly (JustAdev742 lesson 0029: Kaggle's latest image moved to
+    # Python 3.13 by 2026-10-07 and Pennyroyal's wheels are cp312 only). The incumbent v1 metadata stays as pushed.
+    assert meta.get("docker_image", "").count("@sha256:") == 1, "the incumbent metadata must pin an image digest"
+    meta["docker_image_pinning_type"] = DOCKER_PINNING
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return path
 

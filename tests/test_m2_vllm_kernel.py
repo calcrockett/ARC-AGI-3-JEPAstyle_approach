@@ -181,6 +181,8 @@ def test_metadata_sources(built):
         assert meta["competition_sources"] == ["arc-prize-2026-arc-agi-3"]
         assert meta["machine_shape"] == "NvidiaRtxPro6000" and meta["enable_gpu"] is True
         assert meta["enable_internet"] is False and meta["is_private"] is True
+        inc = json.loads((b.INCUMBENT / "kernel-metadata.json").read_text())
+        assert meta["docker_image_pinning_type"] == "original" and meta["docker_image"] == inc["docker_image"]
         assert b.out_dir(name).name == "notebook" and b.out_dir(name).parent.name == f"kaggle_submission_m2_vllm_{name}"
 
 

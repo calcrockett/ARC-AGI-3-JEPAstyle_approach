@@ -203,6 +203,20 @@ def test_variant_kernels_pin_the_docker_image_and_the_incumbent_is_untouched():
         assert meta["docker_image_pinning_type"] == "original" and meta["docker_image"] == inc["docker_image"], p
 
 
+def test_every_committed_m2_kernel_but_the_incumbent_pins_the_docker_image():
+    """All committed kaggle_submission_m2_* kernels (lm, turbo, speed, spd, vllm) pin the incumbent's image; the
+    incumbent itself must stay byte-for-byte as pushed (no docker_image_pinning_type)."""
+    incumbent = ROOT / "kaggle_submission_m2_level_memory"
+    inc = json.loads((incumbent / "notebook" / "kernel-metadata.json").read_text())
+    assert "docker_image_pinning_type" not in inc and "@sha256:" in inc["docker_image"]
+    paths = sorted(p for p in ROOT.glob("kaggle_submission_m2_*/**/kernel-metadata.json")
+                   if incumbent not in p.parents)
+    assert len(paths) >= 19, [str(p) for p in paths]
+    for p in paths:
+        meta = json.loads(p.read_text())
+        assert meta["docker_image_pinning_type"] == "original" and meta["docker_image"] == inc["docker_image"], p
+
+
 @pytest.mark.parametrize("argv,slug", [
     (["--timeout-fix"], "arc3-m2-lm-timeoutfix"),
     (["--reap", "--streams", "14"], "arc3-m2-lm-reap-s14"),

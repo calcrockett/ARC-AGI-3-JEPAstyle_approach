@@ -87,7 +87,8 @@ def test_metadata_identical_except_id_title_code_file(built, name):
     inc = json.loads((INCUMBENT / "kernel-metadata.json").read_text(encoding="utf-8"))
     new = json.loads((built[name].parent / "kernel-metadata.json").read_text(encoding="utf-8"))
     diff = {k for k in set(inc) | set(new) if inc.get(k) != new.get(k)}
-    assert diff == {"id", "title", "code_file"}
+    assert diff == {"id", "title", "code_file", "docker_image_pinning_type"}
+    assert new["docker_image_pinning_type"] == "original" and new["docker_image"] == inc["docker_image"]
     assert new["id"] == f"calamitychasm/arc3-m2-spd-{name}" == f"calamitychasm/{new['title']}"
     assert new["code_file"] == built[name].name
     assert new["is_private"] and new["enable_gpu"] and new["machine_shape"] == "NvidiaRtxPro6000"

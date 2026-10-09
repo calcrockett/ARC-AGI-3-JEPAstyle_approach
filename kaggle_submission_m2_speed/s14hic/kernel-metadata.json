@@ -24,5 +24,6 @@
     "dfranzen/intel-qwen3.8-flash-next-w4a16-autoround/Transformers/default/1"
   ],
   "docker_image": "gcr.io/kaggle-private-byod/python@sha256:57e612b484cf3df5026ee4dcc3cb176974b22b2bc0937fb1e16132a8be4cb13c",
-  "machine_shape": "NvidiaRtxPro6000"
+  "machine_shape": "NvidiaRtxPro6000",
+  "docker_image_pinning_type": "original"
 }

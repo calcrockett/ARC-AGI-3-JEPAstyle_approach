@@ -52,6 +52,7 @@ MODEL_SOURCE = "lordhansolo/qwen3-8-flash-next-mixed-nvfp4-fp8/PyTorch/hf-mixed-
 HARNESS_BUNDLE = "dfranzen/taaf-kaggle-source-bundle-copy"
 COMPETITION = "arc-prize-2026-arc-agi-3"
 ARC_FRAME_SIDE = 64
+DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type (same as the other m2 variant builders)
 
 
 def kernel_slug(name: str) -> str:
@@ -303,6 +304,11 @@ def metadata(name: str) -> dict:
         dataset_sources=[RUNTIME_DATASET, BUNDLE_DATASET, HARNESS_BUNDLE],
         model_sources=[MODEL_SOURCE], competition_sources=[COMPETITION],
     )
+    # Keep the incumbent's pinned image (Python 3.12) and pin it explicitly: Kaggle's latest image moved to Python 3.13
+    # by 2026-10-07 (JustAdev742 lesson 0029). The launcher's VLLM_PYTHON_ABI_MISMATCH preflight checks the vLLM
+    # runtime's Python against the notebook's, so a runtime built for another Python fails loudly at boot.
+    assert meta.get("docker_image", "").count("@sha256:") == 1, "the incumbent metadata must pin an image digest"
+    meta["docker_image_pinning_type"] = DOCKER_PINNING
     return meta
 
 
