@@ -1,1 +1,1 @@
-{"id":"status-2026-10-09-f","ops":[{"op":"status"}]}
+{"id":"submit-incumbent-2026-10-09-f","ops":[{"op":"submit","kernel":"calamitychasm/arc3-m2-level-memory","version":1,"message":"m2 level memory draw 5","markers":["LEVEL_MEMORY installed","priority gate active","harness patch applied successfully"],"counters":["level_memory_summary.json"]},{"op":"push_kernel","dir":"kaggle_submission_m2_turbo_tail/notebook"},{"op":"status"}]}
