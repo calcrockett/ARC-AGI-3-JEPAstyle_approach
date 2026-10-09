@@ -50,10 +50,18 @@ class FakeApi:
     def competition_submissions(self, comp, page_size=20):
         return list(self.subs)
 
-    def kernels_list(self, mine=False, page=1, page_size=20, search=None):
+    def kernels_list(self, mine=False, page=1, page_size=20, search=None, competition=None, sort_by=None):
+        self.list_calls = getattr(self, "list_calls", []) + [
+            dict(competition=competition, sort_by=sort_by, page=page, page_size=page_size, search=search)]
+        if competition is not None:
+            return self.comp_kernels.get(page, [])
         if search is not None:
             return [k for k in self.kernels if search in (getattr(k, "ref", "") or "")]
         return self.kernels if page == 1 else []
+
+    def kernels_pull(self, kernel, path, metadata=False, quiet=True):
+        self.pulled = getattr(self, "pulled", []) + [kernel]
+        self.pull_write(Path(path))
 
     def kernels_status(self, kernel):
         if kernel in self.status_errors:
@@ -569,3 +577,96 @@ def test_status_shows_version_for_freshly_pushed_kernel(tmp_path, capsys):
     assert r["kernels"][tt].startswith("v1 ")
     assert r["kernels"][K].startswith("v? ")  # unknown is shown as v?, never v0 / vNone
     assert not any(v.startswith(("v0", "vNone")) for v in r["kernels"].values())
+
+
+# ---------------------------------------------------------------- list_kernels / pull_kernel
+
+def meta(ref, title="t", author="a", votes=0, when=NOW):
+    return NS(ref=ref, title=title, author=author, total_votes=votes, last_run_time=when,
+              current_version_number=0)
+
+
+def test_parse_list_and_pull_ops():
+    ok = {"id": "x", "ops": [{"op": "list_kernels", "sort_by": "dateCreated", "page_size": 50, "pages": 2},
+                             {"op": "pull_kernel", "kernel": "dfranzen/arc-agi-3-milestone-2-solution"}]}
+    assert ko.parse_request(json.dumps(ok))["id"] == "x"
+    for bad in ({"op": "list_kernels", "sort_by": "nope"}, {"op": "list_kernels", "pages": 0},
+                {"op": "list_kernels", "page_size": 500}, {"op": "list_kernels", "search": 3},
+                {"op": "pull_kernel", "kernel": "noslash"}, {"op": "pull_kernel", "kernel": "a/b", "max_lines": 0}):
+        with pytest.raises(ko.RequestError):
+            ko.parse_request(json.dumps({"id": "x", "ops": [bad]}))
+
+
+def test_kernel_row_handles_unset_fields():
+    r = ko.kernel_row(NS(ref="a/b", title="T", author="a", total_votes=0, last_run_time=None,
+                         current_version_number=0))
+    assert r["last_run"] is None and r["score"] is None and r["version"] is None and r["votes"] == 0
+    assert ko.kernel_row(NS(ref="a/b", best_public_score="36.5"))["score"] == "36.5"
+    assert ko.kernel_row(NS(ref="a/b", last_run_time=NOW))["last_run"] == "2026-10-09 12:00"
+
+
+def test_list_kernels_paginates_and_stops(tmp_path, capsys):
+    api = FakeApi()
+    api.comp_kernels = {1: [meta(f"u/k{i}", votes=i) for i in range(2)], 2: [meta("u/k9")], 3: [meta("u/never")]}
+    r = runner(api, tmp_path).run({"id": "x", "ops": [
+        {"op": "list_kernels", "sort_by": "scoreDescending", "page_size": 2, "pages": 5}]})[0]
+    assert r["result"] == "OK" and r["count"] == 3
+    assert [c["page"] for c in api.list_calls] == [1, 2]
+    assert all(c["competition"] == ko.COMPETITION and c["sort_by"] == "scoreDescending" for c in api.list_calls)
+    assert api.list_calls[0]["search"] is None
+    assert "u/k9" in capsys.readouterr().out
+
+
+def test_list_kernels_passes_search_and_runs_unchanged_request(tmp_path):
+    api = FakeApi()
+    api.comp_kernels = {1: [meta("u/k")]}
+    r = runner(api, tmp_path, changed=False).run({"id": "x", "ops": [
+        {"op": "list_kernels", "sort_by": "voteCount", "search": "milestone"}]})[0]
+    assert r["result"] == "OK"  # read-only: not gated on REQUEST_CHANGED
+    assert api.list_calls[0]["search"] == "milestone"
+
+
+def test_list_kernels_is_not_mutating():
+    assert "list_kernels" not in ko.MUTATING and "pull_kernel" not in ko.MUTATING
+
+
+def _write_nb(path: Path):
+    cells = [{"cell_type": "markdown", "source": ["# Title\n", "nothing here"]},
+             {"cell_type": "code", "source": ["SYSTEM_PROMPT = 'hello'\n", "x = 1"]},
+             {"cell_type": "code", "source": "import os"},
+             {"cell_type": "markdown", "source": "Public score 36.1 with 14 streams"}]
+    (path / "nb.ipynb").write_text(json.dumps({"cells": cells}))
+    (path / "kernel-metadata.json").write_text("{}")
+
+
+def test_pull_kernel_prints_matching_cells_only(tmp_path, capsys):
+    api = FakeApi()
+    api.pull_write = _write_nb
+    r = runner(api, tmp_path, changed=False).run({"id": "x", "ops": [
+        {"op": "pull_kernel", "kernel": "u/nb"}]})[0]
+    out = capsys.readouterr().out
+    assert r["result"] == "OK" and r["matched_cells"] == 2 and api.pulled == ["u/nb"]
+    assert "SYSTEM_PROMPT" in out and "14 streams" in out and "import os" not in out
+
+
+def test_pull_kernel_is_bounded(tmp_path, capsys):
+    api = FakeApi()
+
+    def write(p):
+        cells = [{"cell_type": "code", "source": "\n".join(f"prompt line {i}" for i in range(500))}
+                 for _ in range(10)]
+        (p / "nb.ipynb").write_text(json.dumps({"cells": cells}))
+    api.pull_write = write
+    r = runner(api, tmp_path).run({"id": "x", "ops": [{"op": "pull_kernel", "kernel": "u/nb", "max_lines": 50}]})[0]
+    assert r["printed_lines"] <= 52
+    assert capsys.readouterr().out.count("prompt line") <= 50
+
+
+def test_pull_kernel_error_is_reported_not_raised(tmp_path):
+    api = FakeApi()
+
+    def boom(p):
+        raise RuntimeError("404 not found")
+    api.pull_write = boom
+    r = runner(api, tmp_path).run({"id": "x", "ops": [{"op": "pull_kernel", "kernel": "u/nb"}]})[0]
+    assert r["result"] == "ERROR"

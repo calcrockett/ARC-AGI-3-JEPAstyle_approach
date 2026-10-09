@@ -9,6 +9,10 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "status", "kernels": [...optional extra owner/slug]}
   {"op": "push_kernel", "dir": "kaggle_submission_.../notebook"}
   {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true}
+  {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
+   "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
+  {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200}   (read-only: downloads the
+   notebook source, prints cells that mention score/prompt/context/stream/audit/memory)
   {"op": "submit", "kernel": "owner/slug", "version": N, "message": "...",
    "markers": [...], "counters": ["level_memory_summary.json", ...],
    "require_zero": {"history_cache_summary.json": ["write_fallbacks", ...]},
@@ -51,7 +55,7 @@ COMPETITION = ksr.COMPETITION
 OWNER = "calamitychasm"
 TEAM_PATTERNS = ("how bad can it go", "calamitychasm")
 REQUEST = ROOT / ".github" / "kaggle-ops" / "request.json"
-OPS = ("status", "push_kernel", "kernel_output", "submit")
+OPS = ("status", "push_kernel", "kernel_output", "submit", "list_kernels", "pull_kernel")
 MUTATING = ("push_kernel", "submit")
 BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
 GPU_LIMIT = 2
@@ -59,6 +63,11 @@ GPU_LIMIT = 2
 # benchmark kernels are skipped (their status calls only fed Kaggle's rate limiter, run 37994686371).
 GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2")
 STATUS_SPACING_S = 0.5
+LIST_SORTS = ("hotness", "commentCount", "dateCreated", "dateRun", "relevance", "scoreAscending",
+              "scoreDescending", "viewCount", "voteCount")
+PULL_KEYWORDS = ("score", "prompt", "context", "stream", "audit", "memory")
+PULL_MAX_LINES = 200
+PULL_CELL_LINES = 40
 RATE_LIMIT_BACKOFF_S = (5, 10, 20)
 _RATE_LIMITED = ("429", "too many requests", "rate limit", "rate-limit", "quota exceeded")
 
@@ -106,9 +115,29 @@ def parse_request(raw: str) -> dict:
                 raise RequestError(f"ops[{i}]: 'require_zero' must be an object")
             if not isinstance(op.get("force_gate", False), bool):
                 raise RequestError(f"ops[{i}]: 'force_gate' must be true/false")
+        if kind == "list_kernels":
+            _check_list_kernels(op, i)
+        if kind == "pull_kernel":
+            k = op.get("kernel")
+            if not isinstance(k, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", k):
+                raise RequestError(f"ops[{i}]: 'kernel' must look like owner/slug")
+            ml = op.get("max_lines", PULL_MAX_LINES)
+            if not isinstance(ml, int) or isinstance(ml, bool) or not 1 <= ml <= 1000:
+                raise RequestError(f"ops[{i}]: 'max_lines' must be an integer in 1..1000")
         if kind == "kernel_output" and not isinstance(op.get("grep", []), list):
             raise RequestError(f"ops[{i}]: 'grep' must be a list")
     return req
+
+
+def _check_list_kernels(op: dict, i: int) -> None:
+    if op.get("sort_by", "scoreDescending") not in LIST_SORTS:
+        raise RequestError(f"ops[{i}]: 'sort_by' must be one of {LIST_SORTS}")
+    for key, hi in (("page_size", 100), ("pages", 10)):
+        v = op.get(key, 1)
+        if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= hi:
+            raise RequestError(f"ops[{i}]: '{key}' must be an integer in 1..{hi}")
+    if op.get("search") is not None and not isinstance(op["search"], str):
+        raise RequestError(f"ops[{i}]: 'search' must be a string")
 
 
 def _check_dir(d: Any, i: int) -> None:
@@ -275,6 +304,52 @@ def zero_problems(out: Path, require_zero: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------- the runner
+
+def kernel_row(k: Any) -> dict:
+    """One listed kernel as a plain dict. kagglesdk getters return 0/None/"" for unset fields, so a
+    zero vote count is real-or-unset; a score is reported only if the object carries one (the
+    ApiKernelMetadata of kagglesdk 0.1.x has no score field, so this is usually None)."""
+    when = as_utc(getattr(k, "last_run_time", None))
+    score = None
+    for attr in ("best_public_score", "bestPublicScore", "public_score", "score"):
+        v = getattr(k, attr, None)
+        if v not in (None, "", 0, 0.0):
+            score = v
+            break
+    return {"ref": getattr(k, "ref", "") or "", "title": getattr(k, "title", "") or "",
+            "author": getattr(k, "author", "") or "",
+            "last_run": f"{when:%Y-%m-%d %H:%M}" if when else None,
+            "votes": getattr(k, "total_votes", None), "score": score,
+            "version": getattr(k, "current_version_number", None) or None}
+
+
+def notebook_cells(path: Path) -> list[tuple[str, str]]:
+    """(kind, source) for each cell of an .ipynb, or one 'code' cell for a plain script."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix != ".ipynb":
+        return [("md" if path.suffix in (".md", ".Rmd") else "code", text)]
+    try:
+        nb = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    cells = []
+    for c in nb.get("cells", []):
+        src = c.get("source", "")
+        cells.append(("md" if c.get("cell_type") == "markdown" else "code",
+                      "".join(src) if isinstance(src, list) else str(src)))
+    return cells
+
+
+def matching_cells(cells: list[tuple[str, str]], keywords=PULL_KEYWORDS) -> list[tuple[int, str, str, list[str]]]:
+    out = []
+    for idx, (kind, src) in enumerate(cells):
+        low = src.lower()
+        hit = [w for w in keywords if w in low]
+        if hit:
+            out.append((idx, kind, src, hit))
+    return out
+
+
 
 def default_cli(args: list[str], cwd: Path = ROOT) -> tuple[int, str]:
     env = dict(os.environ, PYTHONUTF8="1")
@@ -489,6 +564,56 @@ class Runner:
         res["result"] = "OK"
         return res
 
+    def op_list_kernels(self, op: dict) -> dict:
+        sort_by = op.get("sort_by", "scoreDescending")
+        size, pages = op.get("page_size", 50), op.get("pages", 1)
+        res: dict = {"op": "list_kernels", "sort_by": sort_by, "competition": COMPETITION}
+        rows: list[dict] = []
+        for page in range(1, pages + 1):
+            kw: dict = dict(competition=COMPETITION, sort_by=sort_by, page=page, page_size=size)
+            if op.get("search"):
+                kw["search"] = op["search"]
+            batch = list(self.api.kernels_list(**kw) or [])
+            rows += [kernel_row(k) for k in batch if k is not None]
+            if len(batch) < size:
+                break
+        print(f"  {len(rows)} kernels, sort_by={sort_by}" + (f", search={op['search']!r}" if op.get("search") else ""))
+        print(f"  {'#':>3} {'last run (UTC)':16} {'votes':>5} {'score':>7}  ref | title | author")
+        for n, r in enumerate(rows, 1):
+            print(f"  {n:>3} {r['last_run'] or '?':16} {r['votes'] if r['votes'] is not None else '?':>5} "
+                  f"{str(r['score'] if r['score'] is not None else '-'):>7}  {r['ref']} | {r['title'][:70]} | {r['author']}")
+        res.update(count=len(rows), kernels=rows, result="OK")
+        return res
+
+    def op_pull_kernel(self, op: dict) -> dict:
+        k = op["kernel"]
+        budget = op.get("max_lines", PULL_MAX_LINES)
+        res: dict = {"op": "pull_kernel", "kernel": k}
+        dest = self.out_dir / ("pull_" + re.sub(r"[^\w.-]+", "_", k))
+        dest.mkdir(parents=True, exist_ok=True)
+        self.api.kernels_pull(k, path=str(dest), metadata=True, quiet=True)
+        files = sorted(p for p in dest.rglob("*") if p.is_file())
+        res["files"] = [str(p.relative_to(dest)) for p in files]
+        code = [p for p in files if p.suffix in (".ipynb", ".py", ".R", ".Rmd", ".md")]
+        print(f"  pulled {len(files)} files: {res['files'][:20]}")
+        shown, matched = 0, 0
+        for p in code:
+            cells = notebook_cells(p)
+            hits = matching_cells(cells)
+            matched += len(hits)
+            print(f"  == {p.name}: {len(cells)} cells, {len(hits)} mention {PULL_KEYWORDS}")
+            for idx, kind, src, words in hits:
+                if shown >= budget:
+                    break
+                lines = src.splitlines()[:PULL_CELL_LINES]
+                lines = lines[:budget - shown]
+                shown += len(lines) + 1
+                print(f"  --- cell {idx} [{kind}] matches {','.join(words)}")
+                for ln in lines:
+                    print("    " + ln[:200])
+        res.update(matched_cells=matched, printed_lines=shown, result="OK")
+        return res
+
     def op_submit(self, op: dict, submitted_this_run: bool) -> dict:
         k, v = op["kernel"], op["version"]
         res: dict = {"op": "submit", "kernel": k, "version": v}
@@ -565,6 +690,10 @@ class Runner:
                         r = self.op_push_kernel(op)
                     elif kind == "kernel_output":
                         r = self.op_kernel_output(op)
+                    elif kind == "list_kernels":
+                        r = self.op_list_kernels(op)
+                    elif kind == "pull_kernel":
+                        r = self.op_pull_kernel(op)
                     else:
                         r = self.op_submit(op, submitted)
                         submitted = submitted or r.get("result") == "SUBMITTED"

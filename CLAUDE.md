@@ -315,7 +315,10 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   printing `NO_CREDENTIALS`.
 - **Request**: `{"id": "<new unique id>", "ops": [...]}`, executed in order. Ops: `status`
   (last 25 submissions, leaderboard bars at top 1/5/10%, our row, top 40, status of every kernel in
-  the tables above); `push_kernel` `{"dir": "kaggle_submission_x/notebook"}` (skipped as
+  the tables above); read-only `list_kernels` `{"sort_by": "scoreDescending|dateCreated|voteCount",
+  "page_size": 50, "pages": 2, "search": optional}` (public kernels of the competition; kagglesdk's
+  metadata has no score field, so scores are mostly `-`) and `pull_kernel` `{"kernel": "owner/slug",
+  "max_lines": 200}` (prints notebook cells mentioning score/prompt/context/stream/audit/memory); `push_kernel` `{"dir": "kaggle_submission_x/notebook"}` (skipped as
   `SKIPPED_GPU_BUSY` if 2 of our GPU kernels are running/queued); `kernel_output`
   `{"kernel", "grep": [markers]}` (digest: status, version, markers, tracebacks, game states,
   `*_summary.json` counters, speed metrics; full output as artifact, 7 days); `submit`
