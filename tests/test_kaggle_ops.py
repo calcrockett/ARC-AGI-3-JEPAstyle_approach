@@ -49,7 +49,9 @@ class FakeApi:
     def competition_submissions(self, comp, page_size=20):
         return list(self.subs)
 
-    def kernels_list(self, mine=False, page=1, page_size=20):
+    def kernels_list(self, mine=False, page=1, page_size=20, search=None):
+        if search is not None:
+            return [k for k in self.kernels if search in (getattr(k, "ref", "") or "")]
         return self.kernels if page == 1 else []
 
     def kernels_status(self, kernel):
@@ -342,3 +344,117 @@ def test_status_op_end_to_end(tmp_path, monkeypatch):
     assert r["result"] == "OK" and r["submitted_today"] == 1
     assert r["leaderboard"]["teams"] == 50 and r["leaderboard"]["ours"][0]["rank"] == 10
     assert K in r["kernels"]
+
+
+# ---------------------------------------------------------------- version lookup (kaggle 2.2.4 / kagglesdk)
+
+class GetKernelApi(FakeApi):
+    """FakeApi plus the single-kernel GET that `kaggle kernels pull --metadata` uses."""
+
+    def __init__(self, get_versions=None, search_kernels=None, **kw):
+        super().__init__(**kw)
+        self.get_versions = get_versions or {}
+        self.search_kernels = search_kernels
+        api = self
+
+        class Client:
+            def __enter__(self):
+                return NS(kernels=NS(kernels_api_client=NS(get_kernel=api._get_kernel)))
+
+            def __exit__(self, *a):
+                return False
+        self._client = Client
+
+    def build_kaggle_client(self):
+        return self._client()
+
+    def _get_kernel(self, req):
+        ref = f"{req.user_name}/{req.kernel_slug}"
+        if ref not in self.get_versions:
+            raise RuntimeError("404")
+        return NS(metadata=NS(ref=ref, current_version_number=self.get_versions[ref]), blob=None)
+
+    def kernels_list(self, mine=False, page=1, page_size=20, search=None):
+        if search is not None and self.search_kernels is not None:
+            return list(self.search_kernels)
+        return super().kernels_list(mine=mine, page=page, page_size=page_size, search=search)
+
+
+def test_version_zero_from_listing_is_unknown_not_a_refusal(tmp_path, capsys):
+    # The 2026-10-09 Actions run: kernels_list(mine=True) reported current_version_number 0 for a
+    # kernel whose latest version is 1, and the gate refused "latest version ... is v0".
+    api = FakeApi(output={K: write_output}, kernels=[NS(ref=K, current_version_number=0)])
+    r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+    assert r["result"] == "SUBMITTED", r
+    assert r["version_check"] == "VERSION_UNKNOWN" and "VERSION_UNKNOWN" in r["warnings"][0]
+    assert not any("latest version" in p for p in r["gate_problems"])
+    assert "VERSION_UNKNOWN" in capsys.readouterr().out
+
+
+def test_version_none_and_absent_are_unknown(tmp_path):
+    for kernels in ([NS(ref=K, current_version_number=None)], []):
+        api = FakeApi(output={K: write_output}, kernels=kernels)
+        r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+        assert r["result"] == "SUBMITTED" and r["version_check"] == "VERSION_UNKNOWN", r
+
+
+def test_version_unknown_still_enforces_the_rest_of_the_gate(tmp_path):
+    api = FakeApi(output={K: lambda p: write_output(p, errors=2)}, kernels=[NS(ref=K, current_version_number=0)])
+    r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+    assert r["result"] == "GATE_FAILED" and r["version_check"] == "VERSION_UNKNOWN" and api.submitted == []
+    assert any("counters report errors" in p for p in r["gate_problems"])
+    api = FakeApi(statuses={K: "RUNNING"}, kernels=[NS(ref=K, current_version_number=0)])
+    r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+    assert r["result"] == "GATE_FAILED" and any("not COMPLETE" in p for p in r["gate_problems"])
+
+
+def test_real_kagglesdk_metadata_unset_version_reads_as_unknown():
+    svc = pytest.importorskip("kagglesdk.kernels.types.kernels_api_service")
+    meta = svc.ApiKernelMetadata()
+    meta.ref = K
+    assert meta.current_version_number == 0  # the getter's `or 0` -- the bug's source
+    assert ksr._version_of(meta) is None
+    meta.current_version_number = 1
+    assert ksr._version_of(meta) == 1
+
+
+def test_get_kernel_version_overrides_a_zero_listing(tmp_path, capsys):
+    api = GetKernelApi(get_versions={K: 1}, output={K: write_output},
+                       kernels=[NS(ref=K, current_version_number=0)])
+    r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+    assert r["result"] == "SUBMITTED" and r["version_check"] == "VERSION_OK", r
+    assert "warnings" not in r
+    assert "VERSION_OK: v1 via get_kernel" in capsys.readouterr().out
+
+
+def test_search_listing_used_when_get_kernel_has_no_version(tmp_path):
+    api = GetKernelApi(get_versions={K: 0}, search_kernels=[NS(ref=K, current_version_number=1)],
+                       output={K: write_output}, kernels=[])
+    assert ksr.kernel_version(api, K) == (1, "kernels_list(search)")
+    r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+    assert r["result"] == "SUBMITTED" and r["version_check"] == "VERSION_OK"
+
+
+def test_genuine_version_mismatch_refuses(tmp_path):
+    for api in (GetKernelApi(get_versions={K: 2}, output={K: write_output}, kernels=[NS(ref=K, current_version_number=0)]),
+                FakeApi(output={K: write_output}, kernels=[NS(ref=K, current_version_number=2)])):
+        r = runner(api, tmp_path).op_submit(dict(SUBMIT), False)
+        assert r["result"] == "GATE_FAILED" and r["version_check"] == "VERSION_MISMATCH" and api.submitted == []
+        assert any("latest version of" in p and "is v2" in p and "not v1" in p for p in r["gate_problems"])
+
+
+def test_version_check_verdicts():
+    assert ksr.version_check(GetKernelApi(get_versions={K: 1}), K, 1)[0] == "VERSION_OK"
+    assert ksr.version_check(GetKernelApi(get_versions={K: 3}), K, 1)[0] == "VERSION_MISMATCH"
+    verdict, problems, detail = ksr.version_check(FakeApi(kernels=[NS(ref=K, current_version_number=0)]), K, 1)
+    assert verdict == "VERSION_UNKNOWN" and problems == [] and "version field empty/0" in detail
+
+
+def test_status_shows_version_for_freshly_pushed_kernel(tmp_path, capsys):
+    tt = "calamitychasm/arc3-m2-turbo-tail"
+    api = GetKernelApi(get_versions={tt: 1}, kernels=[NS(ref=K, current_version_number=0)])
+    api.competition_leaderboard_download = lambda comp, path: None
+    r = runner(api, tmp_path).op_status({"op": "status", "kernels": [tt]})
+    assert r["kernels"][tt].startswith("v1 ")
+    assert r["kernels"][K].startswith("v? ")  # unknown is shown as v?, never v0 / vNone
+    assert not any(v.startswith(("v0", "vNone")) for v in r["kernels"].values())

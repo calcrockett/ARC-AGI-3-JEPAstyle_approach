@@ -259,7 +259,10 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   `{"kernel", "grep": [markers]}` (digest: status, version, markers, tracebacks, game states,
   `*_summary.json` counters, speed metrics; full output as artifact, 7 days); `submit`
   `{"kernel", "version", "message", "markers", "counters", "require_zero", "force_gate"}` (the
-  `kaggle_submit_when_ready.py` gate plus a version check; refused as
+  `kaggle_submit_when_ready.py` gate plus a version check -- a known different latest version refuses;
+  if Kaggle does not report the version the op prints a loud `VERSION_UNKNOWN` warning and gates on
+  the rest only, because kagglesdk reports an unset `current_version_number` as 0 (2026-10-09 bug,
+  `ksr.kernel_version`); refused as
   `SKIPPED_ALREADY_SUBMITTED_TODAY` if any submission is dated today UTC -- no override).
   `push_kernel`/`submit` run only when the triggering push changed request.json, so editing the
   workflow never replays them. Always change `id`.

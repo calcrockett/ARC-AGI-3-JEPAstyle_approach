@@ -267,6 +267,7 @@ class Runner:
         self.api, self.out_dir, self.cli, self.now = api, out_dir, cli, now
         self.request_changed, self.claude_md = request_changed, claude_md
         self._mine: list | None = None
+        self._versions: dict[str, tuple[int | None, str]] = {}
 
     # -- shared lookups
     def submissions(self) -> list:
@@ -283,14 +284,19 @@ class Runner:
             self._mine = got
         return self._mine
 
-    def current_version(self, kernel: str) -> int | None:
+    def _listed(self) -> list | None:
         try:
-            for k in self.my_kernels():
-                if (getattr(k, "ref", "") or "").lower() == kernel.lower():
-                    return getattr(k, "current_version_number", None)
+            return self.my_kernels()
         except Exception:  # noqa: BLE001
             return None
-        return None
+
+    def current_version(self, kernel: str) -> int | None:
+        """Latest version number, or None when Kaggle does not say (see ksr.kernel_version:
+        kagglesdk reports an unpopulated current_version_number as 0, never a real version)."""
+        key = kernel.lower()
+        if key not in self._versions:
+            self._versions[key] = ksr.kernel_version(self.api, kernel, self._listed())
+        return self._versions[key][0]
 
     def status_of(self, kernel: str) -> tuple[str, str]:
         st = self.api.kernels_status(kernel)
@@ -369,8 +375,9 @@ class Runner:
             except Exception as exc:  # noqa: BLE001
                 status, fail = f"status-error {type(exc).__name__}", str(exc)[:120]
             v = self.current_version(k)
-            print(f"  {k:55s} v{v if v is not None else '?'}  {status}" + (f"  ({fail[:120]})" if fail else ""))
-            res["kernels"][k] = f"v{v} {status}"
+            vs = f"v{v}" if v is not None else "v?"
+            print(f"  {k:55s} {vs:4s}  {status}" + (f"  ({fail[:120]})" if fail else ""))
+            res["kernels"][k] = f"{vs} {status}"
         return res
 
     def op_push_kernel(self, op: dict) -> dict:
@@ -424,10 +431,15 @@ class Runner:
             s = today[0]
             print(f"  already submitted today: ref {s.ref} {enum_name(s.status)} {(s.description or '')[:60]}")
             return {**res, "result": "SKIPPED_ALREADY_SUBMITTED_TODAY", "today_refs": [str(t.ref) for t in today]}
-        problems: list[str] = []
-        cur = self.current_version(k)
-        if cur is not None and cur != v:
-            problems.append(f"latest version of {k} is v{cur}; its status/output describe v{cur}, not v{v}")
+        verdict, problems, detail = ksr.version_check(self.api, k, v, self._listed())
+        res["version_check"] = verdict
+        if verdict == "VERSION_UNKNOWN":
+            warn = (f"VERSION_UNKNOWN: {detail}; requested v{v}. Gating on the latest check run's markers, "
+                    f"tracebacks, counters and game states only -- confirm by hand that it is v{v}'s run.")
+            print("  " + "!" * 70 + f"\n  {warn}\n  " + "!" * 70)
+            res["warnings"] = [warn]
+        else:
+            print(f"  {verdict}: {detail}")
         dest = self.out_dir / ("gate_" + re.sub(r"[^\w.-]+", "_", k))
         dest.mkdir(parents=True, exist_ok=True)
         gate_problems, out = ksr.check_ready(self.api, k, list(op.get("markers") or []),

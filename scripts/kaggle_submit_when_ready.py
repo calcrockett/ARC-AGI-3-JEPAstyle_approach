@@ -101,6 +101,92 @@ def kernel_status(api, kernel: str) -> str:
     return str(getattr(api.kernels_status(kernel), "status", "")).split(".")[-1]
 
 
+def _version_of(meta) -> int | None:
+    """A kernel's latest version number from an ApiKernelMetadata-like object, or None if the
+    server did not say. kagglesdk's ``current_version_number`` getter returns ``_value or 0``, so an
+    unpopulated field reads as 0 (observed 2026-10-09 with kaggle 2.2.4 / kagglesdk 0.1.37:
+    ``kernels_list(mine=True)`` gave 0 for a kernel whose latest version is 1). Read the raw
+    attribute where there is one, and treat anything but a positive int as unknown -- Kaggle
+    versions start at 1."""
+    if meta is None:
+        return None
+    v = getattr(meta, "_current_version_number", None) if hasattr(meta, "_current_version_number") \
+        else getattr(meta, "current_version_number", None)
+    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+        return None
+    return v
+
+
+def _same_kernel(ref: str, kernel: str) -> bool:
+    ref, kernel = (ref or "").strip("/").lower(), kernel.strip("/").lower()
+    return bool(ref) and (ref == kernel or ref.endswith("/" + kernel))
+
+
+def _get_kernel_metadata(api, kernel: str):
+    """The single-kernel GET (what ``kaggle kernels pull --metadata`` uses); its metadata is an
+    ApiKernelMetadata. None if the client has no such call or it fails."""
+    build = getattr(api, "build_kaggle_client", None)
+    if build is None:
+        return None
+    owner, slug = kernel.split("/", 1)
+    try:
+        from kagglesdk.kernels.types.kernels_api_service import ApiGetKernelRequest
+        request = ApiGetKernelRequest()
+    except Exception:  # noqa: BLE001
+        from types import SimpleNamespace
+        request = SimpleNamespace()
+    request.user_name = owner
+    request.kernel_slug = slug
+    with build() as kaggle:
+        return getattr(kaggle.kernels.kernels_api_client.get_kernel(request), "metadata", None)
+
+
+def kernel_version(api, kernel: str, listed=None) -> tuple[int | None, str]:
+    """(latest version number, where it came from), or (None, why) when no source gives a
+    positive number. Tried in order: the single-kernel GET's metadata, a ``kernels_list(mine=True,
+    search=slug)`` hit, then the caller's own listing (``listed``). Never raises."""
+    tried = []
+    try:
+        v = _version_of(_get_kernel_metadata(api, kernel))
+        if v is not None:
+            return v, "get_kernel"
+        tried.append("get_kernel: no version")
+    except Exception as exc:  # noqa: BLE001
+        tried.append(f"get_kernel: {type(exc).__name__}")
+    slug = kernel.split("/", 1)[-1]
+    sources = []
+    try:
+        sources.append(("kernels_list(search)", list(api.kernels_list(mine=True, search=slug, page_size=100) or [])))
+    except Exception as exc:  # noqa: BLE001
+        tried.append(f"kernels_list(search): {type(exc).__name__}")
+    if listed is not None:
+        sources.append(("kernels_list(mine)", list(listed)))
+    for name, rows in sources:
+        hits = [r for r in rows if _same_kernel(getattr(r, "ref", "") or "", kernel)]
+        if not hits:
+            tried.append(f"{name}: not listed")
+            continue
+        v = _version_of(hits[0])
+        if v is not None:
+            return v, name
+        tried.append(f"{name}: version field empty/0")
+    return None, "; ".join(tried)
+
+
+def version_check(api, kernel: str, version: int, listed=None) -> tuple[str, list[str], str]:
+    """Is ``version`` the kernel's latest version (the one its status/output describe)?
+    Returns (verdict, problems, detail): VERSION_OK; VERSION_MISMATCH with one problem (a known
+    latest version that differs); or VERSION_UNKNOWN with no problem -- the caller warns loudly
+    and relies on the rest of the gate (markers, tracebacks, counters, game states)."""
+    cur, src = kernel_version(api, kernel, listed)
+    if cur is None:
+        return "VERSION_UNKNOWN", [], f"cannot determine the latest version of {kernel} ({src})"
+    if cur != version:
+        return "VERSION_MISMATCH", [f"latest version of {kernel} is v{cur} (via {src}); its status/output "
+                                    f"describe v{cur}, not v{version}"], f"v{cur} via {src}"
+    return "VERSION_OK", [], f"v{cur} via {src}"
+
+
 def check_ready(api, kernel: str, markers: list[str], counters, out: Path | None = None) -> tuple[list[str], Path | None]:
     """One non-waiting gate pass, importable (scripts/kaggle_ops.py uses it on GitHub Actions):
     the check run must be COMPLETE now, then its output is downloaded and gated. Returns
@@ -130,6 +216,11 @@ def run(args) -> int:
             log(f"ABORT: kernel still {status} after {args.wait_hours} h; not submitting")
             return 1
         time.sleep(300)
+    try:  # informational only on the dev box: this path never checked the version before
+        verdict, vprob, detail = version_check(api, args.kernel, args.version)
+        log(f"{verdict}: {detail}" + (f" -- WARNING: {vprob[0]}" if vprob else ""))
+    except Exception as exc:  # noqa: BLE001
+        log(f"VERSION_UNKNOWN: version lookup failed ({type(exc).__name__})")
     out = Path(tempfile.mkdtemp(prefix="kaggle_gate_"))
     api.kernels_output(args.kernel, path=str(out))
     problems = gate(out, args.marker, args.counters)
