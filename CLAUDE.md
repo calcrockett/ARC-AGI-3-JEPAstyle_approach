@@ -201,9 +201,32 @@ tokens / ~110 games = ~200K tokens per game, against a per-level reference of
 The Claude Code cloud environment these notes were last edited in is
 **Linux, no GPU, 4 CPU**. It **cannot reach kaggle.com** unless the
 environment network policy allows it, so it cannot push kernels, submit, or
-read the leaderboard; all Kaggle steps above run on the Windows dev box
-(RTX 2070, scheduled tasks). It can edit code, run the unit tests
-(`pytest tests/ -q`), and push branches to GitHub.
+read the leaderboard directly; Kaggle steps run on the Windows dev box
+(RTX 2070, scheduled tasks) or via the GitHub Actions operator below. It can
+edit code, run the unit tests (`pytest tests/ -q`), and push branches to GitHub.
+
+### Operating Kaggle from the cloud via GitHub Actions
+
+GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by commit:
+`.github/workflows/kaggle-ops.yml` runs `scripts/kaggle_ops.py` on every push to branch
+`claude/modest-ride-gut4vo` that changes `.github/kaggle-ops/request.json` (or by manual dispatch).
+
+- **Secrets** (repo Settings -> Secrets -> Actions), any one of: `KAGGLE_USERNAME` + `KAGGLE_KEY`;
+  `KAGGLE_JSON` (the whole kaggle.json); `KAGGLE_API_TOKEN`. Without them the run exits cleanly
+  printing `NO_CREDENTIALS`.
+- **Request**: `{"id": "<new unique id>", "ops": [...]}`, executed in order. Ops: `status`
+  (last 25 submissions, leaderboard bars at top 1/5/10%, our row, top 40, status of every kernel in
+  the tables above); `push_kernel` `{"dir": "kaggle_submission_x/notebook"}` (skipped as
+  `SKIPPED_GPU_BUSY` if 2 of our GPU kernels are running/queued); `kernel_output`
+  `{"kernel", "grep": [markers]}` (digest: status, version, markers, tracebacks, game states,
+  `*_summary.json` counters, speed metrics; full output as artifact, 7 days); `submit`
+  `{"kernel", "version", "message", "markers", "counters", "require_zero", "force_gate"}` (the
+  `kaggle_submit_when_ready.py` gate plus a version check; refused as
+  `SKIPPED_ALREADY_SUBMITTED_TODAY` if any submission is dated today UTC -- no override).
+  `push_kernel`/`submit` run only when the triggering push changed request.json, so editing the
+  workflow never replays them. Always change `id`.
+- **Results**: the job log; its last line is `KAGGLE_OPS_RESULT {json}` (one entry per op). The dev
+  box's scheduled tasks still work and share the same daily quota.
 
 ### Branches merged into this one (2026-10-09)
 

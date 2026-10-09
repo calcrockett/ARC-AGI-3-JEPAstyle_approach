@@ -1,0 +1,70 @@
+name: kaggle-ops
+
+# Operate Kaggle from the cloud: commit a new .github/kaggle-ops/request.json on this branch
+# (see scripts/kaggle_ops.py for the op schema). Results: this job's log (last line
+# `KAGGLE_OPS_RESULT {json}`) and the `kaggle-ops-<run id>` artifact (kernel outputs, result.json).
+on:
+  push:
+    branches: [claude/modest-ride-gut4vo]
+    paths:
+      - .github/kaggle-ops/request.json
+      - .github/workflows/kaggle-ops.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaggle-ops
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME || vars.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      KAGGLE_JSON: ${{ secrets.KAGGLE_JSON }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      - name: Did this push change request.json?
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # Mutating ops (push_kernel, submit) run only when request.json itself changed, so a
+          # workflow-file edit never replays a request. Manual dispatch counts as changed.
+          changed=true
+          if [ "$EVENT" = "push" ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BEFORE^{commit}" 2>/dev/null \
+             && git diff --quiet "$BEFORE" "$GITHUB_SHA" -- .github/kaggle-ops/request.json; then
+            changed=false
+          fi
+          echo "REQUEST_CHANGED=$changed" >> "$GITHUB_ENV"
+          echo "request.json changed in this push: $changed"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Kaggle client
+        run: python -m pip install --quiet kaggle==2.2.4
+
+      - name: Run request
+        run: python scripts/kaggle_ops.py --request .github/kaggle-ops/request.json --out kaggle_ops_out
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-ops-${{ github.run_id }}
+          path: kaggle_ops_out/
+          retention-days: 7
+          if-no-files-found: ignore

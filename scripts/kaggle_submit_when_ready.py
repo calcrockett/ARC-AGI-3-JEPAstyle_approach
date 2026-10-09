@@ -50,12 +50,23 @@ def log_text(path: Path) -> str:
         return raw
 
 
+def notebook_log(out: Path) -> Path | None:
+    """The notebook's own log. Kernel outputs can hold other *.log files too (serve.log, vLLM
+    logs); Kaggle's notebook log is a JSON list of stream records, so prefer the one that is."""
+    logs = sorted(out.glob("*.log"))
+    for p in logs:
+        with p.open("r", encoding="utf-8", errors="replace") as fh:
+            if fh.read(64).lstrip().startswith("[{"):
+                return p
+    return logs[0] if logs else None
+
+
 def gate(out: Path, markers: list[str], counters) -> list[str]:
     problems = []
-    logs = list(out.glob("*.log"))
-    if not logs:
+    nb_log = notebook_log(out)
+    if nb_log is None:
         return ["no notebook log in the output"]
-    text = log_text(logs[0])
+    text = log_text(nb_log)
     for m in markers:
         if m not in text:
             problems.append(f"marker missing: {m!r}")
@@ -86,6 +97,22 @@ def gate(out: Path, markers: list[str], counters) -> list[str]:
     return problems
 
 
+def kernel_status(api, kernel: str) -> str:
+    return str(getattr(api.kernels_status(kernel), "status", "")).split(".")[-1]
+
+
+def check_ready(api, kernel: str, markers: list[str], counters, out: Path | None = None) -> tuple[list[str], Path | None]:
+    """One non-waiting gate pass, importable (scripts/kaggle_ops.py uses it on GitHub Actions):
+    the check run must be COMPLETE now, then its output is downloaded and gated. Returns
+    (problems, output dir); no problems means the gate passed."""
+    status = kernel_status(api, kernel)
+    if status != "COMPLETE":
+        return [f"kernel {kernel} check run is {status or 'UNKNOWN'}, not COMPLETE"], None
+    out = out or Path(tempfile.mkdtemp(prefix="kaggle_gate_"))
+    api.kernels_output(kernel, path=str(out))
+    return gate(out, markers, counters), out
+
+
 def run(args) -> int:
     from kaggle.api.kaggle_api_extended import KaggleApi
 
@@ -93,7 +120,7 @@ def run(args) -> int:
     api.authenticate()
     deadline = time.time() + args.wait_hours * 3600
     while True:
-        status = str(getattr(api.kernels_status(args.kernel), "status", "")).split(".")[-1]
+        status = kernel_status(api, args.kernel)
         if status == "COMPLETE":
             break
         if status in ("ERROR", "CANCEL_ACKNOWLEDGED", "CANCELLED"):
