@@ -14,6 +14,7 @@ same columns, plus server-side prefix hit rate, preemptions, watchdog restarts a
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import re
 import statistics as st
@@ -30,7 +31,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _build_m2_speed_kernels import layout  # noqa: E402  (variant -> kernel slug)
 
 
+TURBO_SLUGS = {"turbo": "arc3-m2-turbo", "turbo-lossless": "arc3-m2-turbo-lossless"}
+
+
 def slug(v: str) -> str:
+    if v in TURBO_SLUGS:
+        return TURBO_SLUGS[v]
     if v.startswith("vllm-"):
         from _build_m2_vllm_kernel import kernel_slug
         return kernel_slug(v[len("vllm-"):])
@@ -162,6 +168,82 @@ def analyse_vllm(d: Path) -> dict:
     return r
 
 
+# ---------------------------------------------------------------- request-log metrics (lossy-acceptance guards)
+
+LONG_TURN_CHARS = 200     # a repeated turn shorter than this (e.g. the same one-word tool call) is not loop evidence
+
+
+def _assistant_turns(messages) -> list[tuple[str, int]]:
+    """(sha1, serialised length) of every non-empty assistant message in a request's message list."""
+    out = []
+    for m in messages or []:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        body = {"content": m.get("content"), "tool_calls": m.get("tool_calls"),
+                "reasoning": m.get("reasoning_content") or m.get("reasoning")}
+        if not body["content"] and not body["tool_calls"] and not body["reasoning"]:
+            continue
+        raw = json.dumps(body, sort_keys=True, ensure_ascii=True)
+        out.append((hashlib.sha1(raw.encode("utf-8")).hexdigest(), len(raw)))
+    return out
+
+
+def merge_assistant_turns(seq: list, turns: list) -> list:
+    """Append to `seq` the turns of a later request that `seq` does not already end with.
+
+    Every request carries the (possibly trimmed) history, so the same assistant turn shows up in many
+    requests. The largest k with seq[-k:] == turns[:k] is the overlap; the rest is new. Returns the new turns."""
+    for k in range(min(len(seq), len(turns)), -1, -1):
+        if k == 0 or seq[len(seq) - k:] == turns[:k]:
+            new = turns[k:]
+            seq.extend(new)
+            return new
+    return []
+
+
+def request_log_metrics(d: Path) -> dict:
+    """Output length and loop evidence from the request logs (`<game>_requests.jsonl`, event "response").
+
+    completion_tokens_per_request: mean usage.completion_tokens over all logged responses (lossy MTP acceptance
+    should leave it within +-10% of the base kernel's). repeated_assistant_turns: assistant turns, per game, whose
+    content (+ tool calls) exactly equals the previous assistant turn of the same game; *_long counts those of at
+    least LONG_TURN_CHARS serialised characters (the same short tool call twice in a row is not a loop)."""
+    n = comp = prompt = 0
+    turns = repeats = repeats_long = 0
+    games = 0
+    examples: list[str] = []
+    for f in sorted(glob.glob(str(d / "*_requests.jsonl"))):
+        games += 1
+        seq: list = []
+        for line in open(f, encoding="utf-8", errors="replace"):
+            if '"event": "response"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue          # a truncated final line
+            u = rec.get("usage") or {}
+            if u.get("completion_tokens") is not None:
+                n += 1
+                comp += u.get("completion_tokens") or 0
+                prompt += u.get("prompt_tokens") or 0
+            for a in merge_assistant_turns(seq, _assistant_turns(rec.get("messages"))):
+                turns += 1
+        # repeats are counted on the final per-game sequence (each turn appears once in it)
+        for prev, cur in zip(seq, seq[1:]):
+            if prev == cur:
+                repeats += 1
+                if cur[1] >= LONG_TURN_CHARS:
+                    repeats_long += 1
+                    if len(examples) < 3:
+                        examples.append(f"{Path(f).name}: {cur[0][:10]} ({cur[1]} chars)")
+    return {"request_log_games": games, "requests": n,
+            "completion_tokens_per_request": round(comp / n, 1) if n else None,
+            "prompt_tokens_per_request": round(prompt / n, 1) if n else None,
+            "assistant_turns": turns, "repeated_assistant_turns": repeats,
+            "repeated_assistant_turns_long": repeats_long, "repeat_examples": examples}
+
+
 def analyse(v: str, d: Path) -> dict:
     r: dict = {"variant": v}
     summ = (d / "summary.txt").read_text(encoding="utf-8", errors="replace")
@@ -213,6 +295,7 @@ def analyse(v: str, d: Path) -> dict:
             P += u.get("prompt_tokens", 0)
             C += (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
     r["cache_pct"] = round(100 * C / P, 1) if P else None
+    r.update(request_log_metrics(d))
     log = notebook_log(d)
     r["tracebacks"] = len(re.findall(r"Traceback \(most recent call last\)", log))
     if (d / "vllm-openai-server.log").exists():
@@ -229,6 +312,7 @@ def main() -> None:
             rows.append(analyse(v, d))
     cols = ["variant", "gen_tok_s", "decode_med", "decode_p90", "running_med", "accept_med", "cache_pct",
             "kv_peak", "mamba_peak", "retracts", "kv_pool", "levels", "mean_score", "tracebacks",
+            "completion_tokens_per_request", "repeated_assistant_turns", "repeated_assistant_turns_long",
             "prefix_hit", "preempts", "restarts"]
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:

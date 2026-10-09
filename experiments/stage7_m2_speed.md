@@ -418,6 +418,14 @@ submission 56980485, 2026-10-09 00:14 UTC -- **still PENDING** in their log at t
   `payload_plain`, `view_misses`, `loads_stale` all 0; `payload_delta` >> `payload_full`);
   `level_memory_summary.json` `errors == 0`; `timeout_fix_summary.json` `errors == 0` (`timeouts_kept` is reported:
   how many timeouts would have wiped helpers).
+- **Lossy-acceptance guards (new 2026-10-09; turbo only, because only turbo changes the sampled distribution)**, both
+  from the check run's request logs (`<game>_p0_requests.jsonl`, event `response`; the check run saves them):
+  (a) **output tokens per request within +-10% of base** (mean `usage.completion_tokens`; JustAdev742 saw 1,718 vs
+  1,718, so a drift means acceptance 0.5 changed how long the model talks); (b) **0 exact repeated assistant turns**
+  (an assistant turn whose content + tool calls exactly equal the previous assistant turn of the same game; a
+  loop detector for lossy acceptance). Trip either and the acceptance step is suspect: do not submit turbo, run
+  turbo-lossless. Automated, see "Computing the guards" below. The base value for (a) must come from a base
+  check run with request logs (`python scripts\m2_speed_report.py base turbo`).
 - No traceback outside serving teardown; every game won/gave_up/cancelled.
 
 **Score pre-registration.** If the serving gain transfers (+28% tokens) and their elasticity holds, the expected
@@ -447,3 +455,81 @@ python scripts\kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-turbo 
 ```
 (read `history_cache_summary.json` by hand; this gate does not check the zero-fields -- the kaggle-ops `submit` op does,
 via `require_zero`). GitHub Actions (kaggle-ops) request examples are in CLAUDE.md ("Operating Kaggle from the cloud").
+
+### Computing the guards (output length, loops)
+
+`scripts/m2_speed_report.py: request_log_metrics(dir)` reads every `*_requests.jsonl` in a downloaded kernel output and
+returns `completion_tokens_per_request` (mean of `usage.completion_tokens` over `response` events),
+`repeated_assistant_turns`, `repeated_assistant_turns_long` (those of >= 200 serialised characters: the same one-line
+tool call twice is not a loop) and up to 3 `repeat_examples`. It is in the `m2_speed_report.py` table (columns
+`completion_tokens_per_request`, `repeated_assistant_turns`, `repeated_assistant_turns_long`; `m2_speed_report.py base
+turbo turbo-lossless`) and in the kaggle-ops `kernel_output` digest (`request_log`). Method: every request carries the
+(possibly trimmed) history, so per game the assistant turns are reassembled by overlap (largest k with the sequence's
+last k turns == the request's first k turns), then adjacent equal turns are counted; a retried request does not count.
+By hand: `jq -c 'select(.event=="response") | .usage.completion_tokens' <game>_p0_requests.jsonl` for the mean, and
+diff the assistant messages of consecutive responses for repeats. If `repeated_assistant_turns` is non-zero only in
+short tool-call turns (`_long` = 0) read the examples before calling it a loop; base's own count (same method on the
+base check run) is the reference for that judgement. Unit tests: `tests/test_m2_turbo_lossless.py`.
+
+## Turbo-lossless kernel: turbo without the lossy acceptance (2026-10-09, built, not yet run)
+
+Kernel **`calamitychasm/arc3-m2-turbo-lossless`** (`kaggle_submission_m2_turbo_lossless/notebook/`), built by
+`python scripts/_build_m2_level_memory_kernel.py --turbo-lossless` = turbo's components (`--history-cache --timeout-fix
+--reap --arc-hotmap --streams 14 --check-all25`, plus the input resolver) with **`--spec-accept` omitted**: upstream
+`SPEC_ACCEPT_SINGLE` / `SPEC_ACCEPT_ACC` stay 1.0 and no `SPEC_ACCEPT` marker is printed. Against turbo only two cells
+differ (the header blurb and the launcher's acceptance values plus its `SPEC_ACCEPT` print/asserts); tests pin both.
+
+**Why.** Acceptance 0.5 is the one lossy, behaviour-changing piece of turbo, and it is also the largest throughput step
+in JustAdev742's gates (733.2 -> 819.3 tok/s). Nobody has verified a hidden-set gain from any serving speedup, and
+their hidden draw of the full bundle (submission 56980485) was pending at 2026-10-09 03:53 UTC. REAP-448 + 14 streams
+alone was +14% (733.2 vs 641.9 tok/s) with public-25 full-length 49.45 vs Franzen 45.6-47.5. Turbo-lossless keeps the
+lossless-by-construction part (plus the ARC FR-Spec map and REAP, whose own quality shift is confined to image turns).
+If their draw lands <= ~28 (their D' copy at 10 streams drew 28.87), treat acceptance 0.5 as suspect and prefer this
+kernel.
+
+### Check run: pass / kill criteria (25 games x 25 min; one run)
+
+- **Markers**: as turbo minus `SPEC_ACCEPT 0.5` (`python scripts/_build_m2_level_memory_kernel.py --turbo-lossless` prints
+  the list): `LEVEL_MEMORY installed`, `priority gate active: 14 concurrent streams`, `harness patch applied
+  successfully`, `INPUT_RESOLVED`, `HISTORY_CACHE installed`, `TIMEOUT_FIX installed`, `REAP448 applied kept=448`,
+  `ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f`; no `REAP448 NOT CONFIRMED`.
+  The launcher prints no acceptance line in this build; the serve.log `server_args` (if it echoes the thresholds)
+  should show 1.0.
+- **Primary**: generated tok/s **>= 640** (+10.8% over base 577.8; JustAdev742 measured +14% for REAP-448 + 14 streams on
+  this stack, 641.9 -> 733.2 at their base, so ~659 is the central expectation here). **Kill below 606.7** (+5%).
+  Between 606.7 and 640: do not submit on the check alone; read the guards and decide.
+- **Guards, as turbo**: retraction lines <= 2x base; no OOM; KV pool `#tokens` ~1.45-1.5M and its peak recorded;
+  prefix reuse >= 90%; median `#running-req` >= 12; MTP accept length ~2.6 (**no** rise to 3.0+: that would mean
+  acceptance is not 1.0); `json_model_override_args` 448 experts and `speculative_draft_model_override_args` `{}`;
+  draft load ~3.79 GB.
+- **Output length and loops** (sanity for a lossless build; should be trivially met): mean completion tokens per
+  request within +-10% of base; 0 exact repeated assistant turns (`repeated_assistant_turns_long`).
+- **Counters**: `history_cache_summary.json` `errors`, `write_fallbacks`, `payload_plain`, `view_misses`, `loads_stale`
+  all 0, `payload_delta` >> `payload_full`; `level_memory_summary.json` `errors == 0`; `timeout_fix_summary.json`
+  `errors == 0`.
+- No traceback outside serving teardown; every game won/gave_up/cancelled.
+
+**Score pre-registration.** Elasticity 0.6-0.8 x tokens on +14% -> roughly +8-11% over the incumbent's 30.47 (~33-34),
+quality risk only from REAP on image turns. One draw is a catastrophe check only (< 22 fails); adoption needs n >= 3
+draws interleaved in time with the incumbent (and turbo, if both pass); final-selection rules in CLAUDE.md apply.
+
+### Commands
+
+Build (idempotent; tests pin the committed notebook): `python scripts/_build_m2_level_memory_kernel.py --turbo-lossless`.
+
+Dev box (push right after turbo's check run, when a GPU slot is free):
+```
+set PYTHONUTF8=1
+echo kaggle_submission_m2_turbo_lossless/notebook>> logs\kaggle_push_queue.txt
+echo calamitychasm/arc3-m2-turbo-lossless>> logs\kaggle_watch_kernels.txt
+python scripts\kaggle_push_queue.py
+kaggle kernels output calamitychasm/arc3-m2-turbo-lossless -p logs\m2_speed\turbo-lossless
+python scripts\m2_speed_report.py base turbo turbo-lossless
+python scripts\kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-turbo-lossless --version 1 ^
+    --message "m2 turbo-lossless draw 1" --marker "LEVEL_MEMORY installed" --marker "priority gate active: 14 concurrent streams" ^
+    --marker "harness patch applied successfully" --marker "INPUT_RESOLVED" --marker "HISTORY_CACHE installed" ^
+    --marker "TIMEOUT_FIX installed" --marker "REAP448 applied kept=448" ^
+    --marker "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f" ^
+    --counters level_memory_summary.json --counters history_cache_summary.json --counters timeout_fix_summary.json
+```
+kaggle-ops request examples are in CLAUDE.md ("Operating Kaggle from the cloud").

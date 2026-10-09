@@ -523,6 +523,12 @@ def digest(out: Path, markers: list[str]) -> dict:
             d["speed"]["by_running"] = m.get("by_running")
         except Exception as exc:  # noqa: BLE001
             d["speed"] = f"error {type(exc).__name__}: {exc}"[:200]
+    if any(out.glob("*_requests.jsonl")):
+        try:
+            import m2_speed_report as rep
+            d["request_log"] = rep.request_log_metrics(out)
+        except Exception as exc:  # noqa: BLE001
+            d["request_log"] = f"error {type(exc).__name__}: {exc}"[:200]
     tail = [ln for ln in text.strip().splitlines() if ln.strip()][-15:]
     print(f"  files {d['files']}, notebook log {d['notebook_log']}")
     print(f"  markers: {d['markers']}")
@@ -532,6 +538,8 @@ def digest(out: Path, markers: list[str]) -> dict:
         print(f"  {name}: {json.dumps(c)[:800]}")
     if "speed" in d:
         print(f"  speed: {json.dumps(d['speed'])[:900]}")
+    if "request_log" in d:
+        print(f"  request log: {json.dumps(d['request_log'])[:600]}")
     print("  notebook log tail:\n    " + "\n    ".join(t[:200] for t in tail))
     return d
 

@@ -46,6 +46,16 @@ one-sided p = 0.008 on the known-sigma test (t-test on our own spread: p ~ 0.012
 Treat 33.29 as a high draw selected for reporting; **30.5 +/- 2.2 is the level
 we hold**, not 33. See `experiments/stage7_m2_level_memory.md`.
 
+**Control finding (2026-10-09): the level-memory effect is real against a proper control.** Faithful copies of
+Franzen's notebook by another team (jvilladuque), hidden-set draws 2026-10-03..08, n=6: 25.01, 25.17, 23.39,
+27.15, 27.63, 25.97 -> **mean 25.7, sd 1.6**. Against our level-memory n=4 (mean 30.47) that is **+4.8, Welch
+t ~ 3.7 (df ~ 5)** -- it replaces the "hundreds of public copies" comparison (a noisier, selected population)
+as the baseline for the incumbent's effect. Also: **no team has verified a hidden-set gain from serving
+speedups.** JustAdev742's REAP + acceptance 0.5 public-25 runs are 56.00 and 42.89 (mean 49.4 vs Franzen
+~46.5), but public-25 is not a ranking instrument, and their hidden draw (submission 56980485) was still
+pending as of 2026-10-09 03:53 UTC. **If it lands <= ~28, treat acceptance 0.5 as suspect and prefer
+`arc3-m2-turbo-lossless`** (same serving stack, acceptance left at 1.0).
+
 **Resubmit procedure** (needs a machine that can reach kaggle.com and has
 `~/.kaggle` credentials -- see the environment note below):
 
@@ -145,6 +155,7 @@ public games x 25 min, gated by `kaggle_submit_when_ready.py`); status of all: *
 | kernel | notebook dir | change vs incumbent | evidence / expected effect | check-run pass / kill (detail) |
 |---|---|---|---|---|
 | `arc3-m2-turbo` | `kaggle_submission_m2_turbo` | histcache + sandbox-timeout fix + **REAP-448** (prune 64/512 experts per layer at load, +7.3 GiB KV) + **MTP acceptance 0.5** (lossy) + ARC FR-Spec map + **14 streams** (Mamba 84, mem 0.96); check run plays all 25 public games x 25 min (rerun unchanged) | JustAdev742 (Apache-2.0), **same stack**, same-conditions gates: 641.9 -> 733.2 (REAP+14) -> **819.3 output tok/s (+28%)**, output length unchanged; public-25 full length 56.00 / 42.89 vs Franzen 45.6-47.5; REAP shifts image-turn logprobs (0.048 vs 0.038 floor); their LB draw 56980485 PENDING at port time | markers incl. `REAP448 applied kept=448`, `SPEC_ACCEPT 0.5`, `ARC_HOTMAP sha=ec15348b...`, `TIMEOUT_FIX installed`, `priority gate active: 14 concurrent streams`; gen tok/s >= 664.5 (+15% vs 577.8; kill < 606.7), retracts <= 2x base, histcache zero-counters, LM/TF errors 0 (`stage7_m2_speed.md`, Turbo) |
+| `arc3-m2-turbo-lossless` | `kaggle_submission_m2_turbo_lossless` | exactly turbo **without** the lossy acceptance: histcache + sandbox-timeout fix + REAP-448 + ARC FR-Spec map + 14 streams; `SPEC_ACCEPT_SINGLE/ACC` stay 1.0 (the cell diff vs turbo is the header blurb and the launcher's acceptance lines only) | JustAdev742 measured REAP-448 + 14 streams alone at 733.2 vs 641.9 output tok/s (**+14%**, 49.45 public-25 full length) on our stack; the only unmeasured risk is REAP on image turns; the fallback if acceptance 0.5 proves lossy | markers as turbo minus `SPEC_ACCEPT 0.5`; gen tok/s **>= 640** (kill < 606.7), output tokens/request within +-10% of base, 0 exact repeated assistant turns, other guards as turbo (`stage7_m2_speed.md`, Turbo-lossless) |
 | `arc3-m2-lm-histcache` | `kaggle_submission_m2_lm_histcache` | history cache (compact state file, cached loads/views, incremental sandbox payloads); **zero behaviour change** | local host overhead per action 2.03 s -> 0.065 s at N=1000 (0.20 -> 0.009 at N=100); modelled +15-25% turns median, range +3..+40% (model, not measured) | `history_cache_summary.json`: errors/write_fallbacks/payload_plain/view_misses/loads_stale all 0, payload_delta >> payload_full; kills <= incumbent (`stage7_m2_level_memory.md`) |
 | `arc3-m2-lm-triedfacts` | `kaggle_submission_m2_lm_triedfacts` | facts-only block about the CURRENT level (actions, game overs, last moves of fatal runs, reasoning tail; <= 3000 B) pinned at history eviction | mechanism only, no score evidence; inspired by lordhansolo's game_overs | `TRIED_FACTS installed`, errors 0, `tried_facts_blocks` > 0, bytes max <= 3000 (`stage7_m2_level_memory.md`) |
 | `arc3-m2-lm-histcache-triedfacts` | `kaggle_submission_m2_lm_histcache_triedfacts` | both of the above | as the two above | both sets of criteria |
@@ -154,7 +165,7 @@ public games x 25 min, gated by `kaggle_submit_when_ready.py`); status of all: *
 | `arc3-m2-vllm-s12` | `kaggle_submission_m2_vllm_s12` | lordhansolo's vLLM serving + NVFP4/FP8 model with built-in MTP, 12 streams, context 139,264 | his peak decode 1,135 vs our 946 tok/s, KV ~1.42M vs 1.01M; **model swap, quality unknown, risky**; second-final-selection candidate only; **hard kill date 2026-10-15** | tok/s >= 665 (+15%), prefix hit >= 85%, preemptions <= ~50; any `VLLM_*` failure marker, restart or `identical=False` probe kills (`stage7_m2_speed.md`, vLLM section) |
 | `arc3-m2-vllm-s14` | `kaggle_submission_m2_vllm_s14` | same, 14 streams | as above; peaks (1.79M) can exceed the pool and preempt | as above |
 
-Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-facts]` (also `--turbo`, or any subset of
+Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-facts]` (also `--turbo` / `--turbo-lossless`, or any subset of
 `--timeout-fix --reap --spec-accept X --arc-hotmap --streams N --check-all25`; JustAdev742's files and NOTICE in
 `kaggle_submission_milestone2_fork/turbo/`),
 `scripts/_build_m2_speed_kernels.py m97s12 m96s12hic m97s12hic`, `scripts/_build_m2_vllm_kernel.py`
@@ -172,7 +183,11 @@ Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-f
 2b. **Push the turbo check run** (`arc3-m2-turbo`) in the other GPU slot: the largest measured effect on our exact
    stack (+28% output tok/s in JustAdev742's same-conditions gate). Check JustAdev742's LB result for 56980485
    (their research_log / status.md) first; a catastrophe there is a reason to wait. Criteria in `stage7_m2_speed.md`
-   (Turbo). If it passes, it becomes arm C of the submission plan below (n >= 3 interleaved draws).
+   (Turbo). If it passes, it becomes arm C of the submission plan below (n >= 3 interleaved draws). Its check
+   run now also reports output tokens/request and repeated assistant turns (the lossy-acceptance guards).
+2c. **Push the turbo-lossless check run** (`arc3-m2-turbo-lossless`) right after turbo, when a GPU slot is free
+   (same stack, acceptance 1.0). It is the arm to prefer if JustAdev742's hidden draw (56980485) lands <= ~28, or
+   if turbo's loop/length guards trip. Criteria in `stage7_m2_speed.md` (Turbo-lossless).
 3. **Then the SGLang hicache pair** (`m96s12hic`, `m97s12hic`; `m97s12` as the control), **then** the vLLM
    pair after the day-0 dataset/overlay checks in `stage7_m2_speed.md` (overlay sha256, python ABI,
    draft vocab file). Respect the 2-GPU-session limit: push only via `scripts/kaggle_push_queue.py`
@@ -259,14 +274,32 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
     "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
                      "timeout_fix_summary.json": ["errors"]}}]}
   ```
-  Every kernel built with a variant (histcache, triedfacts, turbo, spd-*, speed-*, vllm-*, `arc3-m2-lm-inputs`)
+- **Examples for the turbo-lossless kernel** (same shape; no `SPEC_ACCEPT` marker; `kernel_output` also returns a
+  `request_log` digest: `completion_tokens_per_request`, `repeated_assistant_turns`, `repeated_assistant_turns_long`):
+  ```json
+  {"id": "tl-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless/notebook"}]}
+  {"id": "tl-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless",
+    "grep": ["REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "ARC_HOTMAP sha=", "TIMEOUT_FIX installed",
+             "HISTORY_CACHE installed", "priority gate active: 14 concurrent streams", "INPUT_RESOLVED", "INPUT_MISSING"]}]}
+  {"id": "tl-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo-lossless", "version": 1,
+    "message": "m2 turbo-lossless draw 1",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active: 14 concurrent streams",
+                "harness patch applied successfully", "INPUT_RESOLVED", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+                "REAP448 applied kept=448",
+                "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f"],
+    "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
+    "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
+                     "timeout_fix_summary.json": ["errors"]}}]}
+  ```
+  Every kernel built with a variant (histcache, triedfacts, turbo, turbo-lossless, spd-*, speed-*, vllm-*, `arc3-m2-lm-inputs`)
   resolves its inputs in either Kaggle mount layout and logs one `INPUT_RESOLVED <name> -> <path> (via ...)`
   line per input (5 for the SGLang kernels), or `INPUT_MISSING <name>` plus what it searched and an error. Put
   `"INPUT_RESOLVED"` in `markers` for those kernels (`kernel_markers()` in the builder includes it) and grep
   `INPUT_MISSING` in `kernel_output`. The incumbent v1 hardcodes the newer layout and prints neither; do not add the marker to its
   submit gate. Kernels pushed before 2026-10-09 predate the resolver: rebuild and push a new version first.
   `kernel_output` prints the speed digest (gen tok/s, retractions, accept length, KV pool/peak) used by the
-  turbo pass criteria; read it before arming `submit`.
+  turbo pass criteria, plus the `request_log` line (mean completion tokens per request, repeated assistant
+  turns; needs the check run's `*_requests.jsonl`); read both before arming `submit`.
 
 ### Branches merged into this one (2026-10-09)
 

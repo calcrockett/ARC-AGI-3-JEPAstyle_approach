@@ -12,6 +12,7 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
     python scripts/_build_m2_level_memory_kernel.py --history-cache --tried-facts   # arc3-m2-lm-histcache-triedfacts
     python scripts/_build_m2_level_memory_kernel.py --input-resolver  # arc3-m2-lm-inputs: incumbent + input resolver only
     python scripts/_build_m2_level_memory_kernel.py --turbo         # arc3-m2-turbo (see below)
+    python scripts/_build_m2_level_memory_kernel.py --turbo-lossless  # arc3-m2-turbo-lossless (turbo, acceptance stays 1.0)
     python scripts/_build_m2_level_memory_kernel.py --reap --streams 14   # a subset: arc3-m2-lm-reap-s14
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
@@ -39,6 +40,8 @@ occur exactly once:
     --check-all25      the (non-submission) check run plays all 25 public games, the speed kernels' shape
     --turbo            all of: --history-cache --timeout-fix --reap --spec-accept 0.5 --arc-hotmap
                        --streams 14 --check-all25  ->  calamitychasm/arc3-m2-turbo (kaggle_submission_m2_turbo/)
+    --turbo-lossless   turbo without --spec-accept (acceptance thresholds stay the incumbent's lossless 1.0)
+                       ->  calamitychasm/arc3-m2-turbo-lossless (kaggle_submission_m2_turbo_lossless/)
 """
 
 from __future__ import annotations
@@ -87,6 +90,9 @@ VARIANT_ORDER = ("histcache", "triedfacts", "timeoutfix", "reap", "acc", "hotmap
 _FIXED_KINDS = ("histcache", "triedfacts", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
+# turbo without the lossy MTP acceptance (upstream SPEC_ACCEPT_SINGLE / SPEC_ACCEPT_ACC stay 1.0)
+TURBO_LOSSLESS = tuple(v for v in TURBO if v != "acc50")
+TURBO_LOSSLESS_SLUG = "arc3-m2-turbo-lossless"
 MAX_STREAMS = 14              # 16 was measured by nobody on this stack and adds retractions at long contexts
 MAX_STREAMS_WITHOUT_REAP = 12  # without REAP's freed 7.3 GiB the 1.01M-token KV pool is oversubscribed past 12
 VARIANT_INSTALL_LINES = {
@@ -181,6 +187,8 @@ def kernel_slug(variants) -> str:
     names = variant_names(variants)
     if set(names) == set(TURBO):
         return TURBO_SLUG
+    if set(names) == set(TURBO_LOSSLESS):
+        return TURBO_LOSSLESS_SLUG
     return "arc3-m2-lm-" + "-".join(names) if names else INCUMBENT
 
 
@@ -189,6 +197,8 @@ def kernel_dir(variants, root: Path | None = None) -> Path:
     names = variant_names(variants)
     if set(names) == set(TURBO):
         return root / "kaggle_submission_m2_turbo" / "notebook"
+    if set(names) == set(TURBO_LOSSLESS):
+        return root / "kaggle_submission_m2_turbo_lossless" / "notebook"
     return root / ("kaggle_submission_m2_level_memory" if not names else
                    "kaggle_submission_m2_lm_" + "_".join(names)) / "notebook"
 
@@ -634,6 +644,13 @@ TURBO_NOTE = ("\nServing and harness changes marked [calamitychasm turbo] are po
               "streams +14% output tok/s, + acceptance 0.5 +28%, + ARC FR-Spec map ~+2%. Provenance: "
               "kaggle_submission_milestone2_fork/turbo/NOTICE.md in our repo.\n")
 
+TURBO_NOTE_LOSSLESS = ("\nServing and harness changes marked [calamitychasm turbo] are ported from JustAdev742's "
+                       "Milestone-2 work (github.com/JustAdev742/Arc-Agi-3-Kaggle-comp, Apache-2.0), measured by them "
+                       "on this exact stack (same Pennyroyal v253 wheel, same Intel W4A16 checkpoint and MTP draft): "
+                       "REAP-448 + 14 streams +14% output tok/s, ARC FR-Spec map ~+2%. MTP acceptance stays the "
+                       "incumbent's lossless 1.0 (their +28% step to 0.5 is not applied). Provenance: "
+                       "kaggle_submission_milestone2_fork/turbo/NOTICE.md in our repo.\n")
+
 
 def build(variants=()) -> Path:
     variants = variant_names(variants)
@@ -662,7 +679,8 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (TURBO_NOTE if {_kind(v) for v in variants} - {"histcache", "triedfacts", "inputs"} else ""))
+          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "inputs"}) else
+             TURBO_NOTE if accept_value(variants) is not None else TURBO_NOTE_LOSSLESS)))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
     d = kernel_dir(variants)
@@ -697,7 +715,11 @@ def main(argv=None) -> int:
                          "every other variant already includes the resolver")
     ap.add_argument("--turbo", action="store_true",
                     help="all of: " + " ".join(TURBO) + f" -> calamitychasm/{TURBO_SLUG}")
+    ap.add_argument("--turbo-lossless", action="store_true",
+                    help="turbo minus --spec-accept: " + " ".join(TURBO_LOSSLESS) + f" -> calamitychasm/{TURBO_LOSSLESS_SLUG}")
     args = ap.parse_args(argv)
+    if args.turbo and args.turbo_lossless:
+        raise SystemExit("REFUSING TO BUILD -- --turbo and --turbo-lossless are different presets")
     variants = (["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
                 + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver)
@@ -705,6 +727,12 @@ def main(argv=None) -> int:
         variants.append(accept_token(args.spec_accept))
     if args.streams is not None and args.streams != 10:
         variants.append(f"s{args.streams}")
+    if args.turbo_lossless:
+        clash = [v for v in variants if _kind(v) in ("acc", "streams") and v not in TURBO_LOSSLESS]
+        if clash:
+            raise SystemExit(f"REFUSING TO BUILD -- --turbo-lossless fixes {TURBO_LOSSLESS} (acceptance stays 1.0); "
+                             f"conflicting {clash}")
+        variants += [v for v in TURBO_LOSSLESS if v not in variants]
     if args.turbo:
         clash = [v for v in variants if _kind(v) in ("acc", "streams") and v not in TURBO]
         if clash:
