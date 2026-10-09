@@ -1,8 +1,8 @@
 """Solved-level memory for the milestone-2 harness.
 
 Unit tests run on a fake agent. The integration tests run the REAL patched
-ToolAgent (base bundle + dfranzen's harness patch) when ARC3_M2_SRC points at a
-reconstructed `src/` directory, and are skipped otherwise.
+ToolAgent (base bundle + dfranzen's harness patch): ARC3_M2_SRC, or the src that
+tests/m2_harness.py rebuilds from a local base bundle checkout; skipped when neither exists.
 """
 
 from __future__ import annotations
@@ -137,20 +137,34 @@ def test_reset_restores_the_unpinned_prompt_for_a_new_game():
 
 
 # ----------------------------------------------------------------------------- real harness
-M2_SRC = os.environ.get("ARC3_M2_SRC")
-real = pytest.mark.skipif(not M2_SRC, reason="set ARC3_M2_SRC to the reconstructed milestone-2 src/ dir")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import m2_harness  # noqa: E402
+
+M2_SRC = m2_harness.m2_src()
+real = pytest.mark.skipif(not M2_SRC, reason="milestone-2 src unavailable (ARC3_M2_SRC / ARC3_M2_BASE)")
+_LM_WRAPPED = ("_build_user_prompt", "_trim_messages_for_context", "_ensure_session")
 
 
 @pytest.fixture()
 def real_agent():
-    sys.path[:0] = [str(Path(M2_SRC) / "ARC3-Inference"), str(Path(M2_SRC) / "tufa-arc-agi-framework" / "src")]
+    saved_env = dict(os.environ)
+    if "inference.agent.tool_agent" not in sys.modules:
+        os.environ.update(m2_harness.notebook_env())       # module constants read them at import
     os.environ.setdefault("LOCAL_ANALYZER_BASE_URL", "http://127.0.0.1:9/v1")
     os.environ.setdefault("LOCAL_ANALYZER_MODEL_ID", "flashnext")
-    import inference.agent.tool_agent as ta
-    from inference.agent.runtime_state import Frame, HistoryEntry
-    lm.install(ta.ToolAgent)
-    agent = ta.ToolAgent(model="local")
-    return ta, agent, Frame, HistoryEntry
+    ta, rs, _, _ = m2_harness.import_harness(M2_SRC)
+    cls = ta.ToolAgent
+    saved = {n: cls.__dict__[n] for n in _LM_WRAPPED} if not getattr(cls, "_lm_installed", False) else None
+    lm.install(cls)
+    try:
+        yield ta, cls(model="local"), rs.Frame, rs.HistoryEntry
+    finally:
+        if saved is not None:          # leave the class as found, for the other real-harness tests
+            for n, f in saved.items():
+                setattr(cls, n, f)
+            del cls._lm_installed
+        os.environ.clear()
+        os.environ.update(saved_env)
 
 
 def _frame(Frame, level, step):

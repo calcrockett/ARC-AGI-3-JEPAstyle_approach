@@ -174,3 +174,150 @@ python scripts/kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-lm-tri
     --marker "TRIED_FACTS installed" --marker "priority gate active" \
     --marker "harness patch applied successfully" --counters level_memory_summary.json
 ```
+
+## Variant: history cache (`arc3-m2-lm-histcache`, build flag `--history-cache`)
+
+Variant A': the incumbent plus a cache for the game history. **Zero intended behaviour change**:
+the model's prompts, the tool payloads it reads, and everything a snippet can see in the sandbox
+are the same as the incumbent's. Only the cost of each action changes. Module:
+`kaggle_submission_milestone2_fork/history_cache/history_cache.py`, installed at runtime by its own
+notebook cell (right after the level-memory install cell, before the run cell). No vendored
+upstream file is edited.
+
+**Why.** For every executed action the harness paid O(history) four times over, all in the one
+notebook process every game shares (GIL), while the game holds a GPU stream:
+1. the solver rewrote the whole history to `tool_runtime_state.json` with `json.dumps(indent=2)`
+   after every action of a batch (`runtime_state.write_runtime_state`, called from
+   `_HarnessGameSession._execute_action`);
+2. every python tool call re-read and re-parsed that file (`tool_agent.load_runtime_state`);
+3. after every `action()` the tool re-read it again, rebuilt ascii + grid payloads for every past
+   frame (`_ascii_history_view_payload`) and sent the whole history to the sandbox as one JSON line;
+4. the sandbox re-parsed that line and rebuilt every frame view, inside its 30 s budget (31 s CPU
+   rlimit).
+
+**Mechanism** (ported from sirikilohit's M86, cell 38 of his Milestone-2 solution, Apache-2.0, and
+extended; the incremental sandbox protocol and the counters are new here):
+- *write*: each history entry is serialized once; the state file is written compactly (same JSON
+  content, valid at all times between writes); an unchanged state is not rewritten; later writes
+  replace only the file's tail in place; inside one `step_env` batch the per-action writes collapse
+  into one write when the batch ends (nothing reads the file mid-batch).
+- *read*: `load_runtime_state` returns in-memory objects made by exactly the round trip a file read
+  performs, keyed by the state path and checked against the file's stat; anything unknown or stale
+  falls back to parsing the file.
+- *ascii*: each distinct frame is formatted once (ascii, grid JSON) and reused.
+- *sandbox*: after an `action()` the reply carries only the entries the sandbox does not have yet
+  (`history_delta`, with `base_len` + `base_last_step` checked by the sandbox), whenever the host
+  can prove by object identity that the new history extends what it already sent on that pipe;
+  otherwise -- and always for a new sandbox process (every python tool call starts one), and after
+  a timeout kill -- the full payload. The sandbox keeps the raw entries and rebuilds FRESH view
+  objects on every refresh, exactly as before, so a snippet that mutates a history object sees it
+  restored after its next `action()`, as it did when the history was re-parsed.
+- *counters* (`HISTORY_CACHE.summary()`, written to `history_cache_summary.json` after `bm.run`,
+  and a `HISTORY_CACHE stats` line every 250 python calls): writes / appended / skipped / deferred /
+  fallbacks, loads cached / file / stale, view hits / misses, payloads full / delta / plain,
+  `sandbox_timeout_kills`, `sandbox_died`, `errors`, and per history-length bucket
+  (0-99, 100-299, 300-999, 1000+) the host time per python call and per state sent. Startup marker:
+  `HISTORY_CACHE installed`.
+
+**Equivalence tests** (`tests/test_history_cache.py`, on the REAL patched ToolAgent and the REAL
+sandbox subprocess; `tests/m2_harness.py` rebuilds dfranzen's patched `src/` by `git apply`-ing the
+patch embedded in the upstream notebook onto the base bundle checkout, as the notebook's setup cell
+does on Kaggle). Each scenario is played twice in one process, without and with the cache, and
+must give identical sandbox-visible state (history, transitions, frames with raw grids,
+segmentation, results, `last_*` globals, printed by the snippet), identical model-visible tool
+payloads, identical next user prompt, step summary, state-file JSON and `load_runtime_state`
+result. Covered: N = 1, 50 and 1000 history entries; deltas after `action()`; a new sandbox per
+call; a sandbox killed by the tool timeout mid-snippet; RESETs (incl. the auto-reset after a game
+over) and level changes; a snippet that mutates history objects before acting. Plus: the file is
+valid JSON equal to the original writer's at every write; a file rewritten behind the cache's back
+is detected; a replaced (non-extending) history rebuilds; batch writes collapse to one and still
+happen when the batch raises; install/uninstall restores every patched attribute; the built
+level-memory + history-cache cells, executed verbatim, compose on the real harness (all markers,
+both modules' wrappers in place); every committed variant notebook equals a fresh build and differs
+from the incumbent only by its additions. No behaviour difference was found.
+
+Two test-harness defects in the unfinished first version were fixed while verifying this: its
+synthetic boards were uniformly random 64x64 grids, on which the sandbox's segmentation takes ~9 s
+per frame, so every scenario snippet hit the 30 s tool timeout and the "identical stdout" checks
+were comparing two empty strings (now ARC-like boards: background + rectangles, and the tests
+assert exactly the one deliberate timeout and an observation line in every other call); and a
+chunked/continuous action-cycle mismatch in the file-equality test.
+
+The same harness now also runs `tests/test_level_memory.py`'s three real-harness tests (previously
+skipped without `ARC3_M2_SRC`). The committed `arc3-m2-lm-triedfacts` notebook was one line stale
+against `level_memory.py` (a `.lstrip()` added after the build); it is rebuilt here.
+
+**Overhead** (`python scripts/bench_m2_history_cache.py`, this 4-CPU container, real harness +
+sandbox, one python call issuing 12 `action()`s that each change the board):
+
+| N history | arm | wall per action | host CPU per action (GIL) | payload per action |
+|---:|---|---:|---:|---:|
+| 100 | incumbent | 0.201 s | 0.179 s | 2.29 MB |
+| 100 | cache | 0.009 s | 0.003 s | 0.04 MB |
+| 300 | incumbent | 0.538 s | 0.464 s | 6.46 MB |
+| 300 | cache | 0.017 s | 0.003 s | 0.04 MB |
+| 1000 | incumbent | 2.031 s | 1.724 s | 20.65 MB |
+| 1000 | cache | 0.065 s | 0.005 s | 0.04 MB |
+
+Host CPU per action is flat in N; what remains O(N) is the sandbox rebuilding fresh view objects
+(~0.05 ms per entry, in the sandbox process, not under the notebook's GIL) and the one full payload
+each python call still sends at sandbox start (the sandbox is a new process per call). In the
+full run ~10 games act concurrently on one GIL, so the incumbent's host cost at a few hundred
+history entries is ~0.5 s of serialized CPU per action per game. What this buys in score is not
+predicted here: the run is decode-bound, and this frees host CPU and wall time between decode
+steps, plus snippets that previously died on the 30 s sandbox budget at long histories.
+
+**Check-run pass criteria** (10 public games x 25 min, same as the incumbent's check):
+- log has `LEVEL_MEMORY installed`, `HISTORY_CACHE installed`, `priority gate active`,
+  `harness patch applied successfully` (plus `TRIED_FACTS installed` for the combined kernel);
+  every game `won`/`gave_up`/`cancelled`; no traceback outside serving teardown;
+- `history_cache_summary.json`: `errors == 0`, `write_fallbacks == 0`, `payload_plain == 0`,
+  `view_misses == 0`, `loads_stale == 0`; `payload_delta` >> `payload_full` (one full payload per
+  python call; every `action()` reply after it a delta -- expect several deltas per full);
+  `by_history` host ms per state roughly flat across buckets (single-digit ms);
+- `sandbox_timeout_kills` <= the incumbent's: count `Tool timed out after` in the incumbent check
+  run's transcripts and in this one's (same games, same 25 min);
+- `level_memory_summary.json`: `errors == 0` (as for the incumbent).
+
+Score pre-registration: as for the incumbent, one draw is a catastrophe check only (< 18 fails);
+an effect needs several draws against the incumbent's mean 30.47 (sd 2.21, n=4). Because this
+variant is designed not to change what the model sees, a score change would come only from more
+model time per game (less host stall), so expect at most a small effect; prefer it over the
+incumbent only on mechanism (counters above) plus draws that are not worse.
+
+**Build** (all three are written by the same script; the incumbent notebook is not regenerated):
+
+```
+python scripts/_build_m2_level_memory_kernel.py --history-cache                # arc3-m2-lm-histcache
+python scripts/_build_m2_level_memory_kernel.py --tried-facts                  # arc3-m2-lm-triedfacts
+python scripts/_build_m2_level_memory_kernel.py --history-cache --tried-facts  # arc3-m2-lm-histcache-triedfacts
+```
+
+**Push / check / submit** (on the dev box; new slugs must be first-pushed into a free GPU slot --
+see the CLAUDE.md gotcha -- so queue them via `scripts/kaggle_push_queue.py` or push only when
+`kaggle kernels status` shows fewer than 2 GPU sessions running):
+
+```
+set PYTHONUTF8=1
+kaggle kernels push -p kaggle_submission_m2_lm_histcache/notebook
+kaggle kernels status calamitychasm/arc3-m2-lm-histcache
+python scripts/kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-lm-histcache --version 1 \
+    --message "m2 + level memory + history cache" --marker "LEVEL_MEMORY installed" \
+    --marker "HISTORY_CACHE installed" --marker "priority gate active" \
+    --marker "harness patch applied successfully" \
+    --counters level_memory_summary.json --counters history_cache_summary.json
+
+kaggle kernels push -p kaggle_submission_m2_lm_histcache_triedfacts/notebook
+kaggle kernels status calamitychasm/arc3-m2-lm-histcache-triedfacts
+python scripts/kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-lm-histcache-triedfacts --version 1 \
+    --message "m2 + level memory + history cache + tried facts" --marker "LEVEL_MEMORY installed" \
+    --marker "HISTORY_CACHE installed" --marker "TRIED_FACTS installed" --marker "priority gate active" \
+    --marker "harness patch applied successfully" \
+    --counters level_memory_summary.json --counters history_cache_summary.json
+```
+
+(add `--arm "YYYY-MM-DD HH:MM"` in UTC to schedule). `--counters` may now be repeated: the gate
+requires every listed counters file to exist and report `errors == 0` (a single `--counters` and
+old job files with a string value behave as before). The tried-facts commands are in the section
+above. The gate does not check the payload/timeout criteria; read `history_cache_summary.json` from
+the check-run output before arming a submission.

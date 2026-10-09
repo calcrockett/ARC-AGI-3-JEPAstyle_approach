@@ -8,11 +8,15 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
 
     python scripts/_build_m2_level_memory_kernel.py                  # incumbent: arc3-m2-level-memory
     python scripts/_build_m2_level_memory_kernel.py --tried-facts   # arc3-m2-lm-triedfacts
+    python scripts/_build_m2_level_memory_kernel.py --history-cache # arc3-m2-lm-histcache
+    python scripts/_build_m2_level_memory_kernel.py --history-cache --tried-facts   # arc3-m2-lm-histcache-triedfacts
 
 Variant flags compose. Each one adds a suffix, in the fixed order of VARIANT_ORDER, to the kernel slug and
 output dir (e.g. --history-cache --tried-facts -> arc3-m2-lm-histcache-triedfacts); with none, the build
 is the incumbent. A variant that changes behaviour does it through install-cell lines (VARIANT_INSTALL_LINES)
-and a marker the run is checked for (VARIANT_MARKERS) -- never by editing upstream cells.
+and/or a cell of its own inserted after the install cell (VARIANT_CELLS), optional lines appended to the
+run cell's counter dump (VARIANT_RUN_DUMP), and a marker the run is checked for (VARIANT_MARKERS) -- never
+by editing upstream cells.
 """
 
 from __future__ import annotations
@@ -47,9 +51,11 @@ FORK = ROOT / "kaggle_submission_milestone2_fork"
 UPSTREAM = FORK / "upstream" / "arc-agi-3-milestone-2-solution.ipynb"
 LM_SRC = (FORK / "level_memory" / "level_memory.py").read_text(encoding="utf-8")
 assert "'''" not in LM_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
+HC_SRC = (FORK / "history_cache" / "history_cache.py").read_text(encoding="utf-8")
+assert "'''" not in HC_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 INCUMBENT = "arc3-m2-level-memory"
 # flag name -> slug suffix; the slug and the checks below follow this order whatever the CLI order is
-VARIANT_ORDER = ("triedfacts",)
+VARIANT_ORDER = ("histcache", "triedfacts")
 VARIANT_INSTALL_LINES = {
     # run after the module is exec'd and installed, before the 'LEVEL_MEMORY installed' print
     "triedfacts": (
@@ -59,8 +65,12 @@ VARIANT_INSTALL_LINES = {
         "print('TRIED_FACTS installed', LEVEL_MEMORY.summary(), flush=True)\n"
     ),
 }
-VARIANT_MARKERS = {"triedfacts": "TRIED_FACTS installed"}
+VARIANT_MARKERS = {"histcache": "HISTORY_CACHE installed", "triedfacts": "TRIED_FACTS installed"}
 VARIANT_BLURB = {
+    "histcache": "A history cache (in-memory game history, compact batched state writes, a per-frame ascii "
+                 "cache, incremental sandbox payloads), ported from sirikilohit's patch M86 and extended; "
+                 "installed by its own cell. It changes the cost of each action, not what the model or a "
+                 "snippet sees.",
     "triedfacts": "At the same eviction point it also pins a facts-only block about the current unsolved "
                   "level (actions spent, game-over counts, last actions of recent fatal runs, tail of the "
                   "model's last reasoning; <= 3 KB).",
@@ -93,6 +103,46 @@ RUN_DUMP = RUN_ANCHOR + (
 )
 
 
+HC_DUMP = (
+    "try:   # [calamitychasm] history cache counters\n"
+    "    (WORKING_DIR / 'history_cache_summary.json').write_text(json.dumps(HISTORY_CACHE.summary(), indent=2))\n"
+    "    print('HISTORY_CACHE summary', json.dumps(HISTORY_CACHE.summary()), flush=True)\n"
+    "except Exception as _exc:\n"
+    "    print('HISTORY_CACHE summary failed', repr(_exc), flush=True)\n"
+)
+
+
+def history_cache_cell() -> dict:
+    src = (
+        "# [calamitychasm] HISTORY CACHE (variant histcache) -- see experiments/stage7_m2_level_memory.md.\n"
+        "# Replaces the per-action O(history) state-file rewrite/re-parse and full-history sandbox\n"
+        "# payload with an in-memory cache + incremental deltas; what the model sees is unchanged.\n"
+        "# Ported from sirikilohit's Milestone-2 patch M86 (Apache-2.0) and adapted to this harness.\n"
+        "import sys as _sys, types as _types\n"
+        f"_HC_SRC = r'''{HC_SRC}'''\n"
+        "HISTORY_CACHE = _types.ModuleType('history_cache')\n"
+        "_sys.modules['history_cache'] = HISTORY_CACHE\n"
+        "exec(compile(_HC_SRC, 'history_cache.py', 'exec'), HISTORY_CACHE.__dict__)\n"
+        "assert HISTORY_CACHE.install()\n"
+        "import inference.agent.tool_agent as _hc_ta\n"
+        "import inference.agent.python_tool_sandbox as _hc_sb\n"
+        "import inference.framework.solver as _hc_s\n"
+        "for _f in (_hc_ta.load_runtime_state, _hc_ta._ascii_history_view_payload, _hc_sb._send_json_line,\n"
+        "           _hc_s.write_runtime_state, _hc_s._HarnessGameSession.step_env):\n"
+        "    assert _f.__module__ == 'history_cache', _f\n"
+        "assert '_hc_history(state_payload)' in _hc_sb._SANDBOX_BOOTSTRAP\n"
+        "print('HISTORY_CACHE installed', json.dumps(HISTORY_CACHE.summary()), flush=True)\n"
+    )
+    return {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+            "source": src.splitlines(True)}
+
+
+# variant -> builder of a cell inserted right after the level-memory install cell (before the run cell)
+VARIANT_CELLS = {"histcache": history_cache_cell}
+# variant -> lines appended to the run cell's counter dump
+VARIANT_RUN_DUMP = {"histcache": HC_DUMP}
+
+
 def install_cell(variants=()) -> dict:
     src = (
         "# [calamitychasm] SOLVED-LEVEL MEMORY -- see experiments/stage7_m2_level_memory.md.\n"
@@ -108,7 +158,7 @@ def install_cell(variants=()) -> dict:
         "assert _lm_ta.ToolAgent._lm_installed\n"
         "for _n in ('_build_user_prompt', '_trim_messages_for_context', '_ensure_session'):\n"
         "    assert getattr(_lm_ta.ToolAgent, _n).__module__ == 'level_memory', _n\n"
-        + "".join(VARIANT_INSTALL_LINES[v] for v in variant_names(variants))
+        + "".join(VARIANT_INSTALL_LINES.get(v, "") for v in variant_names(variants))
         + "print('LEVEL_MEMORY installed', LEVEL_MEMORY.summary(), flush=True)\n"
     )
     return {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
@@ -122,7 +172,11 @@ def build(variants=()) -> Path:
     run_idx = [i for i, s in enumerate(src) if s.startswith("print('Starting benchmark...')")]
     assert len(run_idx) == 1, run_idx
     r = run_idx[0]
-    set_src(nb, r, sub(src[r], RUN_ANCHOR, RUN_DUMP, "bm.run summary dump"))
+    dump = RUN_DUMP + "".join(VARIANT_RUN_DUMP.get(v, "") for v in variants)
+    set_src(nb, r, sub(src[r], RUN_ANCHOR, dump, "bm.run summary dump"))
+    for v in reversed(variants):      # inserted at r in reverse: they end up in VARIANT_ORDER
+        if v in VARIANT_CELLS:
+            nb["cells"].insert(r, VARIANT_CELLS[v]())
     nb["cells"].insert(r, install_cell(variants))
     md = ("## [calamitychasm] fork: milestone-2 solution + solved-level memory\n\n"
           "Verbatim fork of `dfranzen/arc-agi-3-milestone-2-solution` (Apache-2.0; full credit to Daniel Franzen, "
@@ -145,10 +199,13 @@ def build(variants=()) -> Path:
 def main(argv=None) -> int:
     from _check_notebook_cell import check_notebook
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--history-cache", action="store_true",
+                    help="cache the game history in memory, send the sandbox deltas (kernel arc3-m2-lm-histcache)")
     ap.add_argument("--tried-facts", action="store_true",
                     help="pin a facts-only block about the current level at eviction (kernel arc3-m2-lm-triedfacts)")
     args = ap.parse_args(argv)
-    path = build(["triedfacts"] if args.tried_facts else [])
+    variants = ["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
+    path = build(variants)
     problems = check_notebook(path)
     if problems:
         print("REFUSING TO SHIP -- use-before-definition problems")

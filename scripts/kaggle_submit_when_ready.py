@@ -12,6 +12,7 @@ Fired once by Windows Task Scheduler (see --arm). It:
 
     python scripts/kaggle_submit_when_ready.py --kernel OWNER/SLUG --version 1 \
         --message "..." --marker "LEVEL_MEMORY installed" --counters level_memory_summary.json
+    (--marker and --counters may each be repeated; every counters file must report errors == 0)
     python scripts/kaggle_submit_when_ready.py --arm "2026-10-03 00:02" [same args]   # schedule (UTC)
 """
 
@@ -49,7 +50,7 @@ def log_text(path: Path) -> str:
         return raw
 
 
-def gate(out: Path, markers: list[str], counters: str | None) -> list[str]:
+def gate(out: Path, markers: list[str], counters) -> list[str]:
     problems = []
     logs = list(out.glob("*.log"))
     if not logs:
@@ -72,16 +73,16 @@ def gate(out: Path, markers: list[str], counters: str | None) -> list[str]:
             problems.append(f"games in bad states: {bad}")
     else:
         problems.append("no benchmark.json")
-    if counters:
-        f = out / counters
+    for name in ([counters] if isinstance(counters, str) else list(counters or [])):
+        f = out / name
         if not f.exists():
-            problems.append(f"counters file missing: {counters}")
+            problems.append(f"counters file missing: {name}")
         else:
             c = json.loads(f.read_text())
             if c.get("errors", 0) != 0:
-                problems.append(f"counters report errors: {c}")
+                problems.append(f"counters report errors ({name}): {c}")
             else:
-                log(f"counters: {c}")
+                log(f"counters ({name}): {c}")
     return problems
 
 
@@ -152,7 +153,7 @@ def main() -> int:
     ap.add_argument("--version", type=int, required=True)
     ap.add_argument("--message", required=True)
     ap.add_argument("--marker", action="append", default=[])
-    ap.add_argument("--counters")
+    ap.add_argument("--counters", action="append", default=[])
     ap.add_argument("--wait-hours", type=float, default=6.0)
     ap.add_argument("--retries", type=int, default=12)
     ap.add_argument("--arm")
