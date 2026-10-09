@@ -19,6 +19,8 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
     python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail   # arc3-m2-turbo-lossless-tail
     python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail --strategy-audit
                                                     # arc3-m2-turbo-lossless-tail-audit (see below)
+    python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail --hicache-gb 32 --streams 16
+                                                    # arc3-m2-turbo-tail-hic16 (host KV tier, see below)
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
 /kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
@@ -59,6 +61,12 @@ occur exactly once:
                        --streams 14 --check-all25  ->  calamitychasm/arc3-m2-turbo (kaggle_submission_m2_turbo/)
     --turbo-lossless   turbo without --spec-accept (acceptance thresholds stay the incumbent's lossless 1.0)
                        ->  calamitychasm/arc3-m2-turbo-lossless (kaggle_submission_m2_turbo_lossless/)
+    --hicache-gb [N]   system-RAM KV tier of N GB (default 32, <= 40) via --enable-hierarchical-cache, flags shared
+                       with scripts/_build_m2_speed_kernels.py; it is what allows 15-16 streams (with --reap).
+                       With a turbo preset it replaces the preset's 14 streams (default 16) and the slug gets
+                       "-hic<streams>" (e.g. arc3-m2-turbo-tail-hic16; "-hic<GB>gb-s<streams>" for a size other
+                       than 32). FP4 KV is not an option on this stack (experiments/stage7_m2_speed.md, "FP4 KV
+                       cache on this stack"); the host tier is how sirikilohit ran 16 streams.
 """
 
 from __future__ import annotations
@@ -76,6 +84,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 from _m2_input_resolver import MARKER as INPUT_MARKER, apply_input_resolver  # noqa: E402
+from _build_m2_speed_kernels import HICACHE_MAX_GB, hicache_line  # noqa: E402
 
 
 
@@ -106,7 +115,8 @@ INCUMBENT = "arc3-m2-level-memory"
 DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type of every variant build
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
+VARIANT_ORDER = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
+                 "all25", "inputs")
 _FIXED_KINDS = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
@@ -118,6 +128,13 @@ TAIL_HUMAN_ACTIONS = 60.0     # upstream 25; median of base_actions_per_level ov
 TAIL_FINAL_B = 5.0            # upstream 0: B of a game on its last level (= B with one level left)
 MAX_STREAMS = 14              # 16 was measured by nobody on this stack and adds retractions at long contexts
 MAX_STREAMS_WITHOUT_REAP = 12  # without REAP's freed 7.3 GiB the 1.01M-token KV pool is oversubscribed past 12
+# Host KV tier (token hic<GB>): 16 x ~98K tokens/stream (turbo-tail's peak 0.93 x 1.48M / 14) = ~1.57M against the
+# 1.48M device pool; the ~1.75M-token host tier at 32 GB absorbs the overflow (sirikilohit: 16 streams + 48 GB tier).
+MAX_STREAMS_WITH_HICACHE = 16
+HICACHE_DEFAULT_GB = 32
+HICACHE_MIN_GB = 8
+HICACHE_DEFAULT_STREAMS = 16
+HICACHE_MARKER = "HICACHE_TIER attached hicache_attached=True"
 VARIANT_INSTALL_LINES = {
     # run after the module is exec'd and installed, before the 'LEVEL_MEMORY installed' print
     "triedfacts": (
@@ -188,6 +205,8 @@ def _kind(tok: str) -> str:
         return "acc"
     if re.fullmatch(r"s1[1-9]", tok):
         return "streams"
+    if re.fullmatch(r"hic[1-9][0-9]?", tok):
+        return "hic"
     raise SystemExit(f"REFUSING TO BUILD -- unknown variant {tok!r}")
 
 
@@ -209,6 +228,18 @@ def streams_value(variants) -> int | None:
     return None if tok is None else int(tok[1:])
 
 
+def hicache_value(variants) -> int | None:
+    tok = next((t for t in variant_names(variants) if _kind(t) == "hic"), None)
+    return None if tok is None else int(tok[3:])
+
+
+def hicache_token(gb: int) -> str:
+    if not HICACHE_MIN_GB <= gb <= HICACHE_MAX_GB:
+        raise SystemExit(f"REFUSING TO BUILD -- --hicache-gb {gb}: allowed {HICACHE_MIN_GB}..{HICACHE_MAX_GB} "
+                         "(BF16 PLE pins ~95 GiB of the 177 GiB host; see experiments/stage7_m2_speed.md Round 3)")
+    return f"hic{gb}"
+
+
 def accept_token(x: float) -> str:
     n = round(x * 100)
     if not (0 < x < 1 and abs(n - x * 100) < 1e-9 and 10 <= n <= 99):
@@ -223,10 +254,17 @@ def mamba_cache(streams: int) -> int:
 
 def check_serving(variants) -> None:
     names = variant_names(variants)
-    n = streams_value(names)
+    n, gb = streams_value(names), hicache_value(names)
+    if gb is not None:
+        hicache_token(gb)     # range check
     if n is not None:
-        if not 10 < n <= MAX_STREAMS:
-            raise SystemExit(f"REFUSING TO BUILD -- --streams {n}: allowed 11..{MAX_STREAMS}")
+        if gb is not None and MAX_STREAMS < n <= MAX_STREAMS_WITH_HICACHE:
+            if "reap" not in names:
+                raise SystemExit(f"REFUSING TO BUILD -- --streams {n} needs --reap as well as the host KV tier")
+        elif not 10 < n <= MAX_STREAMS:
+            raise SystemExit(f"REFUSING TO BUILD -- --streams {n}: allowed 11..{MAX_STREAMS}"
+                             + (f" (11..{MAX_STREAMS_WITH_HICACHE} with --hicache-gb and --reap)" if gb is None else
+                                f" (11..{MAX_STREAMS_WITH_HICACHE} with the host KV tier)"))
         if n > MAX_STREAMS_WITHOUT_REAP and "reap" not in names:
             raise SystemExit(f"REFUSING TO BUILD -- --streams {n} needs --reap (KV pool oversubscribed without it)")
         if mamba_cache(n) // 5 < n:
@@ -238,14 +276,29 @@ def check_serving(variants) -> None:
 PRESET_EXTRAS = ("tail", "audit")
 
 
+def _hic_suffix(names) -> str:
+    """Slug suffix of the host KV tier on a turbo preset: hic16 = 32 GB + 16 streams (the default size)."""
+    gb, n = hicache_value(names), streams_value(names)
+    return f"hic{n}" if gb == HICACHE_DEFAULT_GB else f"hic{gb}gb-s{n}"
+
+
 def _preset(names) -> tuple[str, str] | None:
-    """(slug, dir name) of a turbo preset, optionally plus the priority-gate variant `tail`."""
+    """(slug, dir name) of a turbo preset, optionally plus the priority-gate variant `tail` (and `audit`), and
+    optionally with the host KV tier, which replaces the preset's 14 streams with its own stream count."""
     core = set(names) - set(PRESET_EXTRAS)
     extras = [v for v in PRESET_EXTRAS if v in names]
+    hic = hicache_value(names) is not None
+    if hic:
+        if streams_value(names) is None:
+            return None
+        core = {v for v in core if _kind(v) not in ("hic", "streams")}
+        extras.append(_hic_suffix(names))
     for preset, slug, dirname in ((TURBO, TURBO_SLUG, "kaggle_submission_m2_turbo"),
                                   (TURBO_LOSSLESS, TURBO_LOSSLESS_SLUG, "kaggle_submission_m2_turbo_lossless")):
-        if core == set(preset):
-            return slug + "".join("-" + v for v in extras), dirname + "".join("_" + v for v in extras)
+        want = {v for v in preset if not (hic and _kind(v) == "streams")}
+        if core == want:
+            return (slug + "".join("-" + v for v in extras),
+                    dirname + "".join("_" + v.replace("-", "_") for v in extras))
     return None
 
 
@@ -285,6 +338,10 @@ def kernel_markers(variants) -> list[str]:
             out.append(f"ARC_HOTMAP sha={hot_map()['sha']}")
         elif k == "streams":
             out.append(f"priority gate active: {streams_value(names)} concurrent streams")
+        elif k == "hic":
+            out.append(HICACHE_MARKER)
+            if streams_value(names) is not None:    # the server, not only the harness gate, got the stream count
+                out.append(f"STREAMS max_running_requests={streams_value(names)} cuda_graph_bs=")
     return out
 
 
@@ -646,7 +703,11 @@ def _launcher_edits(cell: str, names) -> str:
             f"args += [\"--json-model-override-args\", {override!r},\n"
             "         \"--speculative-draft-model-override-args\", \"{}\"]\n")
         cell = sub(cell, L_PREFETCH, args + L_PREFETCH, "reap args")
-    if acc is not None or n is not None:
+    gb = hicache_value(names)
+    if gb is not None:
+        cell = sub(cell, L_PREFETCH, L_PREFETCH + f"{TH} system-RAM KV tier (same flags as the spd *hic kernels)\n"
+                   + hicache_line(gb), "hicache args")
+    if acc is not None or n is not None or gb is not None:
         marks = f"{TB} serving markers (the submit gate checks them)\n"
         if acc is not None:
             marks += ('assert args[args.index("--speculative-accept-threshold-single") + 1] == str(CFG["SPEC_ACCEPT_SINGLE"])\n'
@@ -655,6 +716,9 @@ def _launcher_edits(cell: str, names) -> str:
         if n is not None:
             marks += ('print(f"STREAMS max_running_requests={CFG[\'MAXREQ\']} cuda_graph_bs={graph_bs} '
                       'mamba_cache={CFG[\'MAMBA_CACHE\']}", flush=True)\n')
+        if gb is not None:
+            marks += (f'assert args[args.index("--hicache-size") + 1] == "{gb}" and "--enable-hierarchical-cache" in args\n'
+                      f'print("HICACHE requested --hicache-size {gb} GB (write_through, kernel io)", flush=True)\n')
         cell = sub(cell, L_LAUNCH, marks + L_LAUNCH, "markers")
     if "reap" in names:
         assert cell.endswith(L_END), "launcher cell end changed"
@@ -668,13 +732,18 @@ def _launcher_edits(cell: str, names) -> str:
             "else:\n"
             "    print('REAP448 NOT CONFIRMED: no \"ARC3 REAP: kept\" line in serve.log (server not ready, or died)',\n"
             "          flush=True)")
+    if gb is not None:
+        assert L_END in cell, "launcher cell end changed"
+        cell += ("\n\n" + f"{TH} confirm from serve.log that SGLang attached the host tier to the radix cache\n"
+                 "# (mem_cache/registry.py logs 'Tree cache initialized: ... hicache_attached=<bool>'). Never raises.\n"
+                 + HICACHE_CHECK.format(when="", indent=""))
     return cell
 
 
 def serving_edits(nb, names) -> None:
     """Apply the serving variants to the upstream cells in place (before any cell is inserted)."""
     names = variant_names(names)
-    if not ({_kind(v) for v in names} & {"reap", "acc", "hotmap", "streams", "all25"}):
+    if not ({_kind(v) for v in names} & {"reap", "acc", "hotmap", "streams", "hic", "all25"}):
         return
     src = cells_of(nb)
 
@@ -717,6 +786,29 @@ REAP_DUMP = (
 )
 VARIANT_RUN_DUMP["reap"] = REAP_DUMP
 
+TH = "# [calamitychasm hicache]"
+# Prints HICACHE_MARKER only when SGLang itself logged hicache_attached=True; every other outcome prints a line
+# that does not contain the marker (the submit gate requires it).
+HICACHE_CHECK = (
+    "{indent}_hc_line = next((ln for ln in Path(LOG).read_text(errors='replace').splitlines()\n"
+    "{indent}                 if 'hicache_attached=' in ln), None)\n"
+    "{indent}if _hc_line and 'hicache_attached=True' in _hc_line:\n"
+    f"{{indent}}    print('{HICACHE_MARKER}{{when}} |', _hc_line.split('Tree cache initialized: ', 1)[-1][:240], flush=True)\n"
+    "{indent}elif _hc_line:\n"
+    "{indent}    print('HICACHE_TIER NOT ATTACHED{when} |', _hc_line.split('Tree cache initialized: ', 1)[-1][:240], "
+    "flush=True)\n"
+    "{indent}else:\n"
+    "{indent}    print('HICACHE_TIER NOT CONFIRMED{when}: no hicache_attached line in serve.log', flush=True)"
+)
+# Same reason as REAP_DUMP: the launcher's check can run before the server has finished booting.
+HIC_DUMP = (
+    "try:   # [calamitychasm hicache] host KV tier confirmation from serve.log, after the run\n"
+    + HICACHE_CHECK.format(when=" (post-run)", indent="    ") + "\n"
+    "except Exception as _exc:\n"
+    "    print('HICACHE_TIER post-run check failed', repr(_exc), flush=True)\n"
+)
+VARIANT_RUN_DUMP["hic"] = HIC_DUMP
+
 
 def install_cell(variants=()) -> dict:
     src = (
@@ -746,6 +838,11 @@ def _blurb(v: str, names) -> str:
         return (f"MTP speculative acceptance thresholds single = acc = {accept_value(names)} (incumbent 1.0, "
                 "lossless): a draft token is also accepted when the target is confident enough, as in "
                 "JustAdev742's measured config (Apache-2.0). Lossy by design.")
+    if k == "hic":
+        return (f"System-RAM KV tier: SGLang --enable-hierarchical-cache --hicache-size {hicache_value(names)} "
+                "(write_through, kernel io; KV + Mamba + QSA host pools, as in sirikilohit's 16-stream run), so more "
+                "streams can oversubscribe the device KV pool without retracting. Confirmed from serve.log "
+                "(hicache_attached=True).")
     if k == "streams":
         n = streams_value(names)
         return (f"{n} concurrent streams: SGLang max running requests and CUDA-graph max batch {n}, Mamba cache "
@@ -778,7 +875,7 @@ def build(variants=()) -> Path:
     run_idx = [i for i, s in enumerate(src) if s.startswith("print('Starting benchmark...')")]
     assert len(run_idx) == 1, run_idx
     r = run_idx[0]
-    dump = RUN_DUMP + "".join(VARIANT_RUN_DUMP.get(v, "") for v in variants)
+    dump = RUN_DUMP + "".join(VARIANT_RUN_DUMP.get(_kind(v), "") for v in variants)
     set_src(nb, r, sub(src[r], RUN_ANCHOR, dump, "bm.run summary dump"))
     for v in reversed(variants):      # inserted at r in reverse: they end up in VARIANT_ORDER
         if v in VARIANT_CELLS:
@@ -839,6 +936,10 @@ def main(argv=None) -> int:
     ap.add_argument("--strategy-audit", action="store_true",
                     help="lordhansolo's strategy-audit prompt once a level has used ~25%% of a game's token share "
                          "(with --turbo-lossless --prio-tail: arc3-m2-turbo-lossless-tail-audit)")
+    ap.add_argument("--hicache-gb", type=int, nargs="?", const=HICACHE_DEFAULT_GB, default=None, metavar="N",
+                    help=f"system-RAM KV tier of N GB (default {HICACHE_DEFAULT_GB}, {HICACHE_MIN_GB}..{HICACHE_MAX_GB}); "
+                         f"allows up to {MAX_STREAMS_WITH_HICACHE} streams; with a turbo preset the streams default to "
+                         f"{HICACHE_DEFAULT_STREAMS} (--turbo --prio-tail --hicache-gb -> arc3-m2-turbo-tail-hic16)")
     ap.add_argument("--turbo", action="store_true",
                     help="all of: " + " ".join(TURBO) + f" -> calamitychasm/{TURBO_SLUG}")
     ap.add_argument("--turbo-lossless", action="store_true",
@@ -852,19 +953,27 @@ def main(argv=None) -> int:
                 + ["audit"] * args.strategy_audit)
     if args.spec_accept is not None and args.spec_accept != 1.0:
         variants.append(accept_token(args.spec_accept))
-    if args.streams is not None and args.streams != 10:
-        variants.append(f"s{args.streams}")
+    hic = args.hicache_gb is not None
+    if hic:
+        variants.append(hicache_token(args.hicache_gb))
+    streams = args.streams
+    if hic and streams is None and (args.turbo or args.turbo_lossless):
+        streams = HICACHE_DEFAULT_STREAMS
+    if streams is not None and streams != 10:
+        variants.append(f"s{streams}")
+    # with the host tier the preset's stream count is the tier's to set (it is what makes > 14 streams fit)
+    fixed = ("acc",) if hic else ("acc", "streams")
     if args.turbo_lossless:
-        clash = [v for v in variants if _kind(v) in ("acc", "streams") and v not in TURBO_LOSSLESS]
+        clash = [v for v in variants if _kind(v) in fixed and v not in TURBO_LOSSLESS]
         if clash:
             raise SystemExit(f"REFUSING TO BUILD -- --turbo-lossless fixes {TURBO_LOSSLESS} (acceptance stays 1.0); "
                              f"conflicting {clash}")
-        variants += [v for v in TURBO_LOSSLESS if v not in variants]
+        variants += [v for v in TURBO_LOSSLESS if v not in variants and not (hic and _kind(v) == "streams")]
     if args.turbo:
-        clash = [v for v in variants if _kind(v) in ("acc", "streams") and v not in TURBO]
+        clash = [v for v in variants if _kind(v) in fixed and v not in TURBO]
         if clash:
             raise SystemExit(f"REFUSING TO BUILD -- --turbo fixes {TURBO}; conflicting {clash}")
-        variants += [v for v in TURBO if v not in variants]
+        variants += [v for v in TURBO if v not in variants and not (hic and _kind(v) == "streams")]
     path = build(variants)
     problems = check_notebook(path)
     if problems:

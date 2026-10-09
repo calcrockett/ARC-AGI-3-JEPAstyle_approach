@@ -625,6 +625,42 @@ streams. The arithmetic is moot without FP4 reads in the QSA kernels; a port of 
 cache 96 = 6/stream as now). Demand ~16 x 98K = 1.57M vs the 1.48M device pool (6% over) is the regime the ~1.75M-token
 host tier exists to absorb, and it is exactly sirikilohit's working combination (16 streams + host tier + FP8). Risk:
 the host tier has never run on our stack (the incumbent-based `m96s12hic` is built, never run), and the Mamba-retention
-patch skips write-through on non-branch chunks. A builder flag (`--hicache-gb N`, refusing > 40) on
-`_build_m2_level_memory_kernel.py` layered on `--turbo --prio-tail --streams 16` is the change; pass bar as below (gen
-tok/s >= +8% over 772.4) plus `hicache_attached=True` and `MemAvailable` >= 10 GiB in every census line.
+patch skips write-through on non-branch chunks. Built as `arc3-m2-turbo-tail-hic16` (next section).
+
+## Turbo-tail-hic16: host KV tier + 16 streams on arm A (built 2026-10-09, never run)
+
+`python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail --hicache-gb` -> `calamitychasm/arc3-m2-turbo-tail-hic16`
+(`kaggle_submission_m2_turbo_tail_hic16/notebook/`; metadata = the incumbent's except identity, plus
+`docker_image_pinning_type: "original"`). `--hicache-gb [N]` (default 32, 8..40; the cap is the speed builder's
+`HICACHE_MAX_GB`) adds the variant token `hic<N>`; with a turbo preset it replaces the preset's 14 streams (default 16;
+15-16 streams are allowed only with the tier and `--reap`) and the slug gets `-hic<streams>` (`-hic<N>gb-s<streams>` for a
+size other than 32). The kernel differs from `arc3-m2-turbo-tail` in exactly four cells (tested):
+
+| cell | change |
+|---|---|
+| header | blurbs for `s16` and `hic32` |
+| setup | `ARC3_MAX_ACTIVE_STREAMS` 14 -> 16 |
+| launcher | `MAXREQ` / `CUDAGRAPH_MAXBS` 16, `MAMBA_CACHE` 96 (6/stream as now; 96 // 5 >= 16); `--enable-hierarchical-cache --hicache-size 32 --hicache-write-policy write_through --hicache-io-backend kernel` (the spd *hic kernels' `hicache_line`, reused); request print `HICACHE requested --hicache-size 32 GB`; after the health loop, reads serve.log for SGLang's `Tree cache initialized: ... hicache_attached=<bool>` (`mem_cache/registry.py` L237-255) and prints `HICACHE_TIER attached hicache_attached=True | ...` only if SGLang said True (`HICACHE_TIER NOT ATTACHED` / `NOT CONFIRMED` otherwise; never raises) |
+| run | the same serve.log check re-run after `bm.run` (`... (post-run)`), as for REAP (the launcher's check can run before the boot finishes) |
+
+Turbo's flags SGLang rejects with hicache (`--disable-radix-cache`, `--enable-int8-mamba-checkpoint`) are absent
+(tested). The REAP patch, acceptance 0.5, hot map, priority-gate fix, history cache and timeout fix are unchanged.
+
+**Markers (submit gate):** turbo-tail's markers with `priority gate active: 16 concurrent streams` in place of 14, plus
+`HICACHE_TIER attached hicache_attached=True` and `STREAMS max_running_requests=16 cuda_graph_bs=` (the server, not only
+the harness gate, got 16). Counters as turbo-tail.
+
+**Pass (all of):**
+- generated tok/s **>= 834.2** (+8% over turbo-tail's 772.4; the speed digest);
+- `HICACHE_TIER attached hicache_attached=True` (post-run line accepted);
+- `MemAvailable` >= 10 GiB in **every** `[sys]` census line (RAM used <= total - 10);
+- retractions <= 2x turbo-tail's (2 -> <= 4);
+- output tokens/request within +-10% of turbo-tail's 1779 (1601..1957) and **0** exact repeated assistant turns
+  (`request_log` digest);
+- turbo-tail's other guards: no traceback outside serving teardown, no OOM (GPU or `Not enough host memory`), every game
+  won/gave_up/cancelled, history_cache zero-counters 0, level_memory / timeout_fix errors 0, all markers present; KV pool
+  `#tokens` and peak recorded (a lower device pool than 1.48M from the larger Mamba cache is expected; a peak pinned at 1.0
+  with retractions means the tier is not absorbing the overflow).
+
+**Kill:** gen tok/s < 772.4 (no better than turbo-tail), or any pass guard tripped. Between 772.4 and 834.2: not adopted,
+no slots; read decode tok/s at 15-16 running requests in serve.log before deciding whether 15 streams is worth a run.

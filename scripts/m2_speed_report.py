@@ -31,7 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _build_m2_speed_kernels import layout  # noqa: E402  (variant -> kernel slug)
 
 
-TURBO_SLUGS = {"turbo": "arc3-m2-turbo", "turbo-lossless": "arc3-m2-turbo-lossless"}
+TURBO_SLUGS = {"turbo": "arc3-m2-turbo", "turbo-lossless": "arc3-m2-turbo-lossless",
+               "turbo-tail": "arc3-m2-turbo-tail", "turbo-tail-hic16": "arc3-m2-turbo-tail-hic16"}
 
 
 def slug(v: str) -> str:
