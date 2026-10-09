@@ -413,3 +413,86 @@ which the 10 x 25 min check run can supply (N < 150 there):
 2. For the cache: `history_cache_summary.json` `sandbox_timeout_kills`, `python_calls`, and `by_history`
    (host ms per python call by N bucket, buckets 300-999 and 1000+ are the ones that matter); the
    number of python calls in the 300+ and 1000+ buckets gives the N tail directly.
+
+### Fixed cost per python tool call, with the cache installed (measurement, 2026-10-09)
+
+Question: every python call starts a new sandbox process and still sends one full history payload
+(the cache only makes the *later* sends deltas). Is that per-call fixed cost worth a warm sandbox
+pool / persistent sandbox? Script: `scripts/bench_m2_sandbox_call.py` (real patched ToolAgent + real
+sandbox subprocess, synthetic 64x64 game, no model; snippet `result = len(history)`, no `action()`;
+medians of 6 warm calls after one cold call). This 4-CPU Xeon @ 2.1 GHz container, Python 3.13.
+
+**(a) Process start.** The sandbox is `python -I -S -c <bootstrap>`: **no site, no numpy, no third-party
+import** (the segmentation/frame-diff/retained-function code is spliced in as source). So there is no
+numpy-style import tax. `python -I -S -c pass` = 8.5 ms; running the 66 kB bootstrap to its first stdin
+read = 47.7 ms (compile of the bootstrap alone 9 ms, the rest is the class/def definitions and
+interpreter start); a whole call at N = 1 (spawn + tiny payload + parse + teardown) = **47 ms wall**,
+2 ms of it host CPU, ~43 ms sandbox CPU.
+
+**(b) Initial full payload (cache installed), per call.** Payload is ~21 kB per history entry
+(ascii + grid JSON for each frame): 2.1 / 6.3 / 20.5 MB at N = 100 / 300 / 1000.
+
+| N | call wall | host CPU (GIL) | sandbox CPU (own process) | host json.dumps+write | share of a 30 s turn |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.047 s | 0.002 s | 0.043 s | 0.3 ms | 0.16% |
+| 100 | 0.104 s | 0.006 s | 0.093 s | 45 ms | 0.35% |
+| 300 | 0.196 s | 0.012 s | 0.176 s | 50 ms | 0.65% |
+| 1000 | **0.531 s** | 0.044 s | 0.504 s | 75 ms | **1.8%** |
+
+Cold first call after the history was built is 10-20% slower (frame views not yet cached; in a real
+run each frame is formatted once, when first sent, so calls are warm). Linear fit: **~0.05 s + 0.48 ms
+per history entry**, almost all of the slope in the sandbox (`json.loads` of the payload + building
+fresh view objects). The "send" column is wall time inside the host's write, dominated by waiting on
+the pipe while the child reads, not host CPU. For comparison, the same call without the cache is
+0.23 / 0.61 / 2.16 s at N = 100 / 300 / 1000, with 0.16 / 0.50 / 1.79 s of that *host CPU under the GIL*.
+Add ~3.7 actions per call at the cache bench's 0.009 / 0.017 / 0.065 s per action: +0.03 / +0.06 /
++0.24 s.
+
+**(c) Per-call precompute.** None is run eagerly: segmentation is lazy (`FrameView.segmentation`
+computes on first access, pure Python, in the sandbox). But the system prompt makes it the model's
+first line in practice (`seg = current_frame.segmentation` in the first python call of the sampled
+transcript), and since the sandbox and its views are fresh every call and after every `action()`
+refresh, it is recomputed per call, per frame touched. Cost grows with the number of 4-connected
+components C on the board: **24 / 58 / 153 / 408 / 1,125 ms at C = 6 / 21 / 64 / 183 / 504** (synthetic
+rectangle boards, in-process; in the sandbox 1 segmentation on a C ~ 300 board = +0.62 s, 2 = +1.24 s).
+Real component counts: in the 94 transcript tool results where the model printed the full node list
+(Lohit's run), median 16 nodes, 75th percentile ~40, max 131 (selection-biased toward readable
+boards) -> typically **~40-100 ms per segmentation**, 1-2 per call. That is snippet work the model asked
+for, not harness fixed cost, but a persistent sandbox could not remove it either (new frame each
+call); only a host-side segmentation cache keyed by frame hash could.
+
+**Share of a ~30 s turn** (LLM turn ~2,340 tokens at 70-95 tok/s per stream): fixed per-call cost is
+0.16% (N = 1), 0.35% (100), 0.65% (300), 1.8% (1000). Including ~3.7 actions and one typical
+segmentation: ~0.5% (N = 100), ~1.0% (300), ~2.8% (1000). Over the N distribution the analysis above
+assumes (median mean-N ~390, 25% of actions at N > 500): ~0.25 s per call on average, **~0.8% of a
+turn**. The fixed cost is 80-90% sandbox CPU in a separate process; only 2-44 ms per call (0.1-1.5% of
+that 0.2-0.5 s) is host GIL time, i.e. the 10 streams together hold the notebook's GIL for ~0.1-1.5%
+of the time from this source, versus ~50-85% for the pre-cache incumbent in the model above.
+
+**How CPU-bound / what the host looks like.** Nothing in the harness or docs assumes a core count
+(`grep` for `nproc` / `cpu_count` / `sched_getaffinity` in the inference code: none; the sandbox sets only
+a per-call RLIMIT_CPU = timeout+1 s). The only measured Kaggle host for this GPU class is our own
+probe: **48 visible CPUs, 177 GiB RAM** (`stage7_duck_nvfp4.md`, `HW_PROBE`, RTX PRO 6000 Blackwell
+Server Edition); the milestone-2 kernel uses the same machine shape, though its own `nproc` was never
+logged (add `os.cpu_count()` / `len(os.sched_getaffinity(0))` to the next check run's log to confirm).
+Sandboxes are separate processes, so they are not GIL-bound and use cores that SGLang's scheduler
+and tokenizer processes do not. Stress test (10 agents in 10 threads of one process, each issuing
+back-to-back calls with no LLM wait, cache installed, on this 4-core box): N = 300 median call 0.49 s
+(vs 0.22 s alone), 18.1 calls/s; N = 1000 median 1.47 s (vs 0.52 s alone), 6.0 calls/s. Real demand is
+10 streams / ~30 s = ~0.33 calls/s, i.e. 2-6% of this 4-core box's capacity (and far less on 48 cores),
+so the real run is nowhere near contention for the sandbox's own CPU.
+
+**Decision: stop, no code.** Per-call fixed cost with the cache is < 0.5 s for every N below ~900
+(0.05 s at N = 1, 0.20 s at 300), ~0.8% of a turn averaged over the assumed N distribution, 1.8% at
+N = 1000; the threshold (< ~0.5 s, < ~2%) is met. A warm pre-forked sandbox pool could remove only the
+~45 ms start (0.15% of a turn), and a persistent sandbox per game would remove the 0.48 ms/entry parse
+and view build at the price of changing what a snippet can see across calls (the harness deliberately
+gives each call fresh views and no carried state: "code is not saved between calls"), which would need a
+bit-for-bit equivalence proof for at most ~1-2% of stream time at the long-history tail. Not worth it
+now. Revisit only if the first cache run's `by_history` counters show the 1000+ bucket carrying a
+large share of python calls (then the cheaper first step is to cut the *first* payload, e.g. send only
+the entries a typical snippet reads and lazy-load the rest, again needing an equivalence test) or if a
+host-side segmentation cache is wanted for boards with hundreds of components. Caveats: synthetic
+boards (real frames could differ in ascii/grid size per entry), this container's CPU speed (Lohit's
+Kaggle host measured ~1.3x slower per action than this box, which would scale the 0.53 s to ~0.7 s at
+N = 1000), and the N distribution of full-length games is itself an estimate (above).
