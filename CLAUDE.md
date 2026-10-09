@@ -105,14 +105,22 @@ of those was 3.79 / anim 3.43, 3.79, 3.37, 3.02.)
 | 2026-10-04 | 56809165 | m2 + level memory, byte-identical | 28.18 |
 | 2026-10-05 | 56842120 | m2 + level memory, byte-identical | 31.03 |
 | 2026-10-06 | 56864478 | m2 + level memory, byte-identical | 29.38 |
+| 2026-10-09 | 57017233 | m2 + level memory v1, draw 5 (submitted via GitHub Actions kaggle-ops, `force_gate` because of the v0 version-lookup bug, since fixed in e98bed7) | pending |
 
 Notes: the jump 4.58 -> 24.99 came from swapping in the public milestone-2
 solution (serving stack: 94% prefix-cache reuse vs 0%, ~590 vs ~250 generated
 tok/s, 128K vs 32K context), not from anything of ours. Our own contribution
-is the level-memory patch (+4.7). **2026-10-07 and 2026-10-08: no submission
-recorded in the repo; verify against the API.** Rank after 33.29 was **10**.
+is the level-memory patch (+4.7). **2026-10-07 and 2026-10-08 had NO submissions
+(verified via the Kaggle API on 2026-10-09) -- those two slots are lost.** Rank after 33.29 was **10**
+(on 2026-10-03; see the 2026-10-09 API-verified snapshot below).
 
 ### Leaderboard snapshot (2026-10-02, updated 2026-10-08) and calibration
+
+**2026-10-09 ~18:20 UTC, VERIFIED via the Kaggle API (supersedes the unverified 10-08 figures below):**
+4,057 teams; #1 Yi-Chia Chen **59.17**, #2 Tufa Labs **56.52**, #3 mtg 44.32. Bars: **top 1% = rank 41 at
+33.37**, top 5% = rank 203 at 30.91, top 10% = rank 406 at 29.41. **Our team is rank 44 at 33.29** (best
+draw), i.e. **0.08 below the top-1% bar**. The board ranks each team's best public score, while the final
+private ranking uses the 2 selected submissions (our mean is ~30.5), so rank 44 flatters us.
 
 **2026-10-08 (Kaggle leaderboard CSV 16:33 UTC, as reported by JustAdev742's
 `docs/research/beat-tufa/intel-oct8.md`; not verified by us):** #1 Tufa Labs
@@ -146,6 +154,11 @@ changes as bundles on mechanism (`experiments/stage7_milestone2_improvements.md`
   25 slots left. Do not waste any.
 
 ### Built 2026-10-09, awaiting the dev box (in priority order)
+
+**Check runs in flight (pushed via GitHub Actions kaggle-ops, 2026-10-09):** `arc3-m2-turbo-tail` v1 pushed ~18:18 UTC
+(RUNNING); `arc3-m2-turbo-lossless-tail` v1 pushed ~18:28 UTC (RUNNING; the status op printed `v?` for its version
+right after the push, but the push itself reported version 1). That is both GPU slots in use: push nothing else until
+one finishes. Read results with `kernel_output`; do not submit either until its check run passes (criteria below).
 
 All committed on this branch, never run on Kaggle (this cloud box cannot reach it). Slugs are
 `calamitychasm/...`; notebook dir is `kaggle_submission_<slug with - -> _>/notebook/`; every variant is
@@ -249,6 +262,11 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
 `.github/workflows/kaggle-ops.yml` runs `scripts/kaggle_ops.py` on every push to branch
 `claude/modest-ride-gut4vo` that changes `.github/kaggle-ops/request.json` (or by manual dispatch).
 
+- **Status (2026-10-09): credentials are configured (`KAGGLE_USERNAME` + `KAGGLE_KEY`) and the operator works;
+  it is now the PRIMARY way to submit** (draw 5, ref 57017233, went through it). The dev box's scheduled submitter
+  (`ARC3Submit_*`) shares the same 1-per-UTC-day quota: **only one of them should submit on a given day**
+  (disable or do not arm the other). `status` on a never-pushed kernel logs
+  `Permission 'kernels.get' was denied`; that is expected (the kernel does not exist yet), not a credential fault.
 - **Secrets** (repo Settings -> Secrets -> Actions), any one of: `KAGGLE_USERNAME` + `KAGGLE_KEY`;
   `KAGGLE_JSON` (the whole kaggle.json); `KAGGLE_API_TOKEN`. Without them the run exits cleanly
   printing `NO_CREDENTIALS`.
