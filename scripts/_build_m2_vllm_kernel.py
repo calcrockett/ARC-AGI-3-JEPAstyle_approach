@@ -170,7 +170,7 @@ def setup_patches(max_num_seqs: int, max_model_len: int, max_pixels: int) -> lis
 
 SETUP_TAIL_START = "setup_env = {\n    'ARC3_CACHE_DIAGNOSTICS'"
 SETUP_TAIL_END = "setup_env_path.write_text(json.dumps(existing_setup_env, indent=2), encoding='utf-8')\n"
-SETUP_TAIL_NEW = ("# [calamitychasm] lordhansolo's harness env (temperature 0.6, xhigh, 4x boards, ...) is not\n"
+SETUP_TAIL_NEW = ("# [calamitychasm] lordhansolo's harness env (his temperature, effort, 4x boards, ...) is not\n"
                   "# exported: the incumbent's cell 5 configures the harness.\n"
                   "print('VLLM_SETUP_DONE', flush=True)\n")
 

@@ -4,7 +4,7 @@
 # The previous cell wrote lordhansolo's own setup step (vLLM nightly e975732 unpacked from image
 # layers, the hash-pinned 32-file overlay, his watchdog and GPU shard prefetcher) to
 # VLLM_SETUP_SCRIPT, patched only where this harness needs it: max-model-len, max-num-seqs,
-# max_pixels for 640 px boards, no reasoning_effort=xhigh, cached_tokens always reported, a loud
+# max_pixels for 640 px boards, no reasoning-effort default, cached_tokens always reported, a loud
 # VLLM_OVERLAY_HASH_MISMATCH line before anything is unpacked. This cell runs it in the background
 # and, like the SGLang launcher it replaces, releases the benchmark at SERVER_STARTUP_TIMEOUT even
 # if the server is still loading (the harness retries HTTP for ARC3_HTTP_RETRY_INITIAL_SECONDS).
