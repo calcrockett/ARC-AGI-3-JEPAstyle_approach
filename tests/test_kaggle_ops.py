@@ -670,3 +670,20 @@ def test_pull_kernel_error_is_reported_not_raised(tmp_path):
     api.pull_write = boom
     r = runner(api, tmp_path).run({"id": "x", "ops": [{"op": "pull_kernel", "kernel": "u/nb"}]})[0]
     assert r["result"] == "ERROR"
+
+
+def test_pull_kernel_selected_cells_and_cell_lines(tmp_path, capsys):
+    api = FakeApi()
+
+    def write(p):
+        cells = [{"cell_type": "code", "source": "a\nb"},
+                 {"cell_type": "code", "source": "\n".join(f"row {i}" for i in range(100))}]
+        (p / "nb.ipynb").write_text(json.dumps({"cells": cells}))
+    api.pull_write = write
+    r = runner(api, tmp_path).run({"id": "x", "ops": [
+        {"op": "pull_kernel", "kernel": "u/nb", "cells": [1], "cell_lines": 70}]})[0]
+    out = capsys.readouterr().out
+    assert r["matched_cells"] == 1 and "row 69" in out and "row 70" not in out
+    for bad in ({"cells": "1"}, {"cells": [-1]}, {"cell_lines": 0}):
+        with pytest.raises(ko.RequestError):
+            ko.parse_request(json.dumps({"id": "x", "ops": [{"op": "pull_kernel", "kernel": "a/b", **bad}]}))

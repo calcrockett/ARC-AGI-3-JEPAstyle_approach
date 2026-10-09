@@ -11,8 +11,9 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true}
   {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
    "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
-  {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200}   (read-only: downloads the
-   notebook source, prints cells that mention score/prompt/context/stream/audit/memory)
+  {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
+   "cells": [16], "cell_lines": 40}   (read-only: downloads the notebook source, prints cells that
+   mention score/prompt/context/stream/audit/memory, or only the listed cell indexes)
   {"op": "submit", "kernel": "owner/slug", "version": N, "message": "...",
    "markers": [...], "counters": ["level_memory_summary.json", ...],
    "require_zero": {"history_cache_summary.json": ["write_fallbacks", ...]},
@@ -124,6 +125,13 @@ def parse_request(raw: str) -> dict:
             ml = op.get("max_lines", PULL_MAX_LINES)
             if not isinstance(ml, int) or isinstance(ml, bool) or not 1 <= ml <= 1000:
                 raise RequestError(f"ops[{i}]: 'max_lines' must be an integer in 1..1000")
+            cl = op.get("cell_lines", PULL_CELL_LINES)
+            if not isinstance(cl, int) or isinstance(cl, bool) or not 1 <= cl <= 1000:
+                raise RequestError(f"ops[{i}]: 'cell_lines' must be an integer in 1..1000")
+            cells = op.get("cells", [])
+            if not isinstance(cells, list) or not all(isinstance(c, int) and not isinstance(c, bool) and c >= 0
+                                                      for c in cells):
+                raise RequestError(f"ops[{i}]: 'cells' must be a list of cell indexes")
         if kind == "kernel_output" and not isinstance(op.get("grep", []), list):
             raise RequestError(f"ops[{i}]: 'grep' must be a list")
     return req
@@ -340,9 +348,14 @@ def notebook_cells(path: Path) -> list[tuple[str, str]]:
     return cells
 
 
-def matching_cells(cells: list[tuple[str, str]], keywords=PULL_KEYWORDS) -> list[tuple[int, str, str, list[str]]]:
+def matching_cells(cells: list[tuple[str, str]], keywords=PULL_KEYWORDS,
+                   only: list[int] | None = None) -> list[tuple[int, str, str, list[str]]]:
     out = []
     for idx, (kind, src) in enumerate(cells):
+        if only:
+            if idx in only:
+                out.append((idx, kind, src, ["selected"]))
+            continue
         low = src.lower()
         hit = [w for w in keywords if w in low]
         if hit:
@@ -599,13 +612,13 @@ class Runner:
         shown, matched = 0, 0
         for p in code:
             cells = notebook_cells(p)
-            hits = matching_cells(cells)
+            hits = matching_cells(cells, only=op.get("cells"))
             matched += len(hits)
             print(f"  == {p.name}: {len(cells)} cells, {len(hits)} mention {PULL_KEYWORDS}")
             for idx, kind, src, words in hits:
                 if shown >= budget:
                     break
-                lines = src.splitlines()[:PULL_CELL_LINES]
+                lines = src.splitlines()[:op.get("cell_lines", PULL_CELL_LINES)]
                 lines = lines[:budget - shown]
                 shown += len(lines) + 1
                 print(f"  --- cell {idx} [{kind}] matches {','.join(words)}")
