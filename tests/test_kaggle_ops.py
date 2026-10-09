@@ -38,7 +38,8 @@ def write_output(path: Path, *, markers=MARKERS, states=("won", "gave_up"), erro
 
 
 class FakeApi:
-    def __init__(self, subs=(), kernels=(), statuses=None, output=None, submit_exc=None):
+    def __init__(self, subs=(), kernels=(), statuses=None, output=None, submit_exc=None, status_errors=None):
+        self.status_errors = status_errors or {}
         self.subs = list(subs)
         self.kernels = list(kernels)
         self.statuses = statuses or {}
@@ -55,6 +56,8 @@ class FakeApi:
         return self.kernels if page == 1 else []
 
     def kernels_status(self, kernel):
+        if kernel in self.status_errors:
+            raise self.status_errors[kernel]
         return NS(status=f"KernelWorkerStatus.{self.statuses.get(kernel, 'COMPLETE')}", failure_message="")
 
     def kernels_output(self, kernel, path, force=False):
@@ -245,30 +248,72 @@ def test_submit_error_body_is_reported(tmp_path):
 
 # ---------------------------------------------------------------- push / GPU slots
 
-def kmeta(ref, hours_ago=1.0, gpu=True):
-    return NS(ref=ref, enable_gpu=gpu, last_run_time=NOW - dt.timedelta(hours=hours_ago), current_version_number=1)
+def kmeta(ref, version=1):
+    """A kernels_list(mine=True) row as kagglesdk really returns it: enable_gpu reads False and
+    last_run_time is None because the list endpoint leaves them unset (run 37973474712)."""
+    return NS(ref=ref, enable_gpu=False, last_run_time=None, current_version_number=version)
 
 
-def test_push_skipped_when_two_gpu_kernels_busy(tmp_path):
+A, B, C = (f"calamitychasm/arc3-m2-{n}" for n in ("turbo-tail", "turbo-lossless-tail", "lm-histcache"))
+PUSH = {"op": "push_kernel", "dir": "kaggle_submission_m2_lm_histcache/notebook"}
+PUSHED_OUT = "Kernel version 1 successfully pushed.  Please check progress at https://www.kaggle.com/code/x"
+DENIED = ValueError("Cannot access kernel 'x' (Permission 'kernels.get' was denied). The most likely cause is a wrong slug")
+
+
+def test_push_skipped_when_running_and_queued_despite_unset_list_fields(tmp_path, capsys):
     calls = []
-    api = FakeApi(kernels=[kmeta("o/a"), kmeta("o/b"), kmeta("o/c")],
-                  statuses={"o/a": "RUNNING", "o/b": "QUEUED", "o/c": "COMPLETE"})
-    r = runner(api, tmp_path, cli=lambda a: calls.append(a) or (0, "")).op_push_kernel(
-        {"op": "push_kernel", "dir": "kaggle_submission_m2_lm_histcache/notebook"})
+    api = FakeApi(kernels=[kmeta(A), kmeta(B), kmeta(K)], statuses={A: "RUNNING", B: "QUEUED", K: "COMPLETE"})
+    r = runner(api, tmp_path, cli=lambda a: calls.append(a) or (0, "")).op_push_kernel(dict(PUSH))
     assert r["result"] == "SKIPPED_GPU_BUSY" and calls == []
+    assert sorted(r["busy"]) == sorted([f"{A} RUNNING", f"{B} QUEUED"])
+    out = capsys.readouterr().out
+    assert f"busy-check {A}: RUNNING -> BUSY" in out and f"busy-check {K}: COMPLETE" in out
 
 
-def test_push_ignores_old_and_cpu_kernels_then_pushes(tmp_path):
-    calls = []
+def test_push_proceeds_with_one_running_and_reports_it(tmp_path):
+    api = FakeApi(kernels=[kmeta(A), kmeta(K)], statuses={A: "RUNNING", K: "COMPLETE"})
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert r["result"] == "PUSHED" and r["busy_before"] == [f"{A} RUNNING"]
 
-    def cli(a):
-        calls.append(a)
-        return 0, "Kernel version 1 successfully pushed.  Please check progress at https://www.kaggle.com/code/x"
-    api = FakeApi(kernels=[kmeta("o/a"), kmeta("o/old", hours_ago=100), kmeta("o/cpu", gpu=False)],
-                  statuses={"o/a": "RUNNING", "o/old": "RUNNING", "o/cpu": "RUNNING"})
-    r = runner(api, tmp_path, cli=cli).op_push_kernel({"op": "push_kernel", "dir": "kaggle_submission_m2_lm_histcache/notebook"})
-    assert r["result"] == "PUSHED" and r["version"] == 1
-    assert calls == [["kernels", "push", "-p", str(ROOT / "kaggle_submission_m2_lm_histcache/notebook")]]
+
+def test_cancel_requested_counts_as_busy(tmp_path):
+    api = FakeApi(kernels=[kmeta(A), kmeta(B)], statuses={A: "CANCEL_REQUESTED", B: "RUNNING"})
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert r["result"] == "SKIPPED_GPU_BUSY"
+
+
+def test_never_pushed_permission_denied_kernels_are_ignored(tmp_path):
+    # every CLAUDE.md kernel except the incumbent and A is never pushed -> kernels.get denied
+    errors = {f"calamitychasm/{s}": DENIED for s in (
+        "arc3-m2-lm-tail", "arc3-m2-turbo", "arc3-m2-turbo-lossless", "arc3-m2-lm-histcache",
+        "arc3-m2-lm-triedfacts", "arc3-m2-spd-m97s12", "arc3-m2-vllm-s12", "arc3-m2-vllm-s14",
+        "arc3-m2-turbo-lossless-tail")}
+    api = FakeApi(kernels=[kmeta(A), kmeta(K)], statuses={A: "RUNNING", K: "COMPLETE"}, status_errors=errors)
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert r["result"] == "PUSHED" and r["busy_before"] == [f"{A} RUNNING"]
+
+
+def test_status_error_on_pushed_kernel_is_conservative(tmp_path):
+    api = FakeApi(kernels=[kmeta(A), kmeta(B)], statuses={A: "RUNNING"},
+                  status_errors={B: ConnectionError("503 backend unavailable")})
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert r["result"] == "SKIPPED_GPU_BUSY" and sorted(r["busy"]) == sorted([f"{A} RUNNING", f"{B} UNKNOWN"])
+
+
+def test_status_error_on_unlisted_kernel_is_ignored(tmp_path):
+    api = FakeApi(kernels=[kmeta(A)], statuses={A: "RUNNING"},
+                  status_errors={B: ConnectionError("503 backend unavailable")})
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert r["result"] == "PUSHED"
+
+
+def test_listing_unavailable_status_error_is_conservative(tmp_path):
+    class NoList(FakeApi):
+        def kernels_list(self, **kw):
+            raise RuntimeError("list down")
+    api = NoList(statuses={A: "RUNNING"}, status_errors={B: ConnectionError("503")})
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert r["result"] == "SKIPPED_GPU_BUSY" and f"{B} UNKNOWN" in r["busy"]
 
 
 def test_push_session_limit_message_is_a_skip(tmp_path):

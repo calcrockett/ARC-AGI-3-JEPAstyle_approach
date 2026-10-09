@@ -54,7 +54,6 @@ OPS = ("status", "push_kernel", "kernel_output", "submit")
 MUTATING = ("push_kernel", "submit")
 BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
 GPU_LIMIT = 2
-RECENT_HOURS = 36  # a GPU session cannot outlive ~12 h; older kernels are not checked
 
 
 class RequestError(ValueError):
@@ -220,6 +219,14 @@ def read_leaderboard_zip(path: Path) -> list[dict]:
         return list(csv.DictReader(io.TextIOWrapper(z.open(name), encoding="utf-8", newline="")))
 
 
+_NOT_PUSHED = ("permission", "denied", "not found", "404", "403", "does not exist", "cannot access")
+
+
+def _never_pushed(exc: Exception) -> bool:
+    """Status error that means 'this kernel does not exist / is not ours yet', not 'unknown state'."""
+    return any(t in f"{type(exc).__name__} {exc}".lower() for t in _NOT_PUSHED)
+
+
 def claude_md_kernels(text: str) -> list[str]:
     """Incumbent plus every kernel in the CURRENT STATUS kernel tables of CLAUDE.md."""
     head = text.split("## HISTORY", 1)[0]
@@ -302,23 +309,48 @@ class Runner:
         st = self.api.kernels_status(kernel)
         return enum_name(getattr(st, "status", "")), (getattr(st, "failure_message", "") or "")
 
-    def busy_gpu_kernels(self) -> list[str]:
-        """Our GPU kernels currently running or queued. Kernels whose last run is older than
-        RECENT_HOURS are skipped (a session cannot last that long)."""
-        cutoff = self.now() - dt.timedelta(hours=RECENT_HOURS)
+    def candidate_kernels(self, extra: list[str] | None = None) -> list[str]:
+        """Every kernel that could hold a GPU session: the incumbent plus the CLAUDE.md tables (the
+        same list the status op reports), any ``extra`` refs, and every ``arc3-*`` kernel the listing
+        knows about. All of ours are GPU kernels (m2 stack)."""
+        try:
+            found = claude_md_kernels(self.claude_md.read_text(encoding="utf-8"))
+        except OSError:
+            found = []
+        listed = self._listed() or []
+        found += [r for r in (getattr(k, "ref", "") or "" for k in listed)
+                  if r.split("/", 1)[-1].startswith("arc3-")]
+        found += list(extra or [])
+        seen: dict[str, str] = {}
+        for ref in found:
+            seen.setdefault(ref.lower(), ref)
+        return list(seen.values())
+
+    def busy_gpu_kernels(self, extra: list[str] | None = None) -> list[str]:
+        """Our GPU kernels currently running/queued, decided by ``kernels_status`` per kernel (the call
+        the status op uses). NOT by ``kernels_list`` fields: kagglesdk's ``enable_gpu`` getter returns
+        ``_enable_gpu or False`` and the list endpoint leaves it unset, so a filter on it dropped every
+        kernel (Actions run 37973474712 pushed with ``busy_before: []`` while turbo-tail was RUNNING).
+        A status error that is not permission-denied/not-found on a kernel that has been pushed (it is
+        in the listing, or the listing is unavailable) is counted busy, to be conservative.
+        Prints the evidence for every candidate."""
+        listing = self._listed()
+        pushed = None if listing is None else {(getattr(k, "ref", "") or "").lower() for k in listing}
         busy = []
-        for k in self.my_kernels():
-            if getattr(k, "enable_gpu", True) is False:
-                continue
-            t = as_utc(getattr(k, "last_run_time", None))
-            if t is not None and t < cutoff:
-                continue
-            ref = getattr(k, "ref", "")
+        for ref in self.candidate_kernels(extra):
             try:
                 status, _ = self.status_of(ref)
             except Exception as exc:  # noqa: BLE001
-                print(f"  status error for {ref}: {type(exc).__name__}")
+                msg = f"{type(exc).__name__}: {exc}"
+                if _never_pushed(exc):
+                    print(f"  busy-check {ref}: not accessible / never pushed -> ignored ({msg[:90]})")
+                elif pushed is not None and ref.lower() not in pushed:
+                    print(f"  busy-check {ref}: status error, not in our listing -> ignored ({msg[:90]})")
+                else:
+                    print(f"  busy-check {ref}: status UNKNOWN ({msg[:90]}) -> counted busy (conservative)")
+                    busy.append(f"{ref} UNKNOWN")
                 continue
+            print(f"  busy-check {ref}: {status}" + (" -> BUSY" if status in BUSY else ""))
             if status in BUSY:
                 busy.append(f"{ref} {status}")
         return busy
