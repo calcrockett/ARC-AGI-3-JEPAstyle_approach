@@ -664,3 +664,102 @@ the harness gate, got 16). Counters as turbo-tail.
 
 **Kill:** gen tok/s < 772.4 (no better than turbo-tail), or any pass guard tripped. Between 772.4 and 834.2: not adopted,
 no slots; read decode tok/s at 15-16 running requests in serve.log before deciding whether 15 streams is worth a run.
+
+## MTP drafter fine-tune (feasibility, 2026-10-09; desk study, nothing built or run)
+
+**Question.** Can a fine-tuned MTP draft head raise the lossless accept length of arm B (median 2.66, 657.4 gen tok/s)
+toward arm A's lossy 3.02 (772.4), and should we build one before 2026-11-02?
+
+### 1. JustAdev742's plan (repo `JustAdev742/Arc-Agi-3-Kaggle-comp`, Apache-2.0, branch `claude/admiring-ride-b4dq3i` @ fe2ad06;
+`docs/research/beat-tufa/mtp-drafter-finetune.md` sections 0-11, `docs/research_log.md` 2026-10-08 19:05 .. 10-09 00:18)
+
+- **What is trained.** The MTP head's dense weights only: 88.9M of the 90.6M BF16 `mtp.*` tensors (attention, gated
+  residuals, input fusion `fc_embedding`/`fc_hidden`, router, shared expert; the QSA indexer frozen). The 512 routed
+  experts stay albucino's INT4 RTN g32 file byte-identical (dequantized in the trainer, so the dense weights learn around
+  the experts' ~10% RTN error). `embed_tokens`/`lm_head` are the target's (shared at load). **No new FR-Spec map is
+  trained**: the draft is trained *for* the map it will be served with (their ARC map, sha `ec15348b...` = our
+  `ARC_HOTMAP`). Starting point = albucino as shipped (its dense tensors are bit-identical to Intel's BF16 original MTP).
+- **Data.** Their own Save & Run request logs (`<game>_p0_requests.jsonl`: exact messages, base64 images, tools,
+  `chat_template_kwargs`) from loop-free **lossless** runs (exp-073: 25 games x 121 min, 1.48 GB of logs), mounted as
+  `kernel_sources`. The logs supply contexts only: an env-gated Pennyroyal patch on `qwen4_exp.py` dumps the target's
+  final hyper-connection state `H` (10,240 values/token, FP8 + per-row scale) while a no-spec, no-radix, no-CUDA-graph
+  server replays maximal snapshots with `max_tokens 1`. Labels are the target's own distribution (forward KL over the
+  65,536-row hot vocab, recomputed from `H` through the target's mixer + `lm_head`), chained 3-step training-time test,
+  step weights 0.51/0.31/0.18, AdamW 5e-5, 2 epochs over ~2-3M loss rows; 11 public games held out. Loop-turn filter.
+- **Compute.** One Kaggle RTX session ("session A", D' + 11 step cells, A0-A11): two server boots, dump ~15-25 min,
+  replica check (GO/NO-GO against SGLang's own accept length on 16 probe requests), train 30-75 min, export a 4.1 GB
+  albucino-format draft to `/kaggle/working`. Estimate 1.6-2.8 GPU-h (7 h hard cap); plan total ~3.5 GPU-h incl. a
+  probe gate (0.45), a 25x25 production gate (0.7) and one retry (1.0). ~2 engineering days, already spent.
+- **Expected gain.** Their lossless accept 2.78 -> 2.92-3.05 (+5-10%), "close to today's 0.5/0.5 speed (3.10) without
+  its distortion"; perfect-draft lossless ceiling 3.51 (from probe logprobs). Literature: AngelSpec 2.54 -> 2.90 at
+  T 0.9 (one shared MTP block, D = 3), FastMTP 1.21x -> 1.81x from a weaker base. Their own warning: under 0.5/0.5 a
+  sharper draft pushes decoding toward greedy (loop risk); ship lossless first.
+- **Status.** All code built and CPU-tested (`scripts/{sglang_hc_dump_patch,hc_dump_driver,mtp_replica,mtp_train,
+  mtp_write_draft,mtp_probe_dump,mtp_session_a,build_mtp_session}.py`, ~5.9k lines, 150 tests). **Nothing has run on a
+  GPU; no accept-length result exists.** Session A is first in line after their Sat 2026-10-10 00:00 UTC quota reset
+  (their week's 30 h quota is spent). Open GPU-only risks they list: kernel-output mount paths, dump speed, the hook
+  under the overlap scheduler, `/tmp`/`/dev/shm` capacity, training speed, the replica matching SGLang's fused kernels.
+- **Licence.** Their code: Apache-2.0 (portable with NOTICE, as for turbo). The trained weights are a derivative of
+  Qwen's MTP (Qwen Community License 1.0), the same status as albucino and Intel's checkpoint.
+
+### 2. Could we do the same?
+
+- **Data: yes, already on Kaggle.** Our check runs set `bm.solver.save_request_logs = True` (off only when
+  `TRUE_SUBMISSION`), and the harness patch writes the same record format as theirs (`messages`, `tools`,
+  `chat_template_kwargs`, `usage`, `finish_reason`; `request_log_metrics` in `scripts/m2_speed_report.py` and the
+  `request_log` digest in `scripts/kaggle_ops.py` read the `"event": "response"` records). Best source:
+  `arc3-m2-turbo-lossless-tail` v1 (lossless, REAP-448 target, ARC map, 25 games x 25 min, 0 repeated turns); then the
+  lossless base speed runs and the incumbent's check runs. Because the target's `H` and logits are recomputed at dump
+  time, logs from an unpruned or generic-map run are still valid contexts. Avoid turbo/turbo-tail logs (lossy 0.5).
+  Supply is roughly 1-2M output tokens per 25x25 run (not counted here), against their 2-3M-row target: two or three of
+  our outputs, or one full-length run, cover it.
+- **Training notebook.** A competition-attached notebook (needed for the RTX Pro 6000; RTX sessions have no internet)
+  with the Pennyroyal dataset, the Intel and albucino models and our check-run kernel as `kernel_sources`. Internet is
+  not needed (the wheelhouse is a dataset). Output goes to `/kaggle/working` (19.5 GB; the draft is 4.1 GB).
+- **Format and loading: yes.** Export keeps albucino's 12 files (only `mtp-dense.safetensors` rewritten, 181 MB BF16;
+  config, index, 1.4 GB INT4 expert file byte-identical), so our launcher's `prepare_draft_view` checks pass unchanged.
+  Our notebooks already resolve `DRAFT_MODEL_DIR` through `resolve_input('draft_model', ...)`; a `--draft SRC` builder
+  option swaps the model source for the training kernel's output (or, for the scored run, a private Kaggle model made
+  from it; scored reruns have no internet, inputs must be attached). Never mount two drafts under one directory.
+- **Throughput conversion.** With one chain (topk 1, 4 draft tokens), tok/s = B x L / (t_verify(B) + 3 t_draft(B)); a
+  retrained head with the same shapes, experts and map leaves the denominator unchanged, so tok/s scales with L.
+  Our numbers: base 577.8 / 2.62 = 220.5 verify-cycles/s (10 streams, ~45 ms/cycle); turbo-lossless-tail
+  657.4 / 2.66 = 247.1; turbo-tail 772.4 / 3.02 = 255.8 (14 streams, ~55 ms/cycle). The A/B pair differs only in
+  acceptance and moved tok/s 1.27x as much as L in log terms (cycles/s +3.5%, within run-to-run spread at 14 streams);
+  use 1.0 as central, 1.27 as an optimistic bound.
+- **Estimate (lossless, arm B).** Scaling their +5-10% to our base: L 2.66 -> 2.79-2.93, tok/s 657 -> **690-723**
+  (+5-10%; 699-741 at the 1.27 slope). Their ceiling scaled to our base (3.51 x 2.66/2.78 = 3.36) bounds it at ~830.
+  Matching arm A's 3.02 (+13.5%) would need the top of their range and then some; plan on landing between B and A.
+  Score: at the caller-cited full-budget elasticity ~0.25, +1.3-2.5% (~+0.4-0.8 LB points on ~32); at JustAdev742's
+  25-min public-run elasticity 0.6-0.8, +3-8% (~+1-2.5). **Undetectable on the LB** (sd 2.2/draw); it must be adopted
+  on mechanism: lossless by construction, measured as tok/s and accept length in one check run.
+- **Arm A with a fine-tuned draft** (0.5/0.5): L 3.02 -> ~3.15-3.3, but lossy, and a sharper draft raises snap/loop
+  risk (their exp-076: accept 3.70, 69% repeated turns with a mismatched draft). Not recommended without a loop gate
+  and >= 2 full runs.
+- **Risks.** (1) Replica NO-GO (their trainer mis-matches SGLang's fused kernels) -> no draft, ~1 extra day on their side.
+  (2) The gain is small or capacity-bound (one layer). (3) Hidden games differ from the public 25: harmless for quality
+  (verification stays lossless), it only shrinks the speed gain; the game holdout measures that. (4) Kaggle GPU quota:
+  1.6-2.8 h training + ~1 h check run on top of our A/B/hic16/audit check runs; push only into a free slot (2-session
+  limit, Gotchas 2026-10-05). (5) Pairing: a draft is valid for one target + one map (REAP-448 + ARC map = arms A/B;
+  not the incumbent v1, which serves the unpruned target with the generic map). (6) Our builder is not D'; porting
+  their session builder means re-deriving cells from our notebook, not reusing `build_franzen_nb.py`.
+
+### 3. Recommendation: NO-GO on building our own now; conditional GO on adopting theirs
+
+Their stack is ours: same Pennyroyal wheel, Intel target, albucino draft, REAP-448 kept list and ARC map (our turbo is
+their exp-074t), so their session-A output is a drop-in draft for arms A/B. Duplicating an untested 5.9k-line pipeline
+before its first GPU run spends our quota on their debugging.
+
+- **Trigger:** their session A reports a replica GO and held-out `accept_expected` up >= ~4% (expected 2026-10-10/11;
+  watch their `docs/research_log.md`).
+- **Path 1 (they publish the draft as a public Kaggle model/dataset):** add a `--draft SRC` builder option + tests
+  (~2-3 agent-h), one 25x25 check run of turbo-lossless-tail with the new draft (~1 GPU-h). Pass: accept median
+  >= 2.79 and gen tok/s >= 690, plus all turbo-lossless guards (0 repeated turns, tokens/request within +-10%).
+  Earliest check run **2026-10-11/12**.
+- **Path 2 (not published):** port their scripts (Apache-2.0, NOTICE) onto our notebook base with our
+  turbo-lossless-tail logs as `kernel_sources` (~8-12 agent-h incl. tests), one session A (~2-3 GPU-h, cap 7), then the
+  check run (~1 GPU-h); ~4 GPU-h with a retry margin. Earliest check run **~2026-10-13/14**, inside the explore phase.
+- **Slots:** none of its own. Per the schedule's rule ("same mechanism with better measured throughput"), a passing
+  lossless draft takes over arm B's remaining slots from the next B day; it does not need fresh LB draws to establish
+  quality. Worth doing before 11-02 only via one of these two paths; if their replica check is NO-GO or their gain
+  is < +4%, drop it (expected value ~+0.5-1 point does not justify a from-scratch build).
