@@ -1,0 +1,117 @@
+name: kaggle-probe
+
+# Read-only probe: can GitHub Actions reach Kaggle with repo secrets?
+# No submissions, no kernel pushes. Prints only booleans for secret presence.
+on:
+  push:
+    branches: [claude/modest-ride-gut4vo]
+    paths:
+      - .github/workflows/kaggle-probe.yml
+      - .github/kaggle-trigger.txt
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME || vars.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_JSON: ${{ secrets.KAGGLE_JSON }}
+      COMP: arc-prize-2026-arc-agi-3
+    steps:
+      - name: Secret presence (booleans only)
+        id: check
+        shell: bash
+        run: |
+          b() { if [ -n "$1" ]; then echo true; else echo false; fi; }
+          echo "KAGGLE_USERNAME set: $(b "$KAGGLE_USERNAME")"
+          echo "KAGGLE_KEY set:      $(b "$KAGGLE_KEY")"
+          echo "KAGGLE_API_TOKEN set: $(b "$KAGGLE_API_TOKEN")"
+          echo "KAGGLE_JSON set:     $(b "$KAGGLE_JSON")"
+          have=false
+          if [ -n "$KAGGLE_USERNAME" ] && [ -n "$KAGGLE_KEY" ]; then have=true; fi
+          if [ -n "$KAGGLE_API_TOKEN" ] || [ -n "$KAGGLE_JSON" ]; then have=true; fi
+          echo "have_creds=$have" >> "$GITHUB_OUTPUT"
+          echo "have_creds=$have"
+
+      - name: Reachability of kaggle.com (no auth)
+        shell: bash
+        run: |
+          curl -sS -o /dev/null -w "kaggle.com HTTP %{http_code}\n" https://www.kaggle.com/ || true
+
+      - name: Configure Kaggle CLI
+        if: steps.check.outputs.have_creds == 'true'
+        shell: bash
+        run: |
+          python -m pip install --quiet kaggle
+          mkdir -p ~/.kaggle
+          if [ -n "$KAGGLE_JSON" ]; then
+            python - <<'PY'
+          import json, os
+          d = json.loads(os.environ["KAGGLE_JSON"])
+          k = d.get("key", "")
+          if k:
+              print("::add-mask::" + k)
+          p = os.path.expanduser("~/.kaggle/kaggle.json")
+          with open(p, "w") as f:
+              json.dump(d, f)
+          os.chmod(p, 0o600)
+          print("wrote kaggle.json from KAGGLE_JSON")
+          PY
+          fi
+          kaggle --version || true
+
+      - name: Submissions (read-only)
+        if: steps.check.outputs.have_creds == 'true'
+        shell: bash
+        run: |
+          kaggle competitions submissions -c "$COMP" --csv 2>&1 | head -40 || true
+
+      - name: Leaderboard (read-only)
+        if: steps.check.outputs.have_creds == 'true'
+        shell: bash
+        run: |
+          mkdir -p lb && cd lb
+          if kaggle competitions leaderboard -c "$COMP" --download -p . 2>&1; then
+            for z in *.zip; do [ -f "$z" ] && unzip -o -q "$z"; done
+            ls -la
+            python - <<'PY'
+          import csv, glob
+          files = glob.glob("*.csv")
+          if not files:
+              print("no leaderboard csv found")
+              raise SystemExit(0)
+          rows = list(csv.DictReader(open(files[0], newline="", encoding="utf-8")))
+          print("columns:", list(rows[0].keys()) if rows else [])
+          n = len(rows)
+          print("TOTAL TEAMS:", n)
+          def show(r):
+              return f"{r.get('Rank','?'):>5} | {r.get('Score','?'):>8} | {r.get('TeamName','?')} | subs={r.get('SubmissionCount','?')} | last={r.get('LastSubmissionDate','?')}"
+          print("--- top 60 ---")
+          for r in rows[:60]:
+              print(show(r))
+          for label, idx in (("top-1% bar (rank~n/100)", max(1, round(n/100))), ("top-5% bar (rank~n/20)", max(1, round(n/20))), ("top-10% bar (rank~n/10)", max(1, round(n/10)))):
+              if idx <= n:
+                  print(label, "->", show(rows[idx-1]))
+          ours = [r for r in rows if "how bad can it go" in r.get("TeamName","").lower() or "calamitychasm" in r.get("TeamMemberUserNames","").lower()]
+          print("--- our team ---")
+          for r in ours:
+              print(show(r))
+          if not ours:
+              print("our team not found by name/member")
+          PY
+          else
+            echo "download failed; trying --show"
+            kaggle competitions leaderboard -c "$COMP" --show 2>&1 | head -60 || true
+          fi
+
+      - name: Kernel status (read-only)
+        if: steps.check.outputs.have_creds == 'true'
+        shell: bash
+        run: |
+          kaggle kernels status calamitychasm/arc3-m2-level-memory 2>&1 || true
