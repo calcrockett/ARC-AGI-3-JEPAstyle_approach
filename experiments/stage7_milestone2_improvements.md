@@ -156,3 +156,67 @@ Reading it:
 - **Recommendation: bundle it with whichever serving kernel is adopted next** (turbo-tail / turbo-lossless-tail):
   zero throughput cost, expected ~+2% (range +0.4..+3.9%), never negative in the replay. Alone on the incumbent
   (`arc3-m2-lm-tail`) it would need ~100 draws per arm to see, so spend slots on it only as part of a bundle.
+
+## 5. Next harness challenger: lordhansolo's strategy audit [READ + BUILT, 2026-10-09; never run]
+
+**Variant built: `--strategy-audit` (token `audit`)** on `--turbo-lossless --prio-tail` ->
+`calamitychasm/arc3-m2-turbo-lossless-tail-audit` (`kaggle_submission_m2_turbo_lossless_tail_audit/`). Module
+`kaggle_submission_milestone2_fork/strategy_audit/strategy_audit.py`, provenance and the exact text diffs in its
+`NOTICE.md`; tests `tests/test_m2_strategy_audit.py` (unit, the real patched ToolAgent, the committed kernel).
+
+### 5.1 What lordhansolo's audit is (recovered verbatim)
+
+Source: `lordhansolo/taaf-kaggle-source` (mirror github.com/tonghuikang/daniel-franzen-arc-agi-3 @ f472820),
+`inference/agent/prompts.py` `STRATEGY_AUDIT_PROMPT` (~2.6 KB, ~600 tokens) and `inference/framework/solver.py`
+`_should_audit_strategy`. A per-game timer starts at each level start; once 25% of the game's initial runtime limit
+(his cap 3,918 s -> ~980 s) has passed on the same level, the next analyzer turn carries the prompt; the timer
+restarts at that turn and at every level clear. The text tells the model to first check whether recent observations
+support its plan and, if so, to continue without an experiment; only if not, to separate observed facts from
+assumptions, pick one uncertain assumption, check existing transitions, and run ONE short discriminating experiment
+with predictions written down and each action's result inspected before the next. It says explicitly: do not reset
+or abandon a plan because of the audit.
+
+Our port changes the clock to **generated tokens on the level** (the gate time-shares ~110 games, so wall time on a
+level is mostly time parked): due every 56,000 tokens on one level (25% of ~228K expected tokens per game on the
+turbo-lossless stack). Appended to the turn opener only (no system-prompt / history edit, so no cache cost); a turn
+that generated nothing does not count and the audit is re-sent. Three references to his harness (the python tool's
+`plan` argument, saved modules with tests) are reworded for ours; everything else is verbatim.
+
+### 5.2 Evidence (ranked; none of it is a hidden-set ablation)
+
+| candidate | evidence | type | verdict |
+|---|---|---|---|
+| strategy audit (lordhansolo) | part of a Milestone-2 winner (public LB 23.84, one draw, below Franzen's 27.89 base, different serving stack); never ablated publicly | bundle component, hidden set, n=1 | **built** (default per brief; clear mechanism, low disruption) |
+| added advice text hurts (rellik13 / sirikilohit WRITEUP) | per-prompt text 6.42 -> 4.16; level-start advice block 13.40 -> 9.98 | hidden set, one draw each, at a ~37K context | the main risk: our context is 128K (crowding ~0.5%), the audit fires only on long levels, but "advice made it doubt rules it had right" applies |
+| remove misleading text (rellik13: UNDO name, "Level restarted", budget-bar line) | 13.40 -> 14.49 bundled with a scheduler change | hidden set, n=1 | **already in our base** (Franzen renamed UNDO, rewrote the game-over line, describes the bar as budget) |
+| solved-level memory (rellik13 M85) | +2.8 hidden on his stack; +4.8 on ours (n=4 vs n=6 control) | hidden set | **already the incumbent** |
+| longer retained history (rellik13 14.49 -> 22.53) | hidden set, n=1, KV-bound | serving | our KV lead (`stage7_m2_speed.md`), not a harness change |
+| Franzen's own negatives | stronger step-verification hint, summaries, resume prompts, extra guards: no clear gain | public-25 repeats | weakens the prior for any prompt nudge |
+| Hivemind "unanchor" level-start prompt | +3% levels, p = 0.82 | public-25, 4 passes | null |
+| JustAdev742 mid-level context reset (ours-07) | stuck-level solve rate 32% vs ~61% expected; bundle 39.7/45.0 vs 49.4 | public-25, mechanism count | a stuck-level intervention that REPLACES context hurts; the audit adds a view and keeps the context |
+
+Other surveyed repos (adsdemaybe = Franzen's write-up, lokeshjasrotia, ppx16, Beiciccc, AREx) carry no hidden-set
+evidence for a harness change beyond the rows above. Prior on the audit's effect: small, sign unknown (perhaps
+-1..+2 points); Hivemind's decomposition (97% of lost points are unfinished levels; unfinished levels end after a
+median 14 turns, i.e. they run out of time) is where it would act. It is **not resolvable by draws** (sd 2.2), so it
+gets no slots of its own; it only rides along if its check run is clean and the bundle's arm is chosen.
+
+### 5.3 Check run: pass / kill (25 public games x 25 min, the turbo-lossless-tail shape)
+
+Pass, all of:
+- markers: turbo-lossless-tail's plus `STRATEGY_AUDIT installed` (prints `threshold_tokens 56000`); the cell asserts
+  it wrapped `_build_user_prompt` after level memory and that `ARC3_YIELD_RESUME_PROMPT` is unset.
+- `strategy_audit_summary.json`: `errors` 0; `audits_confirmed` >= 1 (the clock fires: a check-run game generates
+  ~50-90K tokens, so expect a handful); `audits_retracted` <= `audits_sent` / 4; `max_audits_one_level` consistent
+  with tokens / 56K.
+- outcome guards (registered, not only mechanism): `voluntary_resets_after_audit` <= 1 per 4 confirmed audits
+  (the text says not to reset; JustAdev742's fresh-start finding); `audited_levels_cleared` reported (outcome measure:
+  read it against the 25-min base, where ~1/3 of levels still open at that depth clear later, without a pass bar at
+  this n).
+- throughput and length vs turbo-lossless-tail's check run (657.4 gen tok/s, 1579 tokens/request): gen tok/s within -5%, output tokens/request within
+  +-10%, 0 exact repeated assistant turns -- the audit adds ~600 prompt tokens once per 56K generated.
+- level_memory / history_cache / timeout_fix counters as turbo-lossless-tail.
+
+Kill: any of `errors` > 0, `audits_confirmed` == 0 with a level past 56K tokens, resets after audits above the bar,
+a level-memory or histcache regression, or any guard above tripping. Kill date for a slot decision: the audit only
+competes for slots after arm B (`arc3-m2-turbo-lossless-tail`) has n >= 3; until then it is check-run only.

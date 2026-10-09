@@ -17,6 +17,8 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
     python scripts/_build_m2_level_memory_kernel.py --prio-tail     # arc3-m2-lm-tail: incumbent + gate fix (below)
     python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail   # arc3-m2-turbo-tail
     python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail   # arc3-m2-turbo-lossless-tail
+    python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail --strategy-audit
+                                                    # arc3-m2-turbo-lossless-tail-audit (see below)
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
 /kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
@@ -35,6 +37,12 @@ the install cell sets ARC3_PRIORITY_HUMAN_ACTIONS=60 (upstream 25; the public ga
 level) and gives a game on its LAST level the future bonus B=5 instead of 0 (TAIL_LOOKUP_REMAINING 8/7/5/0 ->
 8/7/5/5), both at runtime -- the harness patch is untouched. It composes with every other variant; with a
 turbo preset the slug is the preset's plus "-tail".
+
+Strategy-audit variant (--strategy-audit, token `audit`; experiments/stage7_milestone2_improvements.md section 5):
+lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT appended to the turn opener once the game has generated
+ARC3_STRATEGY_AUDIT_TOKENS on one level since it started or since the last audit (module and NOTICE in
+kaggle_submission_milestone2_fork/strategy_audit/). Its own cell, after the install cell; counters in
+strategy_audit_summary.json. With a turbo preset the slug is the preset's plus "-tail-audit" / "-audit".
 
 Serving / "turbo" variants (ported from JustAdev742's Milestone-2 work, Apache-2.0; provenance and
 vendored files in kaggle_submission_milestone2_fork/turbo/, see its NOTICE.md). These edit the SGLang
@@ -91,13 +99,15 @@ UPSTREAM = FORK / "upstream" / "arc-agi-3-milestone-2-solution.ipynb"
 LM_SRC = (FORK / "level_memory" / "level_memory.py").read_text(encoding="utf-8")
 assert "'''" not in LM_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 HC_SRC = (FORK / "history_cache" / "history_cache.py").read_text(encoding="utf-8")
+SA_SRC = (FORK / "strategy_audit" / "strategy_audit.py").read_text(encoding="utf-8")
+assert "'''" not in SA_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 assert "'''" not in HC_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 INCUMBENT = "arc3-m2-level-memory"
 DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type of every variant build
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "tail", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
-_FIXED_KINDS = ("histcache", "triedfacts", "tail", "timeoutfix", "reap", "hotmap", "all25", "inputs")
+VARIANT_ORDER = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
+_FIXED_KINDS = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
 # turbo without the lossy MTP acceptance (upstream SPEC_ACCEPT_SINGLE / SPEC_ACCEPT_ACC stay 1.0)
@@ -132,7 +142,7 @@ VARIANT_INSTALL_LINES = {
     ),
 }
 VARIANT_MARKERS = {"histcache": "HISTORY_CACHE installed", "triedfacts": "TRIED_FACTS installed",
-                   "tail": "PRIORITY_TAIL installed",
+                   "tail": "PRIORITY_TAIL installed", "audit": "STRATEGY_AUDIT installed",
                    "timeoutfix": "TIMEOUT_FIX installed", "reap": "REAP448 applied kept=448"}
 VARIANT_BLURB = {
     "histcache": "A history cache (in-memory game history, compact batched state writes, a per-frame ascii "
@@ -147,6 +157,13 @@ VARIANT_BLURB = {
             "25 makes A collapse after a few dozen actions, and on the last level A is all there is) and the last "
             "level gets the future bonus B = 5 (as with one level left) instead of 0. Both set at runtime in the "
             "install cell; scheduling only, nothing the model sees changes.",
+    "audit": "Strategy audit (lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT, ported with three harness "
+             "references adapted; provenance in kaggle_submission_milestone2_fork/strategy_audit/NOTICE.md in our "
+             "repo): once a game has generated 56,000 tokens (about a quarter of its expected token share) on one "
+             "level since the level started or since the last audit, the next turn opener ends with a short audit "
+             "asking the model to check its approach against the observations and, only if unsupported, test one "
+             "assumption with one discriminating experiment. Appended to the user prompt only (no system-prompt or "
+             "history change, so no cache cost); installed by its own cell.",
     "timeoutfix": "Sandbox-timeout fix (JustAdev742's ours-sandbox-timeout-keeps-work.patch, Apache-2.0, installed "
                   "at runtime): a python call that times out no longer wipes every retained helper function; "
                   "`time` is importable in the sandbox.",
@@ -216,13 +233,19 @@ def check_serving(variants) -> None:
             raise SystemExit("REFUSING TO BUILD -- Mamba cache // 5 < streams: SGLang would cap running requests")
 
 
+# harness variants that ride on a turbo preset as slug suffixes, in this order:
+# turbo-lossless + tail + audit -> arc3-m2-turbo-lossless-tail-audit
+PRESET_EXTRAS = ("tail", "audit")
+
+
 def _preset(names) -> tuple[str, str] | None:
     """(slug, dir name) of a turbo preset, optionally plus the priority-gate variant `tail`."""
-    core, extra = set(names) - {"tail"}, "tail" in names
+    core = set(names) - set(PRESET_EXTRAS)
+    extras = [v for v in PRESET_EXTRAS if v in names]
     for preset, slug, dirname in ((TURBO, TURBO_SLUG, "kaggle_submission_m2_turbo"),
                                   (TURBO_LOSSLESS, TURBO_LOSSLESS_SLUG, "kaggle_submission_m2_turbo_lossless")):
         if core == set(preset):
-            return (slug + "-tail", dirname + "_tail") if extra else (slug, dirname)
+            return slug + "".join("-" + v for v in extras), dirname + "".join("_" + v for v in extras)
     return None
 
 
@@ -275,6 +298,7 @@ def resolves_inputs(variants) -> bool:
 def kernel_counters(variants) -> list[str]:
     names = variant_names(variants)
     return (["level_memory_summary.json"] + ["history_cache_summary.json"] * ("histcache" in names)
+            + ["strategy_audit_summary.json"] * ("audit" in names)
             + ["timeout_fix_summary.json"] * ("timeoutfix" in names))
 
 
@@ -323,10 +347,45 @@ def history_cache_cell() -> dict:
             "source": src.splitlines(True)}
 
 
+SA_ENV = "ARC3_STRATEGY_AUDIT_TOKENS"
+SA_TOKENS = 56000   # 25% of ~228K expected generated tokens per game (200K incumbent x1.14 turbo-lossless)
+SA_DUMP = (
+    "try:   # [calamitychasm] strategy audit counters\n"
+    "    (WORKING_DIR / 'strategy_audit_summary.json').write_text(json.dumps(STRATEGY_AUDIT.summary(), indent=2))\n"
+    "    print('STRATEGY_AUDIT summary', json.dumps(STRATEGY_AUDIT.summary()), flush=True)\n"
+    "except Exception as _exc:\n"
+    "    print('STRATEGY_AUDIT summary failed', repr(_exc), flush=True)\n"
+)
+
+
+def strategy_audit_cell() -> dict:
+    src = (
+        "# [calamitychasm] STRATEGY AUDIT (variant audit) -- see experiments/stage7_milestone2_improvements.md section 5.\n"
+        "# lordhansolo's Milestone-2 strategy-audit prompt on a per-level token clock. Wraps\n"
+        "# ToolAgent._build_user_prompt AFTER solved-level memory (whose wrapper it calls) and appends to the turn\n"
+        "# opener only. Provenance: kaggle_submission_milestone2_fork/strategy_audit/NOTICE.md in our repo.\n"
+        "import os as _os, sys as _sys, types as _types\n"
+        f"_os.environ[{SA_ENV!r}] = '{SA_TOKENS}'   # generated tokens on one level per audit\n"
+        f"_SA_SRC = r'''{SA_SRC}'''\n"
+        "STRATEGY_AUDIT = _types.ModuleType('strategy_audit')\n"
+        "_sys.modules['strategy_audit'] = STRATEGY_AUDIT\n"
+        "exec(compile(_SA_SRC, 'strategy_audit.py', 'exec'), STRATEGY_AUDIT.__dict__)\n"
+        "import inference.agent.tool_agent as _sa_ta\n"
+        "assert _sa_ta.ToolAgent._lm_installed, 'solved-level memory must be installed first'\n"
+        "assert STRATEGY_AUDIT.install(_sa_ta.ToolAgent)\n"
+        "assert _sa_ta.ToolAgent._build_user_prompt.__module__ == 'strategy_audit'\n"
+        f"assert STRATEGY_AUDIT.audit_tokens() == {SA_TOKENS}\n"
+        "assert _os.environ.get('ARC3_YIELD_RESUME_PROMPT', '') == '', 'a resumed turn must re-send the full opener'\n"
+        "print('STRATEGY_AUDIT installed', json.dumps(STRATEGY_AUDIT.summary()), flush=True)\n"
+    )
+    return {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+            "source": src.splitlines(True)}
+
+
 # variant -> builder of a cell inserted right after the level-memory install cell (before the run cell)
-VARIANT_CELLS = {"histcache": history_cache_cell}
+VARIANT_CELLS = {"histcache": history_cache_cell, "audit": strategy_audit_cell}
 # variant -> lines appended to the run cell's counter dump
-VARIANT_RUN_DUMP = {"histcache": HC_DUMP}
+VARIANT_RUN_DUMP = {"histcache": HC_DUMP, "audit": SA_DUMP}
 
 
 # ------------------------------------------------------------------ turbo variants (JustAdev742, Apache-2.0)
@@ -735,7 +794,7 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "inputs"}) else
+          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "audit", "inputs"}) else
              TURBO_NOTE if accept_value(variants) is not None else TURBO_NOTE_LOSSLESS)))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
@@ -777,6 +836,9 @@ def main(argv=None) -> int:
     ap.add_argument("--prio-tail", action="store_true",
                     help=f"priority gate: h={TAIL_HUMAN_ACTIONS:g} in A, last-level B={TAIL_FINAL_B:g} "
                          "(kernel arc3-m2-lm-tail; with a turbo preset, its slug + -tail)")
+    ap.add_argument("--strategy-audit", action="store_true",
+                    help="lordhansolo's strategy-audit prompt once a level has used ~25%% of a game's token share "
+                         "(with --turbo-lossless --prio-tail: arc3-m2-turbo-lossless-tail-audit)")
     ap.add_argument("--turbo", action="store_true",
                     help="all of: " + " ".join(TURBO) + f" -> calamitychasm/{TURBO_SLUG}")
     ap.add_argument("--turbo-lossless", action="store_true",
@@ -786,7 +848,8 @@ def main(argv=None) -> int:
         raise SystemExit("REFUSING TO BUILD -- --turbo and --turbo-lossless are different presets")
     variants = (["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
-                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail)
+                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail
+                + ["audit"] * args.strategy_audit)
     if args.spec_accept is not None and args.spec_accept != 1.0:
         variants.append(accept_token(args.spec_accept))
     if args.streams is not None and args.streams != 10:
