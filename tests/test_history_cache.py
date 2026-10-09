@@ -392,6 +392,8 @@ def test_built_kernels_match_the_incumbent_except_the_additions(variants):
     inc = json.loads((inc_dir / "arc3-m2-level-memory.ipynb").read_text(encoding="utf-8"))
     new = json.loads((new_dir / f"{slug}.ipynb").read_text(encoding="utf-8"))
     assert check_notebook(new_dir / f"{slug}.ipynb") == []
+    import _m2_input_resolver
+    _m2_input_resolver.apply_input_resolver(inc)     # variants carry the mount-layout input resolver
     src_inc = ["".join(c["source"]) for c in inc["cells"]]
     src_new = ["".join(c["source"]) for c in new["cells"]]
     extra = [build.VARIANT_CELLS[v]() for v in variants if v in build.VARIANT_CELLS]

@@ -63,6 +63,7 @@ we hold**, not 33. See `experiments/stage7_m2_level_memory.md`.
      --version 1 --message "m2 level memory draw N" \
      --marker "LEVEL_MEMORY installed" --marker "priority gate active" \
      --marker "harness patch applied successfully" --counters level_memory_summary.json
+   # kernels built with a variant also need: --marker "INPUT_RESOLVED" (the v1 incumbent prints no such line)
    # add --arm "YYYY-MM-DD HH:MM" (UTC) to schedule it as a one-shot Windows task
    ```
    Or by hand: `kaggle competitions submit -c arc-prize-2026-arc-agi-3 -k calamitychasm/arc3-m2-level-memory -v 1 -f submission.parquet -m "..."`.
@@ -246,17 +247,24 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   {"id": "turbo-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo/notebook"}]}
   {"id": "turbo-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo",
     "grep": ["REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "SPEC_ACCEPT 0.5", "ARC_HOTMAP sha=",
-             "TIMEOUT_FIX installed", "HISTORY_CACHE installed", "priority gate active: 14 concurrent streams"]}]}
+             "TIMEOUT_FIX installed", "HISTORY_CACHE installed", "priority gate active: 14 concurrent streams",
+             "INPUT_RESOLVED", "INPUT_MISSING"]}]}
   {"id": "turbo-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo", "version": 1,
     "message": "m2 turbo draw 1",
     "markers": ["LEVEL_MEMORY installed", "priority gate active: 14 concurrent streams",
-                "harness patch applied successfully", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+                "harness patch applied successfully", "INPUT_RESOLVED", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
                 "REAP448 applied kept=448", "SPEC_ACCEPT 0.5",
                 "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f"],
     "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
     "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
                      "timeout_fix_summary.json": ["errors"]}}]}
   ```
+  Every kernel built with a variant (histcache, triedfacts, turbo, spd-*, speed-*, vllm-*, `arc3-m2-lm-inputs`)
+  resolves its inputs in either Kaggle mount layout and logs one `INPUT_RESOLVED <name> -> <path> (via ...)`
+  line per input (5 for the SGLang kernels), or `INPUT_MISSING <name>` plus what it searched and an error. Put
+  `"INPUT_RESOLVED"` in `markers` for those kernels (`kernel_markers()` in the builder includes it) and grep
+  `INPUT_MISSING` in `kernel_output`. The incumbent v1 hardcodes the newer layout and prints neither; do not add the marker to its
+  submit gate. Kernels pushed before 2026-10-09 predate the resolver: rebuild and push a new version first.
   `kernel_output` prints the speed digest (gen tok/s, retractions, accept length, KV pool/peak) used by the
   turbo pass criteria; read it before arming `submit`.
 
@@ -4501,6 +4509,22 @@ specifically -- use the free unconditional-diagnostic-cell trick described
 above to narrow it down without spending more of the daily quota.
 
 ## Gotchas learned the hard way (don't re-discover these)
+
+- **(2026-10-09) Kaggle mounts inputs in TWO layouts, per session, not per kernel.** The same kernel gets
+  `/kaggle/input/{datasets/<owner>,competitions}/<slug>` in one GPU session and the older
+  `/kaggle/input/<slug>` in another (JustAdev742: 5 of 9 sessions on 2026-10-07, `cp: cannot stat
+  .../datasets/dfranzen/taaf-kaggle-source-bundle-copy`; models may likewise be `/kaggle/input/<model>/...`
+  instead of `/kaggle/input/models/<owner>/<model>/...`). Waiting does not help. The incumbent v1 hardcodes
+  the newer layout (hundreds of public copies scored with it, so the scored rerun evidently has it); every
+  derived builder output resolves inputs via `scripts/_m2_input_resolver.py` +
+  `kaggle_submission_milestone2_fork/input_resolver/input_resolver.py` (both layouts, then a depth-4
+  case-insensitive directory-name glob; constants are rewritten, nothing is symlinked because /kaggle/input is
+  read-only) and logs `INPUT_RESOLVED` / `INPUT_MISSING`. Any new notebook must do the same, and its submit gate
+  should require `INPUT_RESOLVED`. Evidence: JustAdev742's
+  `docs/lessons/0030-kaggle-mounts-inputs-in-two-layouts.md` (github.com/JustAdev742/Arc-Agi-3-Kaggle-comp); this repo's
+  own earlier gotchas recorded only the newer nested layout. **The v1 incumbent notebook is committed as Kaggle serialised it;
+  rebuilding it with `_build_m2_level_memory_kernel.py` (no flags) rewrites its JSON formatting, so restore it
+  with `git checkout` after any full rebuild.**
 
 - **(2026-10-05) A Kaggle kernel whose FIRST push is rejected at the 2
   concurrent GPU-session limit never mounts its `dataset_sources`

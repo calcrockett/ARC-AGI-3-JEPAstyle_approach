@@ -94,8 +94,17 @@ def test_incumbent_knobs_are_read_not_retyped():
     assert knobs["max_pixels"] >= 409600
 
 
+def resolved_incumbent_cells():
+    """The incumbent as every derived kernel sees it: with the mount-layout input resolver applied (the
+    committed incumbent v1 itself has none; see tests/test_m2_input_resolver.py)."""
+    import _m2_input_resolver
+    nb = json.loads(INCUMBENT_NB.read_text(encoding="utf-8"))
+    _m2_input_resolver.apply_input_resolver(nb)
+    return ["".join(c["source"]) for c in nb["cells"]]
+
+
 def test_only_serving_cells_differ_from_the_incumbent(built):
-    inc = cells(INCUMBENT_NB)
+    inc = resolved_incumbent_cells()
     for name, path in built.items():
         new = cells(path)
         assert new[0].startswith(f"## [calamitychasm] {b.kernel_slug(name)}")
@@ -135,11 +144,15 @@ def test_env_cell_and_flags(built):
         assert "'ARC3_REASONING_HISTORY_KEY': 'reasoning'," in env
         assert f"'ARC3_MAX_ACTIVE_STREAMS': {n}," in env
         assert "SERVED_MODEL_PORT = 1234" in env and "SERVED_MODEL_NAME = 'flashnext'" in env
-        assert "VLLM_RUNTIME_DIR  = '/kaggle/input/datasets/lordhansolo/vllm-main-e975732-arc3'" in env
-        assert ("VLLM_MODEL_DIR    = '/kaggle/input/models/lordhansolo/qwen3-8-flash-next-mixed-nvfp4-fp8/"
-                "pytorch/hf-mixed-mtp-nvfp4/1'") in env
-        assert "VLLM_BUNDLE_DIR   = '/kaggle/input/datasets/lordhansolo/taaf-kaggle-source'" in env
-        assert "ORIG_BUNDLE_DIR   = '/kaggle/input/datasets/dfranzen/taaf-kaggle-source-bundle-copy'" in env
+        # the paths are resolved against whichever /kaggle/input layout this session mounted
+        assert ("VLLM_RUNTIME_DIR  = resolve_input('vllm_runtime', "
+                "'/kaggle/input/datasets/lordhansolo/vllm-main-e975732-arc3')") in env
+        assert ("VLLM_MODEL_DIR    = resolve_input('vllm_model', "
+                "'/kaggle/input/models/lordhansolo/qwen3-8-flash-next-mixed-nvfp4-fp8/pytorch/hf-mixed-mtp-nvfp4/1')") in env
+        assert ("VLLM_BUNDLE_DIR   = resolve_input('vllm_bundle', "
+                "'/kaggle/input/datasets/lordhansolo/taaf-kaggle-source')") in env
+        assert ("ORIG_BUNDLE_DIR   = resolve_input('orig_bundle', "
+                "'/kaggle/input/datasets/dfranzen/taaf-kaggle-source-bundle-copy')") in env
         # the harness's own sampling stays what the incumbent sends per request
         for k in ("'LOCAL_ANALYZER_TEMPERATURE': '0.7'", "'LOCAL_ANALYZER_TOP_P': '0.95'", "'LOCAL_ANALYZER_TOP_K': '20'"):
             assert k in env

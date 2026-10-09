@@ -33,6 +33,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 from _build_m2_level_memory_kernel import cells_of, set_src, sub  # noqa: E402
+from _m2_input_resolver import apply_input_resolver  # noqa: E402
 
 INCUMBENT = ROOT / "kaggle_submission_m2_level_memory" / "notebook"
 VLLM_SRC = ROOT / "kaggle_submission_m2_vllm"
@@ -265,6 +266,8 @@ def build(name: str, root: Path = ROOT) -> Path:
     i = cell_index(src, "demo_excluded_games = [] if TRUE_SUBMISSION else")
     set_src(nb, i, all_public_games(src[i]))
 
+    apply_input_resolver(nb)     # cell 5's path constants + the competition wheels; the launcher keeps its own
+    src = cells_of(nb)
     launcher = cell_index(src, "PREFIX = \"/tmp/sgl-intel\"")
     assert nb["cells"][launcher - 1]["cell_type"] == "markdown" and "Start serving" in src[launcher - 1]
     nb["cells"][launcher - 1:launcher + 1] = [

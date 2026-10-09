@@ -73,7 +73,10 @@ def test_everything_else_is_the_incumbent(built, name):
     new = _cells(built[name])[1:]            # [0] is the added markdown banner
     assert len(inc) == len(new)
     changed = [(a, b) for a, b in zip(inc, new) if a != b]
-    assert len(changed) == 3                  # launcher CFG(+hicache), streams env, game list
+    # launcher CFG(+hicache), streams env (also the input resolver's helper + path constants), game list --
+    # plus the resolver's two other cells (offline wheel install, offline environment files)
+    assert len(changed) == 3 + 2
+    assert sum("resolve_input(" in b or "COMPETITION_WHEELS_DIR" in b for _, b in changed) >= 3
     joined = "\n".join(b for _, b in changed)
     assert any("LEVEL_MEMORY installed" in c for c in new)
     assert "demo_excluded_games = []" in joined

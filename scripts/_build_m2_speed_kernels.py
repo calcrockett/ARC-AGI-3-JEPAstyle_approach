@@ -30,6 +30,8 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
+from _m2_input_resolver import apply_input_resolver  # noqa: E402
+
 SRC = ROOT / "kaggle_submission_m2_level_memory" / "notebook"
 
 # Flags verified against the Pennyroyal v2.5.3 source (d00d88e, server_args.py) and against
@@ -132,6 +134,7 @@ def build(name: str, knobs: dict, root: Path = ROOT) -> Path:
 
     for c, text in zip(nb["cells"], src):
         c["source"] = text.splitlines(True)
+    apply_input_resolver(nb)     # inputs mount at either /kaggle/input layout (INPUT_RESOLVED in the log)
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": [
         f"## [calamitychasm] SPEED TEST `{name}` -- not a submission\n\n",
         f"Incumbent (milestone-2 fork + level memory) with serving knobs {json.dumps(knobs)}; "

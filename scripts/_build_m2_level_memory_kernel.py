@@ -10,8 +10,14 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
     python scripts/_build_m2_level_memory_kernel.py --tried-facts   # arc3-m2-lm-triedfacts
     python scripts/_build_m2_level_memory_kernel.py --history-cache # arc3-m2-lm-histcache
     python scripts/_build_m2_level_memory_kernel.py --history-cache --tried-facts   # arc3-m2-lm-histcache-triedfacts
+    python scripts/_build_m2_level_memory_kernel.py --input-resolver  # arc3-m2-lm-inputs: incumbent + input resolver only
     python scripts/_build_m2_level_memory_kernel.py --turbo         # arc3-m2-turbo (see below)
     python scripts/_build_m2_level_memory_kernel.py --reap --streams 14   # a subset: arc3-m2-lm-reap-s14
+
+Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
+/kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
+the incumbent notebook) carries scripts/_m2_input_resolver.py's resolver: INPUT_RESOLVED lines, INPUT_MISSING +
+error if absent. The no-variant incumbent (v1, submitted) is built without it and stays byte-identical.
 
 Variant flags compose. Each one adds a suffix, in the fixed order of VARIANT_ORDER, to the kernel slug and
 output dir (e.g. --history-cache --tried-facts -> arc3-m2-lm-histcache-triedfacts); with none, the build
@@ -49,6 +55,8 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
+from _m2_input_resolver import MARKER as INPUT_MARKER, apply_input_resolver  # noqa: E402
+
 
 
 def sub(text: str, old: str, new: str, what: str) -> str:
@@ -75,8 +83,8 @@ assert "'''" not in HC_SRC, "module source must not contain ''' (it is inlined i
 INCUMBENT = "arc3-m2-level-memory"
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25")
-_FIXED_KINDS = ("histcache", "triedfacts", "timeoutfix", "reap", "hotmap", "all25")
+VARIANT_ORDER = ("histcache", "triedfacts", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
+_FIXED_KINDS = ("histcache", "triedfacts", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
 MAX_STREAMS = 14              # 16 was measured by nobody on this stack and adds retractions at long contexts
@@ -110,6 +118,10 @@ VARIANT_BLURB = {
               "Apache-2.0) instead of Pennyroyal's generic 64k map.",
     "all25": "The non-submission check run plays all 25 public games (the speed kernels' shape); the "
              "competition rerun is unchanged.",
+    "inputs": "Input paths are resolved in either Kaggle mount layout (/kaggle/input/datasets/<owner>/<slug> or "
+              "/kaggle/input/<slug>, plus a directory-name glob) before anything reads them; every build with a "
+              "variant does this (INPUT_RESOLVED lines in the log, INPUT_MISSING and an error if absent). "
+              "This variant is the incumbent with only that change.",
 }
 
 
@@ -189,6 +201,8 @@ def kernel_markers(variants) -> list[str]:
     """Every log marker the check run of this kernel must show (the incumbent's three first)."""
     names = variant_names(variants)
     out = ["LEVEL_MEMORY installed", "priority gate active", "harness patch applied successfully"]
+    if resolves_inputs(names):
+        out.append(INPUT_MARKER)
     for v in names:
         k = _kind(v)
         if k in VARIANT_MARKERS:
@@ -200,6 +214,13 @@ def kernel_markers(variants) -> list[str]:
         elif k == "streams":
             out.append(f"priority gate active: {streams_value(names)} concurrent streams")
     return out
+
+
+def resolves_inputs(variants) -> bool:
+    """Every build except the incumbent v1 (no variants, byte-identical to what was submitted) resolves
+    /kaggle/input in either mount layout. The `inputs` variant is that and nothing else: a hardened
+    incumbent under its own slug (arc3-m2-lm-inputs)."""
+    return bool(variant_names(variants))
 
 
 def kernel_counters(variants) -> list[str]:
@@ -619,6 +640,8 @@ def build(variants=()) -> Path:
     check_serving(variants)
     nb = json.loads(UPSTREAM.read_text(encoding="utf-8"))
     serving_edits(nb, variants)      # upstream cells only, before any insertion
+    if resolves_inputs(variants):
+        apply_input_resolver(nb)
     src = cells_of(nb)
     run_idx = [i for i, s in enumerate(src) if s.startswith("print('Starting benchmark...')")]
     assert len(run_idx) == 1, run_idx
@@ -639,7 +662,7 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (TURBO_NOTE if {_kind(v) for v in variants} - {"histcache", "triedfacts"} else ""))
+          + (TURBO_NOTE if {_kind(v) for v in variants} - {"histcache", "triedfacts", "inputs"} else ""))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
     d = kernel_dir(variants)
@@ -669,12 +692,15 @@ def main(argv=None) -> int:
                     help=f"N concurrent streams (11..{MAX_STREAMS}; > {MAX_STREAMS_WITHOUT_REAP} needs --reap)")
     ap.add_argument("--check-all25", action="store_true",
                     help="the non-submission check run plays all 25 public games (speed-kernel shape)")
+    ap.add_argument("--input-resolver", action="store_true",
+                    help="the incumbent plus only the mount-layout input resolver (kernel arc3-m2-lm-inputs); "
+                         "every other variant already includes the resolver")
     ap.add_argument("--turbo", action="store_true",
                     help="all of: " + " ".join(TURBO) + f" -> calamitychasm/{TURBO_SLUG}")
     args = ap.parse_args(argv)
     variants = (["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
-                + ["all25"] * args.check_all25)
+                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver)
     if args.spec_accept is not None and args.spec_accept != 1.0:
         variants.append(accept_token(args.spec_accept))
     if args.streams is not None and args.streams != 10:
@@ -693,7 +719,7 @@ def main(argv=None) -> int:
         return 1
     print("built", path)
     names = variant_names(variants)
-    if set(names) - {"histcache", "triedfacts"}:
+    if names:
         print("markers:", "; ".join(kernel_markers(names)))
         print("counters:", " ".join(kernel_counters(names)))
     return 0
