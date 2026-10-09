@@ -1,1 +1,1 @@
-{"id": "tla-push-1", "ops": [{"op": "status"}, {"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless_tail_audit/notebook"}]}
+{"id": "tla-push-2", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless_tail_audit/notebook"}]}
