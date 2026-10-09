@@ -151,9 +151,7 @@ So KV demand scales linearly with streams while the pool barely grows.
 Incumbent pool 1,011,264 FP8 tokens (0.96); peak usage 0.91 in the 10-game check (~920K tokens), 0.98-0.99 in the
 25-game speed shape. Per-stream footprint at that peak ~92-100K tokens (running contexts plus retained prefixes of
 parked games). Pool estimate (his run: ~12.9 KB/token all pools, 1% of 95 GiB ~ 0.95 GiB ~ +73K tokens):
-`m97s12` and `m97s12hic` ~ 1.011M + 73K - 52K (Mamba 72) ~ **1.03M (+2%)**; `m96s12hic` ~ 0.96M-0.98M... i.e. the
-0.96 variant has ~ 1.01M - 52K ~ **0.96M (-5%)**; the log prints the true `#tokens`. Demand at 12 streams ~
-1.10-1.20M => **107-116% of the pool** (vs 91-99% at 10); the worst case 12 x 128K = 1.54M. Without the host tier
+`m97s12` and `m97s12hic` ~ 1.011M + 73K - 52K (Mamba 72) ~ **1.03M (+2%)**; `m96s12hic` (no extra 1%) ~ 1.011M - 52K ~ **0.96M (-5%)**; the server log prints the true `#tokens`. Demand at 12 streams ~ 1.10-1.20M => **107-116% of the 1.03M pool (115-125% of 0.96M)**, against 91-99% at 10 streams; the worst case 12 x 128K = 1.54M. Without the host tier
 the surplus is paid by radix evictions (re-prefill of parked games, prefix reuse falls from the ~93% baseline) and,
 if no evictable pages remain, retractions. With the tier, evicted pages are already write-through-backed and are
 loaded back over PCIe instead of re-prefilled. Decode itself was flat 9 -> 10 streams (757 -> 709 median tok/s),
