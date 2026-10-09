@@ -573,3 +573,58 @@ Two changes made:
   re-reads serve.log after `bm.run` (`REAP448 applied kept=448 (post-run) | ...`; never raises).
 - **`docker_image_pinning_type: "original"`** in every variant kernel's metadata (incumbent v1 untouched), as in
   JustAdev742's lesson 0029: Kaggle's latest image moved to Python 3.13 while the wheelhouse is cp312 only.
+
+## FP4 KV cache on this stack: CLOSED, not supported (2026-10-09, source audit, nothing built)
+
+Question: can turbo-tail (FP8 KV, 1,477,888-token pool, 14 streams, KV peak 0.93) swap to a 4-bit KV cache and run
+16-18 streams? Audited Pennyroyal at the pin dfranzen's bundle builds (`d00d88efc8d6`,
+`jpezzulli/sglang-rtxpro6000`; paths below are under `python/sglang/srt/`). **Answer: no.** The flag parses and the
+pool allocates, but the attention kernels this model uses cannot read an FP4 pool.
+
+- **Flag values.** `server_args.py` L722-746 lists `nvfp4`, `fp4_mx_block16`, `fp4_e2m1`. `fp4_e2m1` raises
+  "deprecated, use fp4_mx_block16" (`layers/quantization/fp4_kv_cache_quant_method.py` L814-818). `nvfp4` is
+  SM100/SM120 only (`server_args.py` L6635-6641; the RTX Pro 6000 is SM120, so the check passes).
+- **The full-attention layers always run `QwenSparseAttnBackend`.** For a hybrid-GDN model with a QSA config,
+  `layers/attention/attention_registry.py` L459-467 (`is_qwen_qsa`, L461) replaces the full-attention backend with QSA regardless of
+  `--attention-backend`. The FP4 access rules
+  (`fp4_kv_cache_quant_method.py` L714-719, L777-790) cover only `flashinfer` prefill + `trtllm_mha` decode (nvfp4) and
+  `triton/torch_native/flex_attention/trtllm_mha/fa4` (fp4_mx_block16). Only `flashinfer_backend.py` L324 and
+  `trtllm_mha_backend.py` L143 consult them; `qwen_sparse_attn_backend.py` never does (zero `fp4` references in it
+  or in `layers/attention/qsa/`).
+- **What QSA would actually read.** Prefill (`qwen_sparse_attn_backend.py` L1633, L1664) and decode (L1877 ->
+  `_forward_trtllm_sparse`, `bmm2_scale=1.0` at L1845) both call `pool.get_key_buffer(layer)` /
+  `get_value_buffer(layer)` on the **whole layer** and hand it to Triton kernels that upcast elementwise
+  (`qsa/sparse_attn.py`) or to trtllm-gen with no KV scale.
+  - `nvfp4`: the buffer comes back as packed `uint8` `[tokens, 2, 128]` with separate FP8 block scales the QSA path
+    never reads (no PLAIN access rule, so `memory_pool.py` L2440-2453 returns the raw buffer). Head-dim mismatch or
+    silent garbage.
+  - `fp4_mx_block16`: it declares PLAIN-with-storage, so `get_key_buffer` **dequantizes the entire layer pool on
+    every call** (`memory_pool.py` L2443-2450 -> `kvfp4_tensor.py` `batched_dequantize`, which materialises `uint8`,
+    `int64` (L137 `magnitude_idx.long()`) and `float32` copies of every element). At ~2.6M FP4 tokens that is 1.35G
+    elements per K per layer, i.e. >10 GB of int64 alone, against ~4 GB free at mem 0.96: **OOM on the first
+    forward**. Even if memory allowed it, 12 layers x 2 x a full-pool dequant per forward would cost more than the
+    current ~50 ms decode step.
+- **Why FP8 works when the old note said "QSA requires a BF16 main KV cache".** That note (CLAUDE.md "Closed lines",
+  2026-09) was the **vLLM** Duck/NVFP4 stack. Pennyroyal's QSA path has no dtype gate. FP8 e4m3 works because it is
+  a plain elementwise dtype with scale 1.0: the Triton kernels cast on load, and trtllm-gen decode takes FP8 KV
+  natively. The indexer's own compressed-key cache is always BF16 (`mem_cache/qsa_kv_pool.py` L36), independent of
+  `--kv-cache-dtype`. No other smaller dtype exists: `fp8_e5m2` is the same 1 B/elem, and `mxfp8` is larger.
+- **sirikilohit** (`ext/LohitSiriki_arc-agi-3-milestone2-solution`, README L17, WRITEUP L90-100,
+  `run/sglang_boot_result.json`): **FP8 e4m3** KV, 1,004,288 tokens, **16 streams**, mem 0.97, `--hicache-size 48`,
+  and **context 69,632** (trimmed at 57,344 back to 45,056). His 16 streams come from roughly half our per-stream
+  context, not from a smaller KV dtype.
+
+**KV arithmetic (for the record).** Geometry from his boot log: FP8 K 5.75 GiB / 1,004,288 tokens = 6,144 B
+= 12 full-attention layers x 2 KV heads x 256 dim; K+V = 12,288 B/token (+1,024 B for the MTP draft layer). FP4
+block-16 = 0.5625 B/elem -> 6,912 B/token, 1.78x the tokens in the same bytes: turbo's 1.48M would become ~2.63M
+(+1.15M). At turbo-tail's measured peak (0.93 x 1.48M / 14 streams = ~98K tokens/stream) that would hold ~25
+streams. The arithmetic is moot without FP4 reads in the QSA kernels; a port of them is not a check-run-sized change.
+
+**Next best route to more streams: the host KV tier on top of turbo-tail.** turbo-tail + `--enable-hierarchical-cache
+--hicache-size 32` (host budget unchanged by REAP: ~23 GiB left after the tier, see Round 3) + 16 streams (Mamba
+cache 96 = 6/stream as now). Demand ~16 x 98K = 1.57M vs the 1.48M device pool (6% over) is the regime the ~1.75M-token
+host tier exists to absorb, and it is exactly sirikilohit's working combination (16 streams + host tier + FP8). Risk:
+the host tier has never run on our stack (the incumbent-based `m96s12hic` is built, never run), and the Mamba-retention
+patch skips write-through on non-branch chunks. A builder flag (`--hicache-gb N`, refusing > 40) on
+`_build_m2_level_memory_kernel.py` layered on `--turbo --prio-tail --streams 16` is the change; pass bar as below (gen
+tok/s >= +8% over 772.4) plus `hicache_attached=True` and `MemAvailable` >= 10 GiB in every census line.

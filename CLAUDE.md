@@ -268,13 +268,20 @@ tokens / ~110 games = ~200K tokens per game, against a per-level reference of
    (lordhansolo, vLLM, KV 1.42M) and 16 (sirikilohit, 1.0M + 48 GB host tier)
    streams for peak decode 1,135-1,159 vs our 946. Untested here: 12/14 streams
    and the 32 GB system-RAM KV tier. They need KV room from a smaller KV dtype
-   (NVFP4 KV reportedly costs little NLL vs FP8), shorter retained context, or
+   (NVFP4 KV: NOT supported on this QSA model, see 2. below), shorter retained context, or
    the host tier -- **not** from the static memory fraction.
 2. **Closed in section 14 (do not retry):** 4 draft tokens is impossible (Qwen
    QSA caps `speculative_num_draft_tokens` at 4; 3 steps already uses it);
    `--mem-fraction-static 0.98` OOMs at runtime (lazily loaded Triton kernels
    need the ~4 GB that 0.96 leaves). Baseline throughput is reproducible
    (577.8 / 576.5 tok/s).
+   **FP4 KV is not supported for this model** (2026-10-09 source audit, nothing
+   built): Pennyroyal's QSA backend, which always serves the full-attention
+   layers, has no FP4 read path. `nvfp4` hands it packed uint8; `fp4_mx_block16`
+   dequantizes the whole layer pool per forward and OOMs. FP8 is the smallest
+   usable KV dtype. sirikilohit's 16 streams came from a 69,632 context, not
+   from a smaller dtype. Next route: host tier on turbo-tail
+   (`experiments/stage7_m2_speed.md`, "FP4 KV cache on this stack").
 3. **Strategy-audit prompt** at 25% of a game's time (lordhansolo's extra).
 4. **Longer retained history** with freed KV (one team went 14.5 -> 22.5 mainly
    on this; sirikilohit's biggest step was the same change).
