@@ -324,3 +324,126 @@ model's (`https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound/resolv
   plus `VLLM_SERVING active`; no traceback outside serving teardown; every game won/gave_up/cancelled.
 - If both pass: the gated submitter takes `--marker "VLLM_SERVING active"` in addition to the usual three. Even then,
   ranking needs hidden-set draws (n >= 3, interleaved with the incumbent), because the weights changed.
+
+## Turbo kernel: JustAdev742's measured serving config on our stack (2026-10-09, built, not yet run)
+
+Kernel **`calamitychasm/arc3-m2-turbo`** (`kaggle_submission_m2_turbo/notebook/`), built by
+`python scripts/_build_m2_level_memory_kernel.py --turbo` = the incumbent (milestone-2 fork + level memory)
+**+ history cache + sandbox-timeout fix + REAP-448 + MTP acceptance 0.5 + ARC FR-Spec map + 14 streams**, with the
+check run in the speed kernels' shape (25 public games x 25 min; the competition rerun is unaffected). Every piece
+is a separate builder flag, so subsets build too (`--timeout-fix`, `--reap`, `--spec-accept X`, `--arc-hotmap`,
+`--streams N`, `--check-all25`; e.g. `--reap --streams 14` -> `arc3-m2-lm-reap-s14`). The existing kernels
+(histcache / triedfacts / both) rebuild byte-identical. Provenance and the vendored files:
+`kaggle_submission_milestone2_fork/turbo/` (`NOTICE.md`; JustAdev742, Apache-2.0).
+
+### Source and why it transfers
+
+JustAdev742 (github.com/JustAdev742/Arc-Agi-3-Kaggle-comp; Kaggle team "Jovian Game Studios", kernels
+`scottmahony/...`) runs **exactly our serving stack**: Franzen's notebook (same sha256 `7b76c194...` as our
+`upstream/` copy), the same Pennyroyal v253 wheel (`sglang-0.5.19+gd00d88efc8d6`), Intel's W4A16 checkpoint, the
+albucino MTP draft, and the same base FR-Spec map (`becfa41d...` = our `TOKEN_MAP_SHA`). Their harness differs:
+they run D' (Franzen's notebook with a different slot priority), we run Franzen's priority gate + level memory
+(+ history cache here).
+
+### Mechanism
+
+| change | what it does | where in the notebook |
+|---|---|---|
+| **REAP-448** | the target loads 448 of its 512 routed experts per layer (the set the public `REAP-k448` build keeps; recovered bit-exactly from router rows, checked at load against per-layer router sha256s). Frees 7.31 GiB of weights -> KV pool ~1.01M -> **1,477,888 tokens** (their serve.log). The MTP draft keeps 512 experts (`--speculative-draft-model-override-args '{}'`). | cell before the launcher writes `sglang_reap_patch.py`, the kept list (shipped as the 64 pruned ids per layer, rebuilt byte-identical, sha256 checked) and its meta; launcher: `apply` on the installed `qwen4_exp.py` right after `env.update` (sha256-locked file, two anchors; **raises, stopping the cell before the server starts**, on any mismatch), `ARC3_REAP_KEPT_EXPERTS` in the server env, `--json-model-override-args '{"text_config": {"num_experts": 448}}'` |
+| **14 streams** | MAXREQ 14, CUDA-graph max bs 14 (graph list `{1,2,4,7,8,9,10,14}`; 11-13 pad to 14), Mamba cache 84 (= 6/stream; 84 // 5 = 16 >= 14), `ARC3_MAX_ACTIVE_STREAMS` 14; **mem fraction stays 0.96** | CFG + setup cell |
+| **acceptance 0.5** | `--speculative-accept-threshold-single/acc 0.5` (incumbent 1.0 = lossless): a draft token is also accepted when the target is confident enough -- roughly a lower effective temperature. **Lossy by design.** | CFG |
+| **ARC FR-Spec map** | the MTP draft may only propose tokens in its 64k hot map; Pennyroyal's generic map misses 1.2-1.5% of this harness's output tokens ("Hmm", " BFS", ".ascii", grid runs). JustAdev742's map (same size) covers 99.9%. Lossless. | cell before the launcher writes it (runs of ids, base64, no zlib; torch.save zip layout with fixed records -> sha256 `ec15348b1186...`, byte-identical to what their builder writes); `TOKEN_MAP_SHA` replaced, so the launcher's own assert checks it |
+| **timeout fix** | a python call that hits the 30 s sandbox timeout returns no `keepable_functions`, and `_record_retained_functions` then dropped **every** retained helper (Franzen's demo: r11l lost 13 helpers to one timeout, then 10 min with 1 action). Now the previous functions stay and the payload says so; `time` joins SAFE_MODULES. Installed at runtime (`timeout_fix.py` wraps the method and edits the bootstrap string), so the harness patch cell stays verbatim; raises on a missing anchor. | own cell after the history cache cell |
+
+**Stream count chosen: 14**, their measured best on this stack. 16 is not built (the builder refuses > 14): in their
+full-length run at 14 the pool peaked at 0.99 with 12.3 of 14 running and a queue of at most 1, so 16 would mostly add
+retractions at long contexts; nobody measured it. The builder also refuses > 12 streams without `--reap` (the 1.01M
+pool is oversubscribed past 12; see Round 3) and Mamba cache // 5 < streams. Mem fraction is left at 0.96 (0.98 OOMs,
+Round 2); their 14-stream runs at 0.96 had >= 0.95 GiB minimum free device memory (Franzen's v3: 0.87 GiB).
+
+### Their evidence (same conditions = D', 25 public games x 25 min; their `docs/research_log.md`, 2026-10-07/08)
+
+| gate | output tok/s | decode p50 at 10 running | mean running | MTP accept length |
+|---|---:|---:|---:|---:|
+| base, 10 streams (exp-072a) | 641.9 | 783 | 9.28 / 10 | 2.64 |
+| REAP-448 + 14 streams (exp-072f) | 733.2 (+14%) | 811 | 12.58 / 14 | 2.64 |
+| + acceptance 0.5 (exp-072g) | **819.3 (+28%)** | 920-1004 at 12-14 running | 12.57 / 14 | 3.06 |
+
+Output tokens per request unchanged (1,718 vs 1,718): no sign of longer/looping outputs under lossy acceptance.
+Full length (121 min/game, public 25): REAP + 14 alone 49.45 (735 tok/s); + acceptance 0.5 **56.00** (791 tok/s, accept
+3.10) and a repeat **42.89** -- against Franzen v3's four passes 45.6-47.5. The FR-Spec map: accept 3.15 vs 3.09-3.10,
+decode +2% (exp-077). Their elasticity estimate: score ~ 0.6-0.8 x tokens.
+
+**Fidelity probe** (154 logged requests, greedy, logprobs, prefix cache flushed): REAP-448 mean |delta logprob| on the
+agreed prefix 0.048 vs a cross-run noise floor 0.038 (ratio ~1.3), prefix share before divergence 0.075 vs 0.12-0.13;
+the shift is **confined to image turns** (fresh-frame turns 0.054 vs 0.037; text/tool turns 0.038 vs 0.038), largest
+on vc33/ft09/tn36. They kept REAP (no score loss visible; vc33/tn36 won in the 56.00 run).
+
+**Their LB draw of this serving config** (exp-074t = D' + REAP-448 + 14 streams + acceptance 0.5 + timeout fix):
+submission 56980485, 2026-10-09 00:14 UTC -- **still PENDING** in their log at the time of this port (their repo
+`fe2ad06`, 03:53 UTC). Read it before the first turbo submission; their D' copy at 10 streams drew 28.87 (2026-10-08).
+
+### Risks
+
+- **Quality (REAP)**: calibrated on agentic text traffic, not ARC; the measurable shift lives on image turns, which
+  every turn of ours has. Public-25 scores (n=2, 56.00 / 42.89) cannot resolve a few points.
+- **Quality (acceptance 0.5)**: changes the sampled distribution (lossy). Measured output length unchanged; quality
+  only through scores.
+- **Our harness differs from theirs** (Franzen priority + level memory + history cache vs D'): KV demand per stream
+  may differ; read the KV peak and retractions.
+- **Startup failure**: an apply failure raises in the launcher (no server, no run) -- intentional; a failure inside
+  the server (router sha mismatch) leaves the notebook running against a dead server, as upstream does for any
+  server failure. The launcher prints `REAP448 applied kept=448 | ...` only when serve.log shows the server's own
+  `ARC3 REAP: kept 448 of 512 ... router sha256 verified` line, else `REAP448 NOT CONFIRMED` (gate fails).
+- **Input mount layout**: JustAdev742 saw 5 of 9 GPU sessions get the older `/kaggle/input/<slug>` layout (their
+  `--input-fallback`). Our notebooks hardcode the newer `/kaggle/input/datasets/...` layout, which every one of our
+  runs so far got; a mount failure shows as `cp: cannot stat` in the first minute (not specific to turbo).
+- **Check-run confound**: base 577.8 was measured without the history cache; turbo includes it (host-side only).
+
+### Check run: pass / kill criteria (25 games x 25 min, the base shape; one run)
+
+- **Markers** (notebook log; `python scripts/_build_m2_level_memory_kernel.py --turbo` prints the list):
+  `LEVEL_MEMORY installed`, `priority gate active: 14 concurrent streams`, `harness patch applied successfully`,
+  `HISTORY_CACHE installed`, `TIMEOUT_FIX installed`, `REAP448 applied kept=448`, `SPEC_ACCEPT 0.5`,
+  `ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f`; no `REAP448 NOT CONFIRMED`.
+- **Primary**: generated tok/s (summary.txt) **>= 664.5 (+15% over base 577.8)** on the same shape; their
+  same-conditions gain was +28%, so 664 is a deliberately loose floor. Kill below 606.7 (+5%).
+- **Guards**: retraction lines in serve.log **<= 2x base**; no OOM (`CUDA out of memory`, `Killed`), serving stays up;
+  KV pool `#tokens` ~1.45-1.5M and its peak recorded; prefix reuse >= 90%; median `#running-req` >= 12; MTP accept
+  length reported (expect ~3.0-3.15 vs base 2.62); serve.log `server_args` show
+  `'json_model_override_args': '{"text_config": {"num_experts": 448}}'` and
+  `'speculative_draft_model_override_args': '{}'`; the draft's `Load weight end ... Qwen4ExpForCausalLMMTP` memory
+  unchanged (~3.79 GB, proof the draft kept 512 experts).
+- **Counters**: `history_cache_summary.json` as in the histcache criteria (`errors`, `write_fallbacks`,
+  `payload_plain`, `view_misses`, `loads_stale` all 0; `payload_delta` >> `payload_full`);
+  `level_memory_summary.json` `errors == 0`; `timeout_fix_summary.json` `errors == 0` (`timeouts_kept` is reported:
+  how many timeouts would have wiped helpers).
+- No traceback outside serving teardown; every game won/gave_up/cancelled.
+
+**Score pre-registration.** If the serving gain transfers (+28% tokens) and their elasticity holds, the expected
+effect is roughly +17-22% score over the incumbent's 30.47 (sd 2.21, n=4), i.e. ~35-37 -- but REAP and lossy
+acceptance can cost quality that no throughput number shows. One draw is a catastrophe check only (< 22 fails:
+more than 2 sd of the fork's draw noise, 3.93, below the incumbent's mean). Adoption needs n >= 3 draws interleaved in time with the incumbent
+(or histcache) arm; the final-selection rules in CLAUDE.md apply. If the bundle loses, ablate on the check-run shape
+first (`--reap --streams 14` vs `--spec-accept 0.5` alone), not on submissions.
+
+### Commands
+
+Build (idempotent; tests pin the committed notebook): `python scripts/_build_m2_level_memory_kernel.py --turbo`.
+
+Dev box:
+```
+set PYTHONUTF8=1
+echo kaggle_submission_m2_turbo/notebook>> logs\kaggle_push_queue.txt
+echo calamitychasm/arc3-m2-turbo>> logs\kaggle_watch_kernels.txt
+python scripts\kaggle_push_queue.py
+kaggle kernels output calamitychasm/arc3-m2-turbo -p logs\m2_speed\turbo
+python scripts\m2_speed_report.py base turbo
+python scripts\kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-turbo --version 1 ^
+    --message "m2 turbo draw 1" --marker "LEVEL_MEMORY installed" --marker "priority gate active: 14 concurrent streams" ^
+    --marker "harness patch applied successfully" --marker "HISTORY_CACHE installed" --marker "TIMEOUT_FIX installed" ^
+    --marker "REAP448 applied kept=448" --marker "SPEC_ACCEPT 0.5" --marker "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f" ^
+    --counters level_memory_summary.json --counters history_cache_summary.json --counters timeout_fix_summary.json
+```
+(read `history_cache_summary.json` by hand; this gate does not check the zero-fields -- the kaggle-ops `submit` op does,
+via `require_zero`). GitHub Actions (kaggle-ops) request examples are in CLAUDE.md ("Operating Kaggle from the cloud").
