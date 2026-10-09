@@ -104,7 +104,10 @@ recorded in the repo; verify against the API.** Rank after 33.29 was **10**.
 ### Leaderboard snapshot (2026-10-02) and calibration
 
 #1 **52.51** (Tufa Labs), #49 28.66, #99 27.36, of **3,564 teams**. Our rank
-after 24.99 was 249 (top ~7%); after 33.29 on 2026-10-03, **rank 10**. The
+after 24.99 was 249 (top ~7%); after 33.29 on 2026-10-03, **rank 10**.
+Unverified search-snippet figures, ~2026-10-04..06: #1 Tufa 55.89, #2 48.59,
+#10 36.16, #15 35.44; estimated top-1% bar ~31-34; dfranzen's own kernel best
+34.30. The
 leaderboard is refreshed by other teams' draws daily; re-read it before
 quoting a rank. Public-25 free runs are not a ranking instrument (SE +/-2.46
 on the old stack); hidden-set submissions are, and the noise floor of the
@@ -117,11 +120,56 @@ changes as bundles on mechanism (`experiments/stage7_milestone2_improvements.md`
 
 - **Entry / team-merger deadline: 2026-10-26.**
 - **Final submission deadline: 2026-11-02 23:59 UTC.**
+- (All dates also in `rules.md`; all deadlines 11:59 PM UTC.)
 - **Up to 2 final submissions may be selected** for the private-set scoring.
   Select deliberately: with sd ~2-4 per draw, pick on draw count and mechanism,
   not on the single highest draw (winner's curse).
 - At 1 submission per UTC day, from 2026-10-09 to 2026-11-02 there are about
   25 slots left. Do not waste any.
+
+### Built 2026-10-09, awaiting the dev box (in priority order)
+
+All committed on this branch, never run on Kaggle (this cloud box cannot reach it). Slugs are
+`calamitychasm/...`; notebook dir is `kaggle_submission_<slug with - -> _>/notebook/`; every variant is
+the incumbent plus the stated change only. Pass/kill criteria are in the linked md (check run = 25 or 10
+public games x 25 min, gated by `kaggle_submit_when_ready.py`); status of all: **built, never run**.
+
+| kernel | notebook dir | change vs incumbent | evidence / expected effect | check-run pass / kill (detail) |
+|---|---|---|---|---|
+| `arc3-m2-lm-histcache` | `kaggle_submission_m2_lm_histcache` | history cache (compact state file, cached loads/views, incremental sandbox payloads); **zero behaviour change** | local host overhead per action 2.03 s -> 0.065 s at N=1000 (0.20 -> 0.009 at N=100); modelled +15-25% turns median, range +3..+40% (model, not measured) | `history_cache_summary.json`: errors/write_fallbacks/payload_plain/view_misses/loads_stale all 0, payload_delta >> payload_full; kills <= incumbent (`stage7_m2_level_memory.md`) |
+| `arc3-m2-lm-triedfacts` | `kaggle_submission_m2_lm_triedfacts` | facts-only block about the CURRENT level (actions, game overs, last moves of fatal runs, reasoning tail; <= 3000 B) pinned at history eviction | mechanism only, no score evidence; inspired by lordhansolo's game_overs | `TRIED_FACTS installed`, errors 0, `tried_facts_blocks` > 0, bytes max <= 3000 (`stage7_m2_level_memory.md`) |
+| `arc3-m2-lm-histcache-triedfacts` | `kaggle_submission_m2_lm_histcache_triedfacts` | both of the above | as the two above | both sets of criteria |
+| `arc3-m2-spd-m97s12` | `kaggle_submission_m2_spd_m97s12` | SGLang mem 0.97, 12 streams, Mamba cache 72 | **expected null/worse alone**: 12-stream KV demand is 107-116% of the ~1.03M pool; a control for the hic pair | gen tok/s >= 606.7 (+5% over base 577.8), retracts <= 2x base, no OOM (`stage7_m2_speed.md`, Round 3) |
+| `arc3-m2-spd-m96s12hic` | `kaggle_submission_m2_spd_m96s12hic` | mem 0.96, 12 streams, 32 GB system-RAM KV tier (`--hicache-size 32`) | the real test of whether the host tier makes oversubscription cheap; pool ~0.96M + ~1.7M host tokens | as above plus `hicache_attached=True`, `MemAvailable` >= 10 GiB in every census line |
+| `arc3-m2-spd-m97s12hic` | `kaggle_submission_m2_spd_m97s12hic` | mem 0.97 + 12 streams + host tier | both factors together | as above |
+| `arc3-m2-vllm-s12` | `kaggle_submission_m2_vllm_s12` | lordhansolo's vLLM serving + NVFP4/FP8 model with built-in MTP, 12 streams, context 139,264 | his peak decode 1,135 vs our 946 tok/s, KV ~1.42M vs 1.01M; **model swap, quality unknown, risky**; second-final-selection candidate only; **hard kill date 2026-10-15** | tok/s >= 665 (+15%), prefix hit >= 85%, preemptions <= ~50; any `VLLM_*` failure marker, restart or `identical=False` probe kills (`stage7_m2_speed.md`, vLLM section) |
+| `arc3-m2-vllm-s14` | `kaggle_submission_m2_vllm_s14` | same, 14 streams | as above; peaks (1.79M) can exceed the pool and preempt | as above |
+
+Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-facts]`,
+`scripts/_build_m2_speed_kernels.py m97s12 m96s12hic m97s12hic`, `scripts/_build_m2_vllm_kernel.py`
+(all idempotent; tests pin the committed notebooks). Report: `python scripts/m2_speed_report.py base <names>`.
+
+**Dev-box action queue (in order):**
+
+1. **Every UTC day, submit something.** Until a challenger passes its check run, submit the incumbent v1
+   (n grows; scores so far 33.29, 28.18, 31.03, 29.38). First verify the 2026-10-07 and 10-08 slots in the
+   API (`kaggle competitions submissions -c arc-prize-2026-arc-agi-3 --csv`); this file records neither.
+2. **Push the histcache check runs first** (`arc3-m2-lm-histcache`, then `...-histcache-triedfacts`):
+   highest expected value, lowest risk. Read `history_cache_summary.json` by hand before arming a
+   submission (write_fallbacks / payload_plain / view_misses / loads_stale all 0; payload_delta >>
+   payload_full); the gate does not check these.
+3. **Then the SGLang hicache pair** (`m96s12hic`, `m97s12hic`; `m97s12` as the control), **then** the vLLM
+   pair after the day-0 dataset/overlay checks in `stage7_m2_speed.md` (overlay sha256, python ABI,
+   draft vocab file). Respect the 2-GPU-session limit: push only via `scripts/kaggle_push_queue.py`
+   (a first push rejected at the limit never mounts its datasets). Do not run a submission slot and a
+   speed check at the same time.
+4. **Submission plan.** Once histcache passes, alternate incumbent / histcache draws interleaved in time
+   (never run one arm to exhaustion; interleaving lesson in section 9). Add histcache-triedfacts as arm B.
+   Stop an arm after 4 draws if its mean is more than 1 sd (2.2) below the incumbent's. The last ~3 slots go
+   to the leading arm. Final 2 selections: the best-mean arm (n >= 3) shrunk toward the incumbent; prefer
+   two draws of the best arm unless a second arm is within ~1 point; never select an arm with n < 3.
+5. **Delete the stray remote branch `wip-histcache-inherited`** (content already merged; the cloud proxy
+   blocks ref deletion, so do it from the dev box or GitHub).
 
 ### Open leads (from section 14 and `experiments/stage7_milestone2_improvements.md`)
 
