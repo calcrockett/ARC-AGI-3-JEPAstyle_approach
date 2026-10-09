@@ -533,3 +533,10 @@ python scripts\kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-turbo-
     --counters level_memory_summary.json --counters history_cache_summary.json --counters timeout_fix_summary.json
 ```
 kaggle-ops request examples are in CLAUDE.md ("Operating Kaggle from the cloud").
+
+## Priority-gate tail variant combinable with turbo (2026-10-09, built, not yet run)
+
+`--prio-tail` adds `ARC3_PRIORITY_HUMAN_ACTIONS=60` and last-level B = 5 (runtime, install cell) to any build:
+`arc3-m2-turbo-tail`, `arc3-m2-turbo-lossless-tail`, `arc3-m2-lm-tail`. Scheduling only, no throughput effect; the
+check run passes on the base kernel's criteria plus the `PRIORITY_TAIL installed` marker. Why and the replay
+(+0.4..+3.9% RHAE simulated, median ~+2.2%): `experiments/stage7_milestone2_improvements.md` section 4.

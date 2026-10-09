@@ -103,7 +103,7 @@ TURBO_SLUG = "arc3-m2-turbo"
 TURBO_LOSSLESS = tuple(v for v in TURBO if v != "acc50")
 TURBO_LOSSLESS_SLUG = "arc3-m2-turbo-lossless"
 # priority-gate variant `tail` (see the module docstring)
-TAIL_HUMAN_ACTIONS = 60.0     # upstream 25; median of base_actions_per_level over the 25 public games (186 levels)
+TAIL_HUMAN_ACTIONS = 60.0     # upstream 25; median of base_actions_per_level over the 25 public games (183 levels)
 TAIL_FINAL_B = 5.0            # upstream 0: B of a game on its last level (= B with one level left)
 MAX_STREAMS = 14              # 16 was measured by nobody on this stack and adds retractions at long contexts
 MAX_STREAMS_WITHOUT_REAP = 12  # without REAP's freed 7.3 GiB the 1.01M-token KV pool is oversubscribed past 12

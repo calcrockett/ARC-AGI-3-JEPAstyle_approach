@@ -189,3 +189,20 @@ def test_final_level_no_longer_parked_behind_mid_game(installed):
     # a fresh level is priced as before: h only changes how fast A decays with actions
     fresh = ps.PrioritySnapshot(3, 0, 0, 1.0, 7)
     assert ps.priority_value(fresh, human_actions=60.0, **kw) == ps.priority_value(fresh, human_actions=25.0, **kw)
+
+
+# ------------------------------------------------------------------------------------- gate simulator
+
+def test_gate_simulator_runs_the_upstream_scheduler_deterministically():
+    import random
+
+    import sim_m2_priority_gate as S
+    assert S.PS.TAIL_LOOKUP_80K[7][-1] == 0.0 and len(S.PUBLIC) == 25
+    assert sorted(h for v in S.PUBLIC.values() for h in v)[183 // 2] == B.TAIL_HUMAN_ACTIONS   # the median
+    world = S.World(random.Random("t/0"), n_games=14, hard=1.5)
+    a = S.run(world, slots=4, minutes=90.0)
+    assert a == S.run(world, slots=4, minutes=90.0)
+    assert 0.0 <= a["score"] <= 100.0 and a["levels"] > 0
+    b = S.run(world, slots=4, minutes=90.0, human=B.TAIL_HUMAN_ACTIONS, final_b=B.TAIL_FINAL_B)
+    assert 0.0 <= b["score"] <= 100.0
+    assert S.PS.TAIL_LOOKUP_REMAINING[7][-1] == B.TAIL_FINAL_B   # run() installs the variant's table
