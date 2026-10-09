@@ -116,7 +116,10 @@ is the level-memory patch (+4.7). **2026-10-07 and 2026-10-08 had NO submissions
 
 ### Submission schedule (from 2026-10-10)
 
-One slot per UTC day; arms interleaved in time (never run one arm to exhaustion). Read this before each daily submit.
+One slot per UTC day. Explore-then-exploit; read this before each daily submit. Verify the day's slot is empty first
+(`SKIPPED_ALREADY_SUBMITTED_TODAY` otherwise).
+
+**Explore, 10-10 to 10-17.** A and B alternate (4 draws each), no incumbent draws (incumbent already n=5):
 
 | date | arm |
 |---|---|
@@ -124,14 +127,28 @@ One slot per UTC day; arms interleaved in time (never run one arm to exhaustion)
 | 10-11 | B turbo-lossless-tail |
 | 10-12 | A |
 | 10-13 | B |
-| 10-14 | incumbent v1 |
-| 10-15 | A |
-| 10-16 | B |
+| 10-14 | A |
+| 10-15 | B |
+| 10-16 | A |
+| 10-17 | B |
 
-After 10-16, re-plan using per-arm means (incumbent n=4 so far: 33.29, 28.18, 31.03, 29.38, mean 30.47; draw 5 pending).
-Drop an arm after 4 draws if its mean is more than 2.2 below the incumbent's. The last ~3 slots go to the leading arm.
-Final 2 selections: best mean with n >= 3 (never an arm with n < 3). Verify the day's slot is empty first
-(`SKIPPED_ALREADY_SUBMITTED_TODAY` otherwise). If JustAdev742's hidden draw (56980485) lands <= ~28, prefer B over A.
+**From 10-18, exploit.** Give all remaining slots (~16) to the arm with the better mean, if that mean is at least ~1 point
+above the incumbent's. If neither is, alternate the better arm and the incumbent. Re-check the means weekly. A variant that
+passes its check run (turbo-tail-hic16, or the strategy audit) may take over an arm's remaining slots only if it is the same
+mechanism with better measured throughput (e.g. hic16 replacing A); the audit needs clearly favourable evidence.
+Keep the drop rule: after 4 draws, drop an arm whose mean is more than 2.2 below the incumbent's.
+Incumbent so far: 33.29, 28.18, 31.03, 29.38 (mean 30.47), draw 5 (57017233) pending.
+If JustAdev742's hidden draw (56980485) lands <= ~28, prefer B over A.
+
+**Final selection.** Select BOTH slots explicitly before 2026-11-02 23:59 UTC; do not rely on auto-selection. Choose the
+highest public draw of each of the top-2 arms by mean, each arm needing n >= 3. Reasons:
+- Each run plays all ~110 games, so the public and private halves (55 + 55 games) are likely scored in the same run.
+- Kaggle normally counts the best of the selected submissions. This is assumed: `rules.md` paraphrases and does not confirm
+  it, so verify on the live rules page.
+- Monte Carlo (scratchpad script, n/a in repo): if public and private correlate (rho >= 0.3), picking top public draws beats
+  random draws of the same arm by 11-20 points of P(top 1%) at the 33.4 bar. If rho = 0 (a rerun), it costs almost nothing.
+- Modelled P(top 1%) is about 0.5 at today's bar of 33.4, falling to about 0.2 if the bar reaches 36.
+
 Leaderboard ~21:35 UTC 2026-10-09: 4,065 teams; top-1% bar 33.37 (rank 41); we are rank 44 at 33.29; top-5% 30.91; top-10% 29.48.
 
 Submit requests (one per commit, new `id` every time, bump the draw number in `message`; `version` 1 for all three):
@@ -253,8 +270,9 @@ Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-f
    draft vocab file). Respect the 2-GPU-session limit: push only via `scripts/kaggle_push_queue.py`
    (a first push rejected at the limit never mounts its datasets). Do not run a submission slot and a
    speed check at the same time.
-4. **Submission plan.** Follow "Submission schedule (from 2026-10-10)" above (A/B interleaved with the incumbent, drop rule,
-   last ~3 slots to the leading arm, final 2 selections by best mean with n >= 3). `arc3-m2-lm-tail` gets no slots on its own.
+4. **Submission plan.** Follow "Submission schedule (from 2026-10-10)" above (explore A/B 10-10..10-17, then exploit, drop rule;
+   select BOTH final slots explicitly: the highest public draw of each of the top-2 arms by mean, each with n >= 3).
+   `arc3-m2-lm-tail` gets no slots on its own.
 5. **Delete the stray remote branch `wip-histcache-inherited`** (content already merged; the cloud proxy
    blocks ref deletion, so do it from the dev box or GitHub).
 
