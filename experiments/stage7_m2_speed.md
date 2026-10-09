@@ -198,3 +198,129 @@ kaggle kernels output calamitychasm/arc3-m2-spd-m96s12hic -p logs\m2_speed\m96s1
 python scripts\m2_speed_report.py base m97s12 m96s12hic m97s12hic
 ```
 Do not run a submission queue slot and these at the same time; the 2-session limit is shared.
+
+## vLLM stack: the incumbent harness on lordhansolo's serving (2026-10-09, built, not yet run)
+
+**What.** `scripts/_build_m2_vllm_kernel.py` -> `kaggle_submission_m2_vllm_s12/notebook` (`calamitychasm/arc3-m2-vllm-s12`)
+and `..._s14/notebook` (`calamitychasm/arc3-m2-vllm-s14`). The incumbent notebook (milestone-2 harness + level memory,
+from `scripts/_build_m2_level_memory_kernel.py`) with only the serving swapped for lordhansolo's
+(`lordhansolo/arc-agi-3-milestone-2`): vLLM nightly e975732 (0.29.1rc1) unpacked from Docker layers plus his
+hash-pinned 32-file overlay (rc2, `e3a6fe0d...`), his NVFP4/FP8 mixed checkpoint with its built-in MTP head (3 draft
+tokens, 32k draft vocabulary), FP8 KV, Mamba prefix caching in align mode, gpu-mem-util 0.98, max-num-batched-tokens
+2048, async scheduling, PLE + input embeddings in host RAM, his watchdog (5 restarts) and GPU shard prefetcher.
+Every harness cell, the level-memory install and the run cell are byte-identical to the incumbent (pinned by
+`tests/test_m2_vllm_kernel.py`). Never submitted until a check run passes the criteria below.
+
+**Mechanism.** The run is decode-bound and KV-starved (base: 577.8 generated tok/s, KV peak 0.99 at 10 streams).
+His stack decodes faster per GPU (peak 1,135 tok/s at 14 streams vs our 946) and holds a bigger pool
+(~1.42M tokens vs 1.01M: no separate draft model/draft KV, the input embeddings off the GPU, Mamba state shared with
+the KV pool), so 12-14 streams fit where SGLang OOMed at mem 0.98 (round 2).
+
+**How it is wired.** His setup step (`setup_commands.json[0]` of `lordhansolo/taaf-kaggle-source`) is vendored verbatim
+(`kaggle_submission_m2_vllm/vendor/`, sha-pinned, provenance in `PROVENANCE.json`) and patched at build time by exact
+anchors only:
+
+| knob | his value | ours | why |
+|---|---|---|---|
+| `--max-model-len` | 147,072 | **139,264** | the incumbent's SGLang context: harness window (116+12)K + 8K headroom; read from the incumbent cell, not retyped |
+| `--max-num-seqs` (= `ARC3_MAX_ACTIVE_STREAMS`) | 14 | **12 / 14** | two kernels |
+| `max_pixels` | 65,536 (256 px boards, ~66 tokens) | **409,600** | our boards are 640 px (~402 tokens); below this vLLM silently downscales them |
+| `--limit-mm-per-prompt` | `{"video":0}` | `{"image":64,"video":0}` | our harness attaches grid + diff + death + animation boards in one request; his sent one |
+| `--default-chat-template-kwargs` | `preserve_thinking`, `reasoning_effort: xhigh` | **`preserve_thinking` only** | the incumbent's default; the harness sends `enable_thinking`/`preserve_thinking` per request and never `reasoning_effort` |
+| `--enable-prompt-tokens-details` | test runs only | **always** | `cached_tokens` for the prefix-reuse metric |
+| served model name | `primitive-ai/...` | `flashnext` (+ his name as alias) | the name the incumbent's cell 5 / pickled benchmark request |
+| cache tracing plugin (test runs) | on | **opt-in** (`ARC3_VLLM_CACHE_DIAGNOSTICS=1`) | per-lookup tracing would bias the speed measurement |
+| overlay check | `RuntimeError` | **`VLLM_OVERLAY_HASH_MISMATCH <found>` and exit 86** before unpacking | the tar is hashed, then his manifest/overlay validation and the applier run under the same marker |
+| his harness env export (temperature 0.6, `xhigh`, 4x boards, 1K tool output, 81K target) | written | **dropped** | the incumbent's cell 5 configures the harness |
+
+Sampling stays the incumbent's: the harness sends temperature 0.7 / top_p 0.95 / top_k 20 per request, and
+`--generation-config vllm` only removes the model's defaults for fields a request omits (the harness sends no
+`min_p`/`repetition_penalty`/`seed`; SGLang filled omitted fields from `generation_config.json`, which the boot probe
+prints so the dev box can see whether anything there differed). Cell 5: port 1234, `ARC3_REASONING_HISTORY_KEY=reasoning`
+(vLLM's field; vLLM also accepts `reasoning_content` -- the probe checks both). The launcher cell runs the setup step
+detached and keeps the incumbent's release at 12 min (`ARC3_HTTP_RETRY_INITIAL_SECONDS=900` grace); a setup failure
+raises (`VLLM_SETUP_FAILED rc=N`). It refuses a Python mismatch between the notebook image and the unpacked runtime
+(`VLLM_PYTHON_ABI_MISMATCH`; fix: drop `docker_image` from kernel-metadata.json). The check run plays all 25 public
+games x 25 min (the speed shape, comparable to base); a submission is unaffected.
+
+**Boot probes (check runs only, logged before the benchmark when the server is up by the deadline):**
+`TEMPLATE_PROBE` (tokenizer / chat template sha, `matches_m2_pin` against the incumbent's pinned tokenizer, the
+model's `generation_config.json`; files copied to `vllm_model_meta/`), `REASONING_ECHO_PROBE` (does the served
+template render a prior turn's reasoning under each key; rendered text in `vllm_rendered_probe.txt`),
+`IMAGE_TOKENS_PROBE` (prompt-token delta of one 640 px board), `MULTI_IMAGE_PROBE` (six boards in one request),
+`PREFIX_CACHE_PROBE identical=` (one ~8K-token multi-turn prompt with an image and prior reasoning at temperature 0:
+cold, warm, warm; `cached_tokens` per call; `under_load=True` if games were already running), then
+`VLLM_SERVING active ... ready_after=Ns`. A monitor thread snapshots `/metrics` every 2 min to `vllm_metrics.jsonl`
+(preemptions, prefix hits/queries, spec-decode acceptance) and echoes the watchdog log as `[vllm-watchdog]` lines.
+`python scripts/m2_speed_report.py base vllm-s12 vllm-s14` reads all of it (vLLM stat lines, metrics, watchdog log,
+probes) into the same table as the SGLang runs.
+
+**Tokenizer / chat template.** Neither model's tokenizer or `chat_template.jinja` is in the local clones, and
+huggingface.co is blocked from the build container, so they could not be diffed here. Known from configuration:
+both servers load `chat_template.jinja` from their own model directory; his default kwargs add `reasoning_effort: xhigh`
+(removed); his MTP draft uses a 32k draft vocabulary where ours used a 64k FR-Spec hot-token map (acceptance only,
+never the text); our tokenizer is pinned at `06b95093...` and `TEMPLATE_PROBE matches_m2_pin` reports whether his
+tokenizer.json is byte-identical. The diff happens on the first check run (see dev-box steps).
+
+**Risks.**
+- **Model swap: quality unknown.** NVFP4/FP8 mixed weights and a different MTP head replace W4A16 AutoRound + the
+  INT4 drafter. Speed is measurable in one check run; solvability is not (public-25 cannot rank; the hidden-set noise
+  floor is sd ~3-4 per draw). This is a two-variable change (server + weights) and cannot be separated without a
+  vLLM-on-W4A16 or SGLang-on-NVFP4 arm.
+- **Per-stream decode may be slower at our contexts.** His speed is at <= 81K-token prompts; ours saw-tooth
+  59K -> 118K (each decode step reads streams x context of KV). 12 x ~90K average ~ 1.08M tokens (s12), 14 x ~90K ~
+  1.26M (s14) against ~1.42M, but peaks reach 1.54M / 1.79M: s14 can preempt, and vLLM V1 preemption recomputes the
+  whole prompt. The 640 px image profile may also shrink the pool slightly (read `GPU KV cache size`).
+- **Prefix-cache correctness on Mamba/GDN.** The old vLLM NVFP4 Duck stack had prefix caching produce identical
+  actions and -47% score (closed lines, section 9). His overlay exists to make align-mode caching correct; the
+  determinism probe is the only check we have before scores.
+- `--max-num-batched-tokens 2048` (vs SGLang chunk 8192): a 60K re-prefill after a history drain takes ~30 steps.
+- Server restarts: his harness retries a failed request every second until its deadline; ours retries 3 x 5 s, so a
+  watchdog restart (weights reload, minutes) costs every in-flight game more here than in his run.
+- The datasets are referenced unversioned: a new version of his runtime with another overlay fails the gate loudly
+  (by design); a new bundle version could move the draft vocabulary.
+
+**Day-0 dev-box checks (before queueing; no GPU needed):**
+```
+kaggle datasets files lordhansolo/vllm-main-e975732-arc3          :: runtime-manifest.json, overlay .tar.blob, layer blobs, applier
+kaggle datasets files lordhansolo/taaf-kaggle-source              :: src/ARC3-Inference/configs/draft_vocab_32k.json present
+kaggle models instances versions files lordhansolo/qwen3-8-flash-next-mixed-nvfp4-fp8/pyTorch/hf-mixed-mtp-nvfp4/1
+kaggle datasets download lordhansolo/vllm-main-e975732-arc3 -f arc3_vllm_main_e975732_arc3_overlay.tar.blob -p tmp\vllm
+kaggle datasets download lordhansolo/vllm-main-e975732-arc3 -f runtime-manifest.json -p tmp\vllm
+certutil -hashfile tmp\vllm\arc3_vllm_main_e975732_arc3_overlay.tar.blob SHA256   :: must be e3a6fe0d9f010bc1...e065e0cb
+type tmp\vllm\runtime-manifest.json | findstr dist_packages                       :: python3.X must match the notebook image
+```
+(A downloaded single file may arrive zipped; unzip before hashing.)
+
+**Push (pushes only into a free GPU slot; Gotchas 2026-10-05):**
+```
+git pull --no-rebase origin claude/modest-ride-gut4vo
+set PYTHONUTF8=1
+python scripts\_build_m2_vllm_kernel.py                       :: idempotent; tests pin the committed copies
+echo kaggle_submission_m2_vllm_s12/notebook>> logs\kaggle_push_queue.txt
+echo kaggle_submission_m2_vllm_s14/notebook>> logs\kaggle_push_queue.txt
+echo calamitychasm/arc3-m2-vllm-s12>> logs\kaggle_watch_kernels.txt
+echo calamitychasm/arc3-m2-vllm-s14>> logs\kaggle_watch_kernels.txt
+python scripts\kaggle_push_queue.py
+:: once COMPLETE
+kaggle kernels output calamitychasm/arc3-m2-vllm-s12 -p logs\m2_speed\vllm-s12
+python scripts\m2_speed_report.py base vllm-s12 vllm-s14
+```
+Template diff after the first run: `logs\m2_speed\vllm-s12\vllm_model_meta\chat_template.jinja` against the incumbent
+model's (`https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound/resolve/main/chat_template.jinja`), and
+`vllm_rendered_probe.txt` for what the template does with prior reasoning.
+
+**Check-run pass / kill criteria (one run each; any kill item ends the arm):**
+- kill: `VLLM_OVERLAY_HASH_MISMATCH`, `VLLM_PYTHON_ABI_MISMATCH`, `VLLM_INPUT_MISSING` or `VLLM_SETUP_FAILED`;
+  `VLLM_SERVING active ... ready_after` > 900 s (ready < 15 min from notebook start);
+  any watchdog exit/restart or CUDA fault (`restarts`, `cuda_faults` in the report);
+  `PREFIX_CACHE_PROBE identical=False` with `under_load=False`;
+  `IMAGE_TOKENS_PROBE` far from ~402 (e.g. ~66 = downscaled) or `MULTI_IMAGE_PROBE ok=False`;
+  `REASONING_ECHO_PROBE ... rendered=False` for the harness key.
+- pass (all): generated tok/s (summary.txt) **>= 665** (+15% over base 577.8; the model swap needs a larger margin
+  than a pure serving knob); server-side prefix hit / request `cache_pct` **>= 85%**; preemptions (`vllm_metrics.jsonl`)
+  **<= ~50**; tool-failure and truncation rate **<= 2x base**; `level_memory_summary.json` `errors == 0`; the usual
+  markers `LEVEL_MEMORY installed`, `priority gate active: N concurrent streams`, `harness patch applied successfully`,
+  plus `VLLM_SERVING active`; no traceback outside serving teardown; every game won/gave_up/cancelled.
+- If both pass: the gated submitter takes `--marker "VLLM_SERVING active"` in addition to the usual three. Even then,
+  ranking needs hidden-set draws (n >= 3, interleaved with the incumbent), because the weights changed.
