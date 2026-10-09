@@ -321,3 +321,95 @@ requires every listed counters file to exist and report `errors == 0` (a single 
 old job files with a string value behave as before). The tried-facts commands are in the section
 above. The gate does not check the payload/timeout criteria; read `history_cache_summary.json` from
 the check-run output before arming a submission.
+
+### How much of a real run does the incumbent's history overhead cost? (analysis, 2026-10-09)
+
+Question: the bench says the incumbent pays 0.20 / 0.54 / 2.03 s per action at N = 100 / 300 / 1000
+history entries and the cache ~0.01-0.07 s. What does that mean in a 9 h hidden run (~110 games,
+10 streams, ~532 min of play, ~577 generated tok/s)? **No telemetry from our own long runs exists in
+the repo** (only the 10-game x 25 min check runs, where N < ~150 and the overhead is small), so this
+is a model fitted to the bench plus published numbers from other runs. It is an estimate with a wide
+interval, not a measurement.
+
+**Data used.**
+- Bench (above): host CPU per action, incumbent 0.179 / 0.464 / 1.724 s at N = 100 / 300 / 1000
+  (nearly linear, ~0.0017 s per entry); sandbox rebuild outside the GIL adds ~0.0003 s per entry.
+  Cache: 0.003-0.005 s host CPU.
+- Lohit's M86 docstring (`cells/38_...`, his v16.8 run, 16 streams, no cache): per action at N = 800,
+  0.8 s state write + 0.36 s re-read + 0.61 s view rebuild = 1.77 s (our bench interpolates to ~1.4 s,
+  so his Kaggle host is ~1.3x slower per action than this container); **turns +4.5 s per 100 entries of
+  history (se 0.63); `Tool timed out after` kills 0/328 in the first 20 min -> 36/150 (24%) in the last
+  12 min.** Confounded (longer history also means longer prompts) but the same order as the model below.
+- His published 20-min cached run (`run/benchmark.json`, M86 installed, 25 games): 1,302 actions,
+  825,997 generated tokens = **634 tokens per action**, 2,340 tokens per LLM turn, **3.7 actions per
+  python call** (44% of calls are 1 action, ~9% are >= 10, <1% >= 20); batched actions after the first
+  cost a median 18 ms (p90 54 ms), matching our cache bench. N never exceeded 147 there.
+- Tufa's bundled example run (`Tufalabs_duck-harness/example-run`, June, 64 jobs, older harness, no cache):
+  zero-token (batched) actions took a median 0.14 s at N < 50, **1.6 s at N 50-100, 3.2 s at 100-150,
+  5 s at 200-250, 9.7 s at 400+**. That is 10-20x our uncontended bench: an existence proof that the
+  shared process saturates when many sessions pile on, not a calibration (different host/harness, 64 jobs).
+- Our check run (`stage7_milestone2_improvements.md`, `stage7_m2_speed.md`): decode tok/s by running
+  requests 213 / 492 / 664 / 707 / 757 at 1 / 4 / 7 / 8 / 9, ~770 at 10; job-wide 577 generated tok/s,
+  i.e. streams decode ~75% of the time even at tiny N. The gate keeps a game's slot while its tool call
+  runs, so host time directly lowers the number of requests in flight.
+- Per-game token supply: 18-22M tokens / 110 games = 120-200K per game; at 430-1000 tokens per action
+  that is 150-460 actions mean, with a heavy tail (priority gate feeds progressing games).
+  `history_entries` is the whole game's history, never trimmed (checked in the dfranzen solver), and the
+  game threads share one process (`ThreadPoolExecutor`), so GIL contention applies.
+
+**Model.** Closed queueing network: 10 streams, each cycling through (a) LLM decode (tokens per action /
+per-stream decode rate at the current occupancy), (b) other non-GIL time `nu` per action, set so that at
+tiny N the whole system gives the measured 577 tok/s, (c) host work at one processor-sharing server (the GIL)
+with demand `d(N) = m * cpu(N) * 1.1 + b` per action (`cpu` = interpolated bench, 1.1 for the per-call
+re-read, `m` host-speed multiplier, `b` other GIL work per action). Solved by exact MVA plus a fixed
+point on occupancy (decode rate depends on how many streams are decoding). N is drawn per game
+(tokens per game lognormal, CV 0.7-1.5; tokens per action lognormal around 650, +/-25%, per-game spread
+0.5-0.8); the cache arm is given the extra tokens its higher throughput earns (iterated). Timeout kills: a
+python call (batch size from the empirical distribution above, plus ~3 s snippet time) is killed when
+its summed stretched action time exceeds the 30 s wall deadline (`python_tool_sandbox.py`: one
+monotonic deadline for the whole call, GIL waits included). A kill is charged half a turn of tokens.
+Priors for the sampled run: tokens per game 120-200K, `m` 0.8-1.8, `b` 0-0.15 s. The script is a
+scratch file (not committed); the formulas above reproduce it.
+
+**Result** (150 draws; p10 / median / p90):
+
+| quantity | GIL queueing (MVA) | additive only (no queueing) | light corner (CV .7, 900 tok/act, m .8, b 0) |
+|---|---|---|---|
+| mean N over action instants | 227 / 392 / 1071 | 249 / 386 / 796 | 160 / 236 / 357 |
+| share of actions at N > 500 | 12% / 25% / 41% | 14% / 26% / 42% | 5% / 12% / 23% |
+| main-process GIL busy | 48% / 83% / ~100% | 7% / 13% / 24% | 18% / 28% / 47% |
+| incumbent python calls killed (30 s) | 1.7% / 11% / 37% | 0.5% / 2.5% / 7.7% | 0.1% / 0.3% / 2.1% |
+| **share of stream wall-clock the cache removes** | **7% / 24% / 63%** | **6% / 12% / 23%** | **2% / 4% / 8%** |
+| **extra turns (actions) the cache buys** | **+6% / +24% / +120%** | **+8% / +15% / +35%** | **+1.6% / +2.8% / +6%** |
+
+The cache arm's own kill rate and GIL load are ~0 in every draw. Cross-check: the model's incumbent
+numbers at N = 100-300 give turn slowdowns of 3-7 s against Lohit's measured 4.5 s per 100 entries (his run
+had 16 streams), and kill rates of the same order as his 24% late-run figure.
+
+**Reading.**
+- Best single number: **about +15-25% more turns / about 12-25% of stream wall-clock** at the median,
+  with a plausible planning range of **+3% .. +40%**. Values far above that (the 90th percentile of the
+  queueing column, 60-120%) are the model saturating the GIL; do not plan on them. The effect is **not
+  likely to be < 2%**: it falls to ~3% only if almost all stream-time is spent below N ~ 250 and the
+  host is as fast as this container. The cheap-corner column is the honest floor.
+- Mechanism of the gain: mostly lost decode occupancy (streams idle in host work while holding a slot;
+  the table above shows ~7 of 10 streams decoding at best), then timeout kills at N >~ 500; very little
+  of it is the plain additive cost.
+- Turns are not score. This run is decode-bound and scores were still rising, but how score scales with
+  extra turns is unmeasured here (levels are discrete, efficiency is squared). A +15-25% turn gain could be
+  worth anywhere from ~+1 to +4 points of 30; one draw (sd 2.2-3.9) cannot resolve that, so adopt on
+  mechanism and "not worse", as already pre-registered above.
+
+**Most uncertain assumption: how long the games get, i.e. the share of stream-time spent at
+N > ~400 history entries (together with the real host speed `m` and the true size of an entry with its
+animation frames, which the bench's synthetic boards may under- or over-state).** Everything above is
+driven by that tail and it cannot be observed from the scored run. Counters that settle it, none of
+which the 10 x 25 min check run can supply (N < 150 there):
+1. A long paired public run (>= 2 h, 25 games, 10 streams) of incumbent vs cache. For the incumbent no
+   counter exists, but `benchmark.json` gives it for free: per-game `len(history)` (the N distribution)
+   and, for zero-token entries, `wallclock_seconds` deltas by history index (per-action wall vs N under
+   real contention, as computed above for Lohit's and Tufa's runs). Also grep transcripts for
+   `Tool timed out after`.
+2. For the cache: `history_cache_summary.json` `sandbox_timeout_kills`, `python_calls`, and `by_history`
+   (host ms per python call by N bucket, buckets 300-999 and 1000+ are the ones that matter); the
+   number of python calls in the 300+ and 1000+ buckets gives the N tail directly.
