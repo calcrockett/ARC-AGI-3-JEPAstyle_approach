@@ -22,20 +22,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KAGGLE = ROOT / "venv" / "Scripts" / "kaggle.exe"
 CACHE = ROOT / "logs" / "m2_speed"
-VARIANTS = ["base", "spec4", "s12", "s14", "s14hic"]
+VARIANTS = ["base", "spec4", "s12", "s14", "s14hic", "m97s12", "m96s12hic", "m97s12hic"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _build_m2_speed_kernels import layout  # noqa: E402  (variant -> kernel slug)
+
+
+def slug(v: str) -> str:
+    return layout(v)[2]
 
 
 def fetch(v: str) -> Path | None:
     d = CACHE / v
     if (d / "summary.txt").exists():
         return d
-    status = subprocess.run([str(KAGGLE), "kernels", "status", f"calamitychasm/arc3-m2-speed-{v}"],
+    status = subprocess.run([str(KAGGLE), "kernels", "status", f"calamitychasm/{slug(v)}"],
                             capture_output=True, text=True).stdout
     if "COMPLETE" not in status:
         print(f"{v}: not complete ({status.strip()[-60:]})")
         return None
     d.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(KAGGLE), "kernels", "output", f"calamitychasm/arc3-m2-speed-{v}", "-p", str(d)],
+    subprocess.run([str(KAGGLE), "kernels", "output", f"calamitychasm/{slug(v)}", "-p", str(d)],
                    capture_output=True, text=True)
     return d if (d / "summary.txt").exists() else None
 
