@@ -73,7 +73,7 @@ class FakeApi:
 
 def runner(api, tmp_path, cli=None, changed=True):
     return ko.Runner(api, tmp_path / "out", cli=cli or (lambda a: (0, "")), now=lambda: NOW,
-                     request_changed=changed, claude_md=ROOT / "CLAUDE.md")
+                     request_changed=changed, claude_md=ROOT / "CLAUDE.md", sleep=lambda s: None)
 
 
 SUBMIT = {"op": "submit", "kernel": K, "version": 1, "message": "m2 level memory draw 5",
@@ -314,6 +314,72 @@ def test_listing_unavailable_status_error_is_conservative(tmp_path):
     api = NoList(statuses={A: "RUNNING"}, status_errors={B: ConnectionError("503")})
     r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
     assert r["result"] == "SKIPPED_GPU_BUSY" and f"{B} UNKNOWN" in r["busy"]
+
+
+class Limited(FakeApi):
+    """kernels_status answers 429 `fail` times per kernel in `fails`, then the real status."""
+    def __init__(self, fails, **kw):
+        super().__init__(**kw)
+        self.fails, self.calls = dict(fails), []
+
+    def kernels_status(self, kernel):
+        self.calls.append(kernel)
+        if self.fails.get(kernel, 0) > 0:
+            self.fails[kernel] -= 1
+            raise RuntimeError("429 Client Error: Too Many Requests")
+        return super().kernels_status(kernel)
+
+
+def test_status_429_is_retried_with_backoff_then_succeeds(tmp_path, capsys):
+    sleeps = []
+    api = Limited({A: 2, K: 1}, kernels=[kmeta(A), kmeta(K)])
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT))
+    r.sleep = sleeps.append
+    res = r.op_push_kernel(dict(PUSH))
+    assert res["result"] == "PUSHED" and res["busy_before"] == []
+    assert api.calls.count(A) == 3 and api.calls.count(K) == 2
+    assert sorted(x for x in sleeps if x >= 1) == [5, 5, 10]  # backoff only; 0.5 s spacing is separate
+    assert ko.STATUS_SPACING_S in sleeps
+    assert "rate limited" in capsys.readouterr().out
+
+
+def test_status_still_429_after_retries_counts_busy_and_names_kernels(tmp_path, capsys):
+    api = Limited({A: 99, B: 99}, kernels=[kmeta(A), kmeta(B), kmeta(K)])
+    sleeps = []
+    r = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT))
+    r.sleep = sleeps.append
+    res = r.op_push_kernel(dict(PUSH))
+    assert res["result"] == "SKIPPED_GPU_BUSY" and sorted(res["busy"]) == sorted([f"{A} UNKNOWN", f"{B} UNKNOWN"])
+    assert api.calls.count(A) == 4  # first try + 3 retries
+    assert sleeps.count(5) >= 1 and sleeps.count(10) >= 1 and sleeps.count(20) >= 1
+    out = capsys.readouterr().out
+    assert "still UNKNOWN after retries" in out and A in out and B in out
+
+
+def test_non_429_error_is_not_retried(tmp_path):
+    api = Limited({}, kernels=[kmeta(A)], status_errors={A: ConnectionError("503 backend unavailable")})
+    api.fails = {}
+    r = runner(api, tmp_path)
+    with pytest.raises(ConnectionError):
+        r.status_with_retry(A)
+
+
+def test_candidates_skip_old_kernels_and_include_pushed_one(tmp_path):
+    old = [f"calamitychasm/{n}" for n in ("arc3-graph-explorer-submission", "arc3-hypothesis-agent-submission",
+                                          "arc3-duck-nvfp4-anim", "arc3-serving-benchmark")]
+    new = "calamitychasm/arc3-m2-turbo-lossless-tail-audit"
+    api = FakeApi(kernels=[kmeta(k) for k in old + [A]])
+    cands = runner(api, tmp_path).candidate_kernels([new])
+    assert not set(old) & set(cands)
+    assert A in cands and K in cands and new in cands
+    assert all(ko.is_gpu_family(c) for c in cands)
+
+
+def test_push_checks_only_gpu_family_status(tmp_path):
+    old = "calamitychasm/arc3-graph-explorer-submission"
+    api = Limited({}, kernels=[kmeta(old), kmeta(A)])
+    res = runner(api, tmp_path, cli=lambda a: (0, PUSHED_OUT)).op_push_kernel(dict(PUSH))
+    assert res["result"] == "PUSHED" and old not in api.calls and A in api.calls
 
 
 def test_push_session_limit_message_is_a_skip(tmp_path):

@@ -37,6 +37,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -54,6 +55,12 @@ OPS = ("status", "push_kernel", "kernel_output", "submit")
 MUTATING = ("push_kernel", "submit")
 BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
 GPU_LIMIT = 2
+# Only the milestone-2 family can hold a GPU session; the old graph-explorer / hypothesis / serving
+# benchmark kernels are skipped (their status calls only fed Kaggle's rate limiter, run 37994686371).
+GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2")
+STATUS_SPACING_S = 0.5
+RATE_LIMIT_BACKOFF_S = (5, 10, 20)
+_RATE_LIMITED = ("429", "too many requests", "rate limit", "rate-limit", "quota exceeded")
 
 
 class RequestError(ValueError):
@@ -227,6 +234,14 @@ def _never_pushed(exc: Exception) -> bool:
     return any(t in f"{type(exc).__name__} {exc}".lower() for t in _NOT_PUSHED)
 
 
+def _rate_limited(exc: Exception) -> bool:
+    return any(t in f"{type(exc).__name__} {exc}".lower() for t in _RATE_LIMITED)
+
+
+def is_gpu_family(ref: str) -> bool:
+    return ref.split("/", 1)[-1].lower().startswith(GPU_KERNEL_PREFIXES)
+
+
 def claude_md_kernels(text: str) -> list[str]:
     """Incumbent plus every kernel in the CURRENT STATUS kernel tables of CLAUDE.md."""
     head = text.split("## HISTORY", 1)[0]
@@ -270,8 +285,10 @@ def default_cli(args: list[str], cwd: Path = ROOT) -> tuple[int, str]:
 class Runner:
     def __init__(self, api, out_dir: Path, cli: Callable[[list[str]], tuple[int, str]] = default_cli,
                  now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc),
-                 request_changed: bool = True, claude_md: Path = ROOT / "CLAUDE.md"):
+                 request_changed: bool = True, claude_md: Path = ROOT / "CLAUDE.md",
+                 sleep: Callable[[float], None] = time.sleep):
         self.api, self.out_dir, self.cli, self.now = api, out_dir, cli, now
+        self.sleep = sleep
         self.request_changed, self.claude_md = request_changed, claude_md
         self._mine: list | None = None
         self._versions: dict[str, tuple[int | None, str]] = {}
@@ -311,20 +328,33 @@ class Runner:
 
     def candidate_kernels(self, extra: list[str] | None = None) -> list[str]:
         """Every kernel that could hold a GPU session: the incumbent plus the CLAUDE.md tables (the
-        same list the status op reports), any ``extra`` refs, and every ``arc3-*`` kernel the listing
-        knows about. All of ours are GPU kernels (m2 stack)."""
+        same list the status op reports), any ``extra`` refs (the kernel being pushed), and every
+        ``arc3-m2-*`` / ``arc3-milestone2*`` kernel the listing knows about. Old non-m2 kernels are
+        not checked."""
         try:
             found = claude_md_kernels(self.claude_md.read_text(encoding="utf-8"))
         except OSError:
             found = []
         listed = self._listed() or []
         found += [r for r in (getattr(k, "ref", "") or "" for k in listed)
-                  if r.split("/", 1)[-1].startswith("arc3-")]
+                  if is_gpu_family(r)]
         found += list(extra or [])
         seen: dict[str, str] = {}
         for ref in found:
             seen.setdefault(ref.lower(), ref)
         return list(seen.values())
+
+    def status_with_retry(self, kernel: str) -> tuple[str, str]:
+        """``status_of`` retried with backoff (RATE_LIMIT_BACKOFF_S) when Kaggle answers 429."""
+        for delay in (*RATE_LIMIT_BACKOFF_S, None):
+            try:
+                return self.status_of(kernel)
+            except Exception as exc:  # noqa: BLE001
+                if delay is None or not _rate_limited(exc):
+                    raise
+                print(f"  busy-check {kernel}: rate limited (429), retrying in {delay}s")
+                self.sleep(delay)
+        raise AssertionError("unreachable")
 
     def busy_gpu_kernels(self, extra: list[str] | None = None) -> list[str]:
         """Our GPU kernels currently running/queued, decided by ``kernels_status`` per kernel (the call
@@ -337,9 +367,12 @@ class Runner:
         listing = self._listed()
         pushed = None if listing is None else {(getattr(k, "ref", "") or "").lower() for k in listing}
         busy = []
-        for ref in self.candidate_kernels(extra):
+        unknown = []
+        for n, ref in enumerate(self.candidate_kernels(extra)):
+            if n:
+                self.sleep(STATUS_SPACING_S)
             try:
-                status, _ = self.status_of(ref)
+                status, _ = self.status_with_retry(ref)
             except Exception as exc:  # noqa: BLE001
                 msg = f"{type(exc).__name__}: {exc}"
                 if _never_pushed(exc):
@@ -349,10 +382,13 @@ class Runner:
                 else:
                     print(f"  busy-check {ref}: status UNKNOWN ({msg[:90]}) -> counted busy (conservative)")
                     busy.append(f"{ref} UNKNOWN")
+                    unknown.append(ref)
                 continue
             print(f"  busy-check {ref}: {status}" + (" -> BUSY" if status in BUSY else ""))
             if status in BUSY:
                 busy.append(f"{ref} {status}")
+        if unknown:
+            print(f"  busy-check: status still UNKNOWN after retries for {len(unknown)} kernel(s): {unknown}")
         return busy
 
     # -- ops
@@ -417,7 +453,11 @@ class Runner:
         res: dict = {"op": "push_kernel", "dir": op["dir"]}
         if not (d / "kernel-metadata.json").exists():
             return {**res, "result": "ERROR", "reason": "no kernel-metadata.json in dir"}
-        busy = self.busy_gpu_kernels()
+        try:
+            meta_id = json.loads((d / "kernel-metadata.json").read_text(encoding="utf-8")).get("id")
+        except (OSError, ValueError):
+            meta_id = None
+        busy = self.busy_gpu_kernels([meta_id] if meta_id else None)
         print(f"  running/queued GPU kernels: {busy or 'none'}")
         if len(busy) >= GPU_LIMIT:
             return {**res, "result": "SKIPPED_GPU_BUSY", "busy": busy}
