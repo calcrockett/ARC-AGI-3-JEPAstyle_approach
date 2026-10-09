@@ -763,3 +763,94 @@ before its first GPU run spends our quota on their debugging.
   lossless draft takes over arm B's remaining slots from the next B day; it does not need fresh LB draws to establish
   quality. Worth doing before 11-02 only via one of these two paths; if their replica check is NO-GO or their gain
   is < +4%, drop it (expected value ~+0.5-1 point does not justify a from-scratch build).
+
+## REAP image-turn shift (feasibility, 2026-10-09; desk study, nothing built or run)
+
+Question: arms A/B serve REAP-448 (JustAdev742's kept list, `kaggle_submission_milestone2_fork/turbo/`), whose
+fidelity probe found a small logprob shift on image turns. Can we shrink it without losing the KV/throughput gain,
+and is it worth doing before 11-02? Sources: JustAdev742 repo (`claude/admiring-ride-b4dq3i` @ fe2ad06):
+`docs/research/beat-tufa/reap-at-load.md`, `fidelity-probe.md`, `serving.md` arm 3, `intel-oct8.md` item 3,
+`docs/research_log.md` 2026-10-07 23:24 .. 10-09 03:53; `scripts/reap_kept_experts.py`.
+
+### 1. How the REAP-448 kept list was chosen
+
+- **Nobody on their side ran REAP.** The list is *recovered*, not computed: `scripts/reap_kept_experts.py` reads only
+  the router tensors (HTTP range reads) of the public build `lee-chang-93/Qwen3.8-Flash-Next-NVFP4-REAP-k448@8d565c90`
+  and of Intel's W4A16 checkpoint, and maps every pruned router row to the unique bit-identical Intel row
+  (48/48 layers, 448 distinct ids, MTP router identical). We vendored that JSON unchanged.
+- **Saliency:** standard REAP (router-weighted expert activation norm, per expert), computed and pruned **per layer**
+  (64 per layer in every layer; 92.65% of REAP mass retained, mean 7.35% removed, worst layer 15 at 9.11%; 28 dead
+  experts pruned first, 5 "super experts" force-kept). Per-expert scores are **not published** -- only the list.
+- **Calibration (model card, not reproducible by them):** 16.49 M tokens of the model's own agentic production traffic
+  **including the multimodal path (626 images)**. So it is not strictly text-only, as their research-log entries say;
+  it is image-poor and contains no ARC boards. On NVIDIA's NVFP4 quant (same experts/router as Intel W4A16).
+- Calibration choice moves the list a lot: sh0wie's public REAP-384 (686 K tokens of agentic coding) keeps a median
+  15.5 per layer (3-36) of lee-chang's 64 pruned experts.
+
+### 2. Is the shift from pruning vision-relevant experts, and can it be fixed?
+
+- **Evidence it is image-specific (3-way probe, 154 replayed ARC requests, greedy, 10 streams, lossless):** headline
+  |dlp| 0.0480 vs cross-run floor 0.0376 (ratio 1.28); fresh-frame (user+image) turns 0.0536 vs 0.0372, text/tool
+  turns 0.0383 vs 0.0383 (no shift). Largest by game vc33 0.094/0.041, ft09 0.075/0.042, tn36 0.045/0.017; lp85, tu93
+  none. Accept length unchanged (2.77 vs 2.78). Image tokens go through the same 48 MoE layers, so an image-poor
+  calibration under-scoring experts that ARC board tokens route to is the plausible mechanism; it is **not shown**
+  (nobody has router statistics on ARC traffic).
+- **They discuss the fix but have not tried it.** 2026-10-08 16:03: "A REAP calibrated on our own logged ARC traffic
+  (image turns included) is the obvious way to shrink it; that is a follow-up, not a blocker." REAP-384 entry
+  (19:23): "Revisit with an ARC-calibrated REAP." `intel-oct8.md` item 3 plans it (re-score on logged requests incl.
+  images, then 384 + 18-20 streams; ~2-3 GPU-h), behind MTP session A. `serving.md` arm 3(b) sketches the method:
+  accumulate router-weighted expert-output norms while replaying Franzen's request logs; cheapest first step is
+  route-only statistics (how much top-10 routed weight the 64 dropped experts carry per layer).
+- **Best shape for us: a swap list at K = 448**, not a re-prune. Measure per-layer routed weight of all 512 experts on
+  our ARC traffic (unpruned server); in each layer swap the least-used kept experts for the most-used pruned ones
+  where the margin is clear. Same count => same 7.31 GiB, same 14 streams, same throughput, and the loader patch is
+  unchanged (it checks Intel's router sha256 per layer and `num_experts == len(kept)`, not which ids).
+- **REAP-480 is worse value.** REAP-384 (128 pruned) gave 2.2x REAP-448's excess |dlp| and spread it to text turns,
+  so ~half the shift at 32 pruned is plausible -- but (a) the 32 to restore still need a ranking nobody published
+  (an arbitrary half just halves the shift), i.e. the same calibration session as the swap; (b) it frees only
+  3.65 GiB: measured REAP-448+14 pool 1.478 M -> ~1.18 M, vs 14-stream peak need ~1.35 M (114%), so it supports ~12
+  streams (~1.24 M vs ~1.16 M need). Their decode plateau (flat from ~10 running; REAP-14's gain was keeping ~12.5
+  running) suggests ~+8-10% output tokens instead of +14%. It trades throughput for fidelity; the swap does not.
+
+### 3. What our own list would take
+
+| Item | Need | Effort |
+|---|---|---|
+| Data | ARC prompts with images: our check runs' `*_requests.jsonl` (Franzen harness logs every request with inline base64 PNGs; the tail runs of 2026-10-09 have them, artifact retention 7 days). Sample with a port of their `fidelity_sample.py` (stdlib, Apache-2.0). Prompts made by a REAP server are fine: we read the *unpruned* model's routing on them. | 1-2 agent-h |
+| Router-stat patch | Anchored edit in the installed Pennyroyal MoE block (as `sglang_reap_patch.py` / `sglang_hc_dump_patch.py` do): per layer x 512 experts, sum of renormalised top-10 gate weight and counts, split image vs text tokens (image-token mask from input ids, as the hc-dump patch does); dump at exit. Router-weighted frequency is a proxy: the fused Marlin MoE does not expose per-expert output norms that true REAP needs. Radix cache off, max_tokens 1 (prefill only). | 4-6 agent-h incl. tests (~250 lines) |
+| Calibration notebook + list builder | Replay driver cell, swap-list builder, `.meta.json` (Intel router sha256 unchanged), builder `--reap-kept FILE` option, re-pinned tests, marker `REAP448 applied kept=448` unchanged | 3-4 agent-h |
+| Verification | Port of their fidelity probe/compare (stdlib); their probe dataset is private, so we need our own base floor: base + old REAP + new REAP arms (~25 min each) | 2-3 agent-h, ~1.3 GPU-h |
+| GPU | Stats session ~0.5-1 GPU-h (9 min start, ~5-10 M prompt tokens at ~10 k tok/s); probe ~1.3; one 25x25 check run of the arm with the new list ~0.7 | **~3-3.5 GPU-h**, ~4.5 with a retry |
+| Total | | **~11-16 agent-h**; earliest check run ~2026-10-13/14 (2-session limit, arms A/B and the speed queue ahead) |
+
+Risk of breaking things: low if K stays 448 (loader, markers, gate unchanged); the stats patch lives only in a
+calibration notebook. Real risks: a swap that introduces a **text-turn** shift where REAP-448 has none (the probe must
+show text turns at the floor), and calibrating on the 25 public games (hidden games share the 64x64 16-colour board
+format, so image-token routing should transfer, but this is untested).
+
+### 4. Is the image-turn shift score-relevant?
+
+No evidence either way, and no evidence of harm:
+- vc33 -58.9 / tn36 -49.9 / tr87 -36.0 came from one run (exp-073, REAP lossless, 49.45). The next REAP run
+  (exp-073b, + acceptance 0.5) **won all three** (vc33 21 -> 100, tn36 4 -> 100), and exp-075 (same config) then
+  dropped tn36 100 -> 3.6. Per-game SD between runs is 22-23 points; one 25-game run's mean SD ~4.5.
+- REAP public-25 runs: 49.45 (lossless), 56.00 / 42.89 (acceptance 0.5), against Franzen v3 passes 45.6-47.5 (not
+  independent draws). No equal-stream test (REAP-10 vs base-10) was ever run, so quality and throughput are confounded.
+- Our tail check runs (A 31 levels / 6.62, B 36 / 8.17, 25 min) cannot resolve anything.
+- Size: excess |dlp| ~0.016 nats on image turns, below the sampling noise of T=0.7; it does flip confident tokens
+  (0/145 REAP divergences were near-ties), so it is a real model change, of unknown consequence.
+- Hidden set: JustAdev742's first REAP draw (56980485) was pending at 03:53 UTC; our A/B have none. With per-draw sd
+  2.2-3.9, a sub-point effect (the most a fix to a niche shift plausibly buys) needs > 50 draws per arm: **not
+  measurable before 11-02**; any decision rests on mechanism.
+
+### 5. Recommendation: NO-GO now (conditional)
+
+- The benefit is unmeasured and likely small; the cost (~11-16 agent-h, ~3.5-4.5 GPU-h, earliest result ~10-13/14)
+  competes with the queued check runs for the 2 GPU slots and weekly quota, and its effect can never be confirmed on
+  the LB in time. REAP-480 is dominated by the K=448 swap.
+- JustAdev742 has the same fix on their plan (`intel-oct8.md` item 3); their list would be a drop-in JSON for our
+  patch (same Intel router fingerprints).
+- **Revisit (GO) if:** (a) JustAdev742 publishes an ARC-calibrated list -> adopt it: swap the JSON + meta, re-pin tests
+  (~2 agent-h), probe base/old/new (~1.3 GPU-h) and one check run; or (b) after >= 3 hidden draws, arm B (lossless
+  REAP) sits > 1 sd (2.2) below the incumbent while its throughput guards pass -- REAP quality then becomes the leading
+  suspect and the swap list is the targeted fix; or (c) GPU quota is idle late in a week with nothing else queued.
