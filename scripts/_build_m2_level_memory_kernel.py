@@ -14,6 +14,9 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
     python scripts/_build_m2_level_memory_kernel.py --turbo         # arc3-m2-turbo (see below)
     python scripts/_build_m2_level_memory_kernel.py --turbo-lossless  # arc3-m2-turbo-lossless (turbo, acceptance stays 1.0)
     python scripts/_build_m2_level_memory_kernel.py --reap --streams 14   # a subset: arc3-m2-lm-reap-s14
+    python scripts/_build_m2_level_memory_kernel.py --prio-tail     # arc3-m2-lm-tail: incumbent + gate fix (below)
+    python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail   # arc3-m2-turbo-tail
+    python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail   # arc3-m2-turbo-lossless-tail
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
 /kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
@@ -26,6 +29,12 @@ is the incumbent. A harness variant changes behaviour through install-cell lines
 and/or a cell of its own inserted after the install cell (VARIANT_CELLS), optional lines appended to the
 run cell's counter dump (VARIANT_RUN_DUMP), and a marker the run is checked for (VARIANT_MARKERS) -- never
 by editing upstream harness code.
+
+Priority-gate variant (--prio-tail, token `tail`; experiments/stage7_milestone2_improvements.md section 4):
+the install cell sets ARC3_PRIORITY_HUMAN_ACTIONS=60 (upstream 25; the public games' median human actions per
+level) and gives a game on its LAST level the future bonus B=5 instead of 0 (TAIL_LOOKUP_REMAINING 8/7/5/0 ->
+8/7/5/5), both at runtime -- the harness patch is untouched. It composes with every other variant; with a
+turbo preset the slug is the preset's plus "-tail".
 
 Serving / "turbo" variants (ported from JustAdev742's Milestone-2 work, Apache-2.0; provenance and
 vendored files in kaggle_submission_milestone2_fork/turbo/, see its NOTICE.md). These edit the SGLang
@@ -86,13 +95,16 @@ assert "'''" not in HC_SRC, "module source must not contain ''' (it is inlined i
 INCUMBENT = "arc3-m2-level-memory"
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
-_FIXED_KINDS = ("histcache", "triedfacts", "timeoutfix", "reap", "hotmap", "all25", "inputs")
+VARIANT_ORDER = ("histcache", "triedfacts", "tail", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
+_FIXED_KINDS = ("histcache", "triedfacts", "tail", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
 # turbo without the lossy MTP acceptance (upstream SPEC_ACCEPT_SINGLE / SPEC_ACCEPT_ACC stay 1.0)
 TURBO_LOSSLESS = tuple(v for v in TURBO if v != "acc50")
 TURBO_LOSSLESS_SLUG = "arc3-m2-turbo-lossless"
+# priority-gate variant `tail` (see the module docstring)
+TAIL_HUMAN_ACTIONS = 60.0     # upstream 25; median of base_actions_per_level over the 25 public games (186 levels)
+TAIL_FINAL_B = 5.0            # upstream 0: B of a game on its last level (= B with one level left)
 MAX_STREAMS = 14              # 16 was measured by nobody on this stack and adds retractions at long contexts
 MAX_STREAMS_WITHOUT_REAP = 12  # without REAP's freed 7.3 GiB the 1.01M-token KV pool is oversubscribed past 12
 VARIANT_INSTALL_LINES = {
@@ -103,8 +115,23 @@ VARIANT_INSTALL_LINES = {
         "assert LEVEL_MEMORY.tried_facts_enabled()\n"
         "print('TRIED_FACTS installed', LEVEL_MEMORY.summary(), flush=True)\n"
     ),
+    "tail": (
+        "# [calamitychasm] priority-gate tail fix -- see experiments/stage7_milestone2_improvements.md section 4\n"
+        "import os as _os\n"
+        "import inference.agent.priority_scheduler as _ps\n"
+        f"_os.environ['ARC3_PRIORITY_HUMAN_ACTIONS'] = '{TAIL_HUMAN_ACTIONS:g}'   # A's efficiency proxy h (upstream 25)\n"
+        "for _n, _v in list(_ps.TAIL_LOOKUP_REMAINING.items()):   # last-level B 0 -> B with one level left\n"
+        f"    assert _v[-1] == 0.0 and _v[-2] == {TAIL_FINAL_B!r}, (_n, _v)\n"
+        f"    _ps.TAIL_LOOKUP_REMAINING[_n] = _v[:-1] + ({TAIL_FINAL_B!r},)\n"
+        f"assert _lm_ta._priority_human_actions() == {TAIL_HUMAN_ACTIONS!r}\n"
+        "assert _lm_ta._priority_level_options()['tail_lookup'] == 'remaining'\n"
+        "assert _lm_ta.priority_value is _ps.priority_value\n"
+        "print('PRIORITY_TAIL installed', 'human_actions', _lm_ta._priority_human_actions(),\n"
+        "      'B', {_n: _v[-4:] for _n, _v in sorted(_ps.TAIL_LOOKUP_REMAINING.items())}, flush=True)\n"
+    ),
 }
 VARIANT_MARKERS = {"histcache": "HISTORY_CACHE installed", "triedfacts": "TRIED_FACTS installed",
+                   "tail": "PRIORITY_TAIL installed",
                    "timeoutfix": "TIMEOUT_FIX installed", "reap": "REAP448 applied kept=448"}
 VARIANT_BLURB = {
     "histcache": "A history cache (in-memory game history, compact batched state writes, a per-frame ascii "
@@ -114,6 +141,11 @@ VARIANT_BLURB = {
     "triedfacts": "At the same eviction point it also pins a facts-only block about the current unsolved "
                   "level (actions spent, game-over counts, last actions of recent fatal runs, tail of the "
                   "model's last reasoning; <= 3 KB).",
+    "tail": "Priority gate: a game on its last level is no longer parked behind every game with levels left. "
+            "A's efficiency proxy uses h = 60 actions (the public games' median human count per level; upstream "
+            "25 makes A collapse after a few dozen actions, and on the last level A is all there is) and the last "
+            "level gets the future bonus B = 5 (as with one level left) instead of 0. Both set at runtime in the "
+            "install cell; scheduling only, nothing the model sees changes.",
     "timeoutfix": "Sandbox-timeout fix (JustAdev742's ours-sandbox-timeout-keeps-work.patch, Apache-2.0, installed "
                   "at runtime): a python call that times out no longer wipes every retained helper function; "
                   "`time` is importable in the sandbox.",
@@ -183,22 +215,28 @@ def check_serving(variants) -> None:
             raise SystemExit("REFUSING TO BUILD -- Mamba cache // 5 < streams: SGLang would cap running requests")
 
 
+def _preset(names) -> tuple[str, str] | None:
+    """(slug, dir name) of a turbo preset, optionally plus the priority-gate variant `tail`."""
+    core, extra = set(names) - {"tail"}, "tail" in names
+    for preset, slug, dirname in ((TURBO, TURBO_SLUG, "kaggle_submission_m2_turbo"),
+                                  (TURBO_LOSSLESS, TURBO_LOSSLESS_SLUG, "kaggle_submission_m2_turbo_lossless")):
+        if core == set(preset):
+            return (slug + "-tail", dirname + "_tail") if extra else (slug, dirname)
+    return None
+
+
 def kernel_slug(variants) -> str:
     names = variant_names(variants)
-    if set(names) == set(TURBO):
-        return TURBO_SLUG
-    if set(names) == set(TURBO_LOSSLESS):
-        return TURBO_LOSSLESS_SLUG
+    if _preset(names):
+        return _preset(names)[0]
     return "arc3-m2-lm-" + "-".join(names) if names else INCUMBENT
 
 
 def kernel_dir(variants, root: Path | None = None) -> Path:
     root = ROOT if root is None else root
     names = variant_names(variants)
-    if set(names) == set(TURBO):
-        return root / "kaggle_submission_m2_turbo" / "notebook"
-    if set(names) == set(TURBO_LOSSLESS):
-        return root / "kaggle_submission_m2_turbo_lossless" / "notebook"
+    if _preset(names):
+        return root / _preset(names)[1] / "notebook"
     return root / ("kaggle_submission_m2_level_memory" if not names else
                    "kaggle_submission_m2_lm_" + "_".join(names)) / "notebook"
 
@@ -679,7 +717,7 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "inputs"}) else
+          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "inputs"}) else
              TURBO_NOTE if accept_value(variants) is not None else TURBO_NOTE_LOSSLESS)))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
@@ -713,6 +751,9 @@ def main(argv=None) -> int:
     ap.add_argument("--input-resolver", action="store_true",
                     help="the incumbent plus only the mount-layout input resolver (kernel arc3-m2-lm-inputs); "
                          "every other variant already includes the resolver")
+    ap.add_argument("--prio-tail", action="store_true",
+                    help=f"priority gate: h={TAIL_HUMAN_ACTIONS:g} in A, last-level B={TAIL_FINAL_B:g} "
+                         "(kernel arc3-m2-lm-tail; with a turbo preset, its slug + -tail)")
     ap.add_argument("--turbo", action="store_true",
                     help="all of: " + " ".join(TURBO) + f" -> calamitychasm/{TURBO_SLUG}")
     ap.add_argument("--turbo-lossless", action="store_true",
@@ -722,7 +763,7 @@ def main(argv=None) -> int:
         raise SystemExit("REFUSING TO BUILD -- --turbo and --turbo-lossless are different presets")
     variants = (["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
-                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver)
+                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail)
     if args.spec_accept is not None and args.spec_accept != 1.0:
         variants.append(accept_token(args.spec_accept))
     if args.streams is not None and args.streams != 10:
