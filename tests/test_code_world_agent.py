@@ -208,8 +208,14 @@ def test_retry_prompt_still_contains_the_transcript():
     assert outcome.ok, "should recover on the second attempt"
     assert len(client.prompts) == 2
     _system, second_user = client.prompts[1]
-    assert "transition #0" in second_user, "the retry prompt dropped the transcript"
-    assert "diff after action" in second_user
+    # Markers updated 2026-09-22 when _render_transcript was rewritten to
+    # one opening grid plus per-step diffs (the per-transition grids blew
+    # the context window). The BEHAVIOUR under test is unchanged: a retry
+    # must still carry the transcript, or the model is asked to infer a
+    # rule for data it can no longer see.
+    assert "step 0:" in second_user, "the retry prompt dropped the transcript"
+    assert "Grid at the first step shown" in second_user
+    assert "cells it changed" in second_user
 
 
 # =====================================================================
@@ -347,6 +353,11 @@ def make_agent(module, coder_responses=None, action_responses=None):
     agent.agent_name = "codeworldagent"
     agent._rng = _random.Random(0)
     agent._init_failed = False
+    agent.plan_stats = {"calls": 0, "stalled": 0, "planned": 0}
+    agent.goal_stats = {"falsified": 0, "revised": 0, "revision_failed": 0}
+    agent._goal_revisions_this_level = 0
+    agent._reset_goal_tracking()
+    agent.state_resyncs = 0
     agent.transcript = __import__("llm_engine.types", fromlist=["GameTranscript"]).GameTranscript(game_id="test-game")
     agent._probe_plan = __import__("llm_engine.opening_probes", fromlist=["opening_probe_plan"]).opening_probe_plan()
     agent._probe_index = 0
