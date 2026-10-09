@@ -471,6 +471,12 @@ diff the assistant messages of consecutive responses for repeats. If `repeated_a
 short tool-call turns (`_long` = 0) read the examples before calling it a loop; base's own count (same method on the
 base check run) is the reference for that judgement. Unit tests: `tests/test_m2_turbo_lossless.py`.
 
+### Tail check-run results (2026-10-09, kaggle-ops request `tail-eval-1009b`, workflow run 37994047836)
+
+Both tail variants PASS (all markers, 0 tracebacks, 25/25 gave_up, 2 retractions, 0 repeated assistant turns, history_cache
+zero-counters 0, timeout_fix / level_memory errors 0). One public-25 run cannot rank candidates; per-game figures not checked.
+- **turbo-tail v1**: 772.4 gen tok/s (+34% vs 577.8; target 664.5), 1779 completion tokens/request (+3.6% vs 1718), public-25 31 levels / mean_score 6.62, payload_delta 1005 vs payload_full 738 (only ~1.4x: "delta >> full" weakly met), KV peak 0.93, accept median 3.02, prefix cache 92.6%.
+
 ## Turbo-lossless kernel: turbo without the lossy acceptance (2026-10-09, built, not yet run)
 
 Kernel **`calamitychasm/arc3-m2-turbo-lossless`** (`kaggle_submission_m2_turbo_lossless/notebook/`), built by
@@ -533,6 +539,12 @@ python scripts\kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-turbo-
     --counters level_memory_summary.json --counters history_cache_summary.json --counters timeout_fix_summary.json
 ```
 kaggle-ops request examples are in CLAUDE.md ("Operating Kaggle from the cloud").
+
+### Tail check-run result (2026-10-09, request `tail-eval-1009b`, workflow run 37994047836)
+
+**turbo-lossless-tail v1: PASS.** All markers, 0 tracebacks, 25/25 gave_up, 657.4 gen tok/s (+13.8%; target 640, thin margin),
+2 retractions, 1579 tokens/request (-8.1%, within +-10%), 0 repeated turns, history_cache zero-counters 0 (delta 996 vs full 714),
+errors 0, public-25 36 levels / mean_score 8.17, KV peak 0.92, accept median 2.66. One public-25 run cannot rank candidates.
 
 ## Priority-gate tail variant combinable with turbo (2026-10-09, built, not yet run)
 
