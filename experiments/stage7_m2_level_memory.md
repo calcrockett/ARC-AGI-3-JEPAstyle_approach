@@ -393,7 +393,7 @@ had 16 streams), and kill rates of the same order as his 24% late-run figure.
   likely to be < 2%**: it falls to ~3% only if almost all stream-time is spent below N ~ 250 and the
   host is as fast as this container. The cheap-corner column is the honest floor.
 - Mechanism of the gain: mostly lost decode occupancy (streams idle in host work while holding a slot;
-  the table above shows ~7 of 10 streams decoding at best), then timeout kills at N >~ 500; very little
+  in the model only ~5-6 of the 10 streams are decoding at any instant even with the cache, ~3.4 with the incumbent at the median), then timeout kills at N >~ 500; very little
   of it is the plain additive cost.
 - Turns are not score. This run is decode-bound and scores were still rising, but how score scales with
   extra turns is unmeasured here (levels are discrete, efficiency is squared). A +15-25% turn gain could be
