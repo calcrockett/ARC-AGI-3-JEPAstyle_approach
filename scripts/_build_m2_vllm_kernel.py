@@ -136,6 +136,10 @@ def setup_patches(max_num_seqs: int, max_model_len: int, max_pixels: int) -> lis
         ("max num seqs",
          "VLLM_MAX_NUM_SEQS = 14\n",
          f"VLLM_MAX_NUM_SEQS = {max_num_seqs}{tag} = ARC3_MAX_ACTIVE_STREAMS\n"),
+        ("images per prompt",
+         "        json.dumps({'video': 0}),\n",
+         "        json.dumps({'image': 64, 'video': 0}),"
+         f"{tag} the harness attaches several boards (grid, diff, death, animation) per request\n"),
         ("chat template kwargs",
          """        '{"preserve_thinking": true, "reasoning_effort": "xhigh"}',\n""",
          """        '{"preserve_thinking": true}',""" + tag + " the incumbent's default; no reasoning_effort\n"),

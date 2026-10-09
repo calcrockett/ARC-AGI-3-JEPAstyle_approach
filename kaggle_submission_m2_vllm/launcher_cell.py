@@ -8,8 +8,8 @@
 # VLLM_OVERLAY_HASH_MISMATCH line before anything is unpacked. This cell runs it in the background
 # and, like the SGLang launcher it replaces, releases the benchmark at SERVER_STARTUP_TIMEOUT even
 # if the server is still loading (the harness retries HTTP for ARC3_HTTP_RETRY_INITIAL_SECONDS).
-# Once the server answers, boot probes log PREFIX_CACHE_PROBE / IMAGE_TOKENS_PROBE /
-# REASONING_ECHO_PROBE / TEMPLATE_PROBE and the line VLLM_SERVING active.
+# Once the server answers, boot probes (check runs only) log PREFIX_CACHE_PROBE / IMAGE_TOKENS_PROBE /
+# MULTI_IMAGE_PROBE / REASONING_ECHO_PROBE / TEMPLATE_PROBE, then the line VLLM_SERVING active.
 # Required notebook variables: WORKING_DIR, NOTEBOOK_START_TIME, SERVER_STARTUP_TIMEOUT,
 # SERVED_MODEL_NAME, SERVED_MODEL_PORT, TRUE_SUBMISSION, VLLM_RUNTIME_DIR, VLLM_MODEL_DIR,
 # VLLM_BUNDLE_DIR.
@@ -104,6 +104,17 @@ def probe_image_tokens():
     print(f"IMAGE_TOKENS_PROBE {n1 - n0} (one 640x640 board; the SGLang incumbent charges ~402; "
           f"~66 would mean max_pixels downscaled it)", flush=True)
     return n1 - n0
+
+
+def probe_multi_image(count=6):
+    """The harness sends several boards in one request (grid, diff, death frame, animation); his
+    stack only ever sent one. All must be accepted and charged at full size."""
+    content = [{"type": "text", "text": "Boards:"}] + [
+        {"type": "image_url", "image_url": {"url": board_png_data_url(seed=i)}} for i in range(count)]
+    n0 = _chat([{"role": "user", "content": [{"type": "text", "text": "Boards:"}]}])["usage"]["prompt_tokens"]
+    n = _chat([{"role": "user", "content": content}])["usage"]["prompt_tokens"] - n0
+    print(f"MULTI_IMAGE_PROBE images={count} ok={n >= count * 390} tokens={n}", flush=True)
+    return n
 
 
 def probe_prefix_cache():
@@ -235,7 +246,8 @@ def _after_ready(proc, ready_at):
         print(f"VLLM_SETUP_FAILED rc={rc}", flush=True)
         return False
     if not TRUE_SUBMISSION:
-        for probe in (probe_template_files, probe_reasoning_echo, probe_image_tokens, probe_prefix_cache):
+        for probe in (probe_template_files, probe_reasoning_echo, probe_image_tokens, probe_multi_image,
+                      probe_prefix_cache):
             try:
                 probe()
             except Exception as exc:  # noqa: BLE001 - a probe never stops the run

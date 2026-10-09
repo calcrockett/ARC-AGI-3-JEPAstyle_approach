@@ -214,6 +214,7 @@ def test_vllm_command_carries_this_harness_knobs(built, name, tmp_path):
     assert arg("--max-cudagraph-capture-size") == str(math.ceil(n * 4 / 8) * 8)
     assert json.loads(arg("--mm-processor-kwargs")) == {"max_pixels": 409600}
     assert json.loads(arg("--default-chat-template-kwargs")) == {"preserve_thinking": True}
+    assert json.loads(arg("--limit-mm-per-prompt")) == {"image": 64, "video": 0}
     i = cmd.index("--served-model-name")
     assert cmd[i + 1:i + 3] == ["flashnext", b.LORD_MODEL_NAME]
     assert arg("--generation-config") == "vllm" and arg("--port") == "1234"
@@ -354,7 +355,7 @@ def test_launcher_ready_path_runs_probes_and_marks_serving(tmp_path, fake_server
     exec(compile(src, "launcher_cell", "exec"), ns)
     out = capsys.readouterr().out
     assert "[vllm-setup] VLLM_OVERLAY_HASH_OK abc" in out and "READY after" in out
-    assert "IMAGE_TOKENS_PROBE 402 " in out
+    assert "IMAGE_TOKENS_PROBE 402 " in out and "MULTI_IMAGE_PROBE images=6 ok=True tokens=2412" in out
     assert "PREFIX_CACHE_PROBE identical=True" in out and "under_load=False" in out
     assert "REASONING_ECHO_PROBE harness_key=reasoning rendered=True" in out
     assert "TEMPLATE_PROBE tokenizer_sha=" in out and "matches_m2_pin=False" in out
@@ -458,12 +459,14 @@ def test_speed_report_parses_a_vllm_run(tmp_path):
     (d / "arc3-m2-vllm-s12.log").write_text(json.dumps([
         {"data": "VLLM_OVERLAY_HASH_OK e3a6\nTEMPLATE_PROBE tokenizer_sha=abc matches_m2_pin=True chat_template_sha=x\n"},
         {"data": "REASONING_ECHO_PROBE harness_key=reasoning rendered=True all={}\nIMAGE_TOKENS_PROBE 402 (one)\n"},
+        {"data": "MULTI_IMAGE_PROBE images=6 ok=True tokens=2412\n"},
         {"data": "PREFIX_CACHE_PROBE identical=True prompt_tokens=9000 cached_tokens=[0, 8960, 8960]\nVLLM_SERVING active\n"}]))
     out = rep.analyse("vllm-s12", d)
     assert out["gen_tok_s"] == "701.5" and out["levels"] == 5
     assert out["preempts"] == 4 and out["prefix_hit"] == 90.0 and out["restarts"] == 2
     assert out["kv_pool"] == "1234560" and out["retracts"] == 0 and out["tracebacks"] == 0
-    assert out["probes"] == {"PREFIX_CACHE_PROBE": "True", "IMAGE_TOKENS_PROBE": "402", "REASONING_ECHO_PROBE": "True",
+    assert out["probes"] == {"PREFIX_CACHE_PROBE": "True", "IMAGE_TOKENS_PROBE": "402", "MULTI_IMAGE_PROBE": "True",
+                             "REASONING_ECHO_PROBE": "True",
                              "TEMPLATE_PROBE": "True", "VLLM_OVERLAY_HASH": "OK", "VLLM_SERVING": "active"}
     assert rep.slug("vllm-s14") == "arc3-m2-vllm-s14" and rep.slug("base") == "arc3-m2-speed-base"
 

@@ -133,7 +133,7 @@ def parse_vllm_metrics(lines) -> dict:
     }
 
 
-PROBES = (r"PREFIX_CACHE_PROBE identical=(\w+)", r"IMAGE_TOKENS_PROBE (-?\d+)",
+PROBES = (r"PREFIX_CACHE_PROBE identical=(\w+)", r"IMAGE_TOKENS_PROBE (-?\d+)", r"MULTI_IMAGE_PROBE images=\d+ ok=(\w+)",
           r"REASONING_ECHO_PROBE harness_key=\S+ rendered=(\w+)", r"TEMPLATE_PROBE tokenizer_sha=\S+ matches_m2_pin=(\w+)",
           r"VLLM_OVERLAY_HASH_(MISMATCH|OK)", r"VLLM_SERVING (active)")
 
