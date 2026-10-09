@@ -14,12 +14,162 @@ refinement rather than an LLM. Side project / portfolio piece and a JEPA
 learning vehicle -- see `plan.md`'s "Framing & goals" for what "success"
 means here (not leaderboard-topping).
 
-## CURRENT STATUS (2026-09-07) -- strategic reset; read this before anything below
+**As of 2026-10-09 the scored entry is no longer the JEPA agent**: it is a
+fork of the public Milestone-2 LLM solution plus our level-memory patch (see
+CURRENT STATUS). The JEPA/GraphExplorer work below is retained as history.
 
-**Everything from "## Status" down to the Gotchas section is still accurate as a
-record of what was tried, but it is no longer the plan.** Three findings
-established on 2026-09-07 supersede it. Full analysis:
-`experiments/stage7_strategy_reset.md`; backlog is now tracked in GitHub Issues.
+## CURRENT STATUS (2026-10-09) -- read this first; supersedes every status section below
+
+**Everything below this section is history.** Sections 1-9 of the dated log
+(the 2026-09-07 "strategic reset" through the 2026-09-21 "CURRENT STANDING")
+are **superseded** and several of their numbers are stale (top-10% bar,
+"best score 3.79", "incumbent = anim"). Sections 10-14 are accurate dated
+records that this section summarises. Detail lives in `experiments/`.
+
+### Incumbent: milestone-2 fork + solved-level memory ("m2 + level memory")
+
+| field | value |
+|---|---|
+| kernel | `calamitychasm/arc3-m2-level-memory` **v1** (private, GPU, no internet) |
+| source dir | `kaggle_submission_m2_level_memory/notebook/` (`arc3-m2-level-memory.ipynb` + `kernel-metadata.json`) |
+| machine | `machine_shape: NvidiaRtxPro6000`, `enable_gpu: true` |
+| dataset sources | `dfranzen/pennyroyal-v253` (SGLang fork), `dfranzen/taaf-kaggle-source-bundle-copy` |
+| model sources | `dfranzen/intel-qwen3.8-flash-next-w4a16-autoround/Transformers/default/1`, `dfranzen/albucino-qwen3-8-flash-next-drafter/Transformers/default/1` |
+| competition source | `arc-prize-2026-arc-agi-3` |
+| lineage | verbatim fork of `dfranzen/arc-agi-3-milestone-2-solution` (Apache-2.0; our fork kernel `calamitychasm/arc3-milestone2-fork` v1, source in `kaggle_submission_milestone2_fork/upstream/`) plus `kaggle_submission_milestone2_fork/level_memory/level_memory.py` (sirikilohit's M85 port, installed at runtime on the patched `ToolAgent`; every upstream cell identical except the run cell, which only gains a counter dump, plus one install cell) |
+| what it is | W4A16 Qwen3.8-Flash-Next + MTP drafter on an SGLang fork, 128K context, an 8,400-line harness patch, harness-side priority gate (all ~110 games, 10 active streams ranked by expected level value) |
+
+**Scores (n=4, byte-identical resubmits of v1): 33.29, 28.18, 31.03, 29.38;
+mean 30.47, sd 2.21.** Versus the unmodified fork's draw distribution (hundreds
+of public copies: mean 25.77, sd 3.93) the effect is +4.7 (95% CI +0.8..+8.6),
+one-sided p = 0.008 on the known-sigma test (t-test on our own spread: p ~ 0.012).
+Treat 33.29 as a high draw selected for reporting; **30.5 +/- 2.2 is the level
+we hold**, not 33. See `experiments/stage7_m2_level_memory.md`.
+
+**Resubmit procedure** (needs a machine that can reach kaggle.com and has
+`~/.kaggle` credentials -- see the environment note below):
+
+1. Quota is **1 submission per UTC day**; slot opens 00:00 UTC. Unused slots are
+   lost. Arm from `date -u`, never from an assumed clock.
+2. The kernel's check run (non-submission mode, 10 public games x 25 min) must be
+   COMPLETE for the version you submit. `kaggle kernels status calamitychasm/arc3-m2-level-memory`.
+   Push a kernel only when a GPU slot is free (2-session limit; see Gotchas) --
+   `scripts/kaggle_push_queue.py` checks.
+3. Gated submit (no AI needed; the gate reads the check-run log: markers present,
+   no traceback outside serving teardown, every game won/gave_up/cancelled,
+   counters JSON `errors == 0`):
+   ```
+   python scripts/kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-level-memory \
+     --version 1 --message "m2 level memory draw N" \
+     --marker "LEVEL_MEMORY installed" --marker "priority gate active" \
+     --marker "harness patch applied successfully" --counters level_memory_summary.json
+   # add --arm "YYYY-MM-DD HH:MM" (UTC) to schedule it as a one-shot Windows task
+   ```
+   Or by hand: `kaggle competitions submit -c arc-prize-2026-arc-agi-3 -k calamitychasm/arc3-m2-level-memory -v 1 -f submission.parquet -m "..."`.
+4. Scores land ~9 h later. `scripts/kaggle_watch.py` (Windows task `ARC3KaggleWatch`,
+   every 10 min) writes `logs/kaggle_watch_latest.txt`; or
+   `kaggle competitions submissions -c arc-prize-2026-arc-agi-3 --csv`.
+
+Automation on the dev box (Windows Task Scheduler, survives any chat):
+`ARC3KaggleWatch`, `ARC3PushQueue`, one-shot `ARC3Submit_*`.
+The 2026-09-13 / 09-19 lost slots taught that a scheduled submitter dies with
+a sleeping machine -- confirm the dev box is awake and the task fired.
+
+### Submission ledger since 2026-09-21
+
+(For 2026-07-16..09-21 see the ledger in section 3 below and section 9; the best
+of those was 3.79 / anim 3.43, 3.79, 3.37, 3.02.)
+
+| date | ref | kernel / config | score |
+|---|---|---|---:|
+| 2026-09-22 | -- | anim graft draw 5 | 2.66 |
+| 2026-09-24 | -- | NVFP4 baseline draw 5 (period-effect check) | 2.48 |
+| ~2026-09-25..27 | -- | anim graft draw 6 (exact date not recorded in repo) | 3.28 |
+| 2026-09-28 | 56631362 | anim + momentum time (`stage7-momentum-time`) | 4.37 |
+| 2026-09-29 | 56655708 | sheetu12b + momentum (`stage7-sheet-momentum`) | 3.89 |
+| 2026-09-30 | 56713526 | sheetu12b + momentum, byte-identical | 4.38 |
+| 2026-10-01 | 56750615 | sheetu12b + momentum, byte-identical | 4.58 |
+| 2026-10-02 | 56763055 | **milestone-2 fork, verbatim** (`arc3-milestone2-fork` v1) | **24.99** |
+| 2026-10-03 | 56789553 | **m2 + level memory** (`arc3-m2-level-memory` v1) | **33.29** |
+| 2026-10-04 | 56809165 | m2 + level memory, byte-identical | 28.18 |
+| 2026-10-05 | 56842120 | m2 + level memory, byte-identical | 31.03 |
+| 2026-10-06 | 56864478 | m2 + level memory, byte-identical | 29.38 |
+
+Notes: the jump 4.58 -> 24.99 came from swapping in the public milestone-2
+solution (serving stack: 94% prefix-cache reuse vs 0%, ~590 vs ~250 generated
+tok/s, 128K vs 32K context), not from anything of ours. Our own contribution
+is the level-memory patch (+4.7). **2026-10-07 and 2026-10-08: no submission
+recorded in the repo; verify against the API.** Rank after 33.29 was **10**.
+
+### Leaderboard snapshot (2026-10-02) and calibration
+
+#1 **52.51** (Tufa Labs), #49 28.66, #99 27.36, of **3,564 teams**. Our rank
+after 24.99 was 249 (top ~7%); after 33.29 on 2026-10-03, **rank 10**. The
+leaderboard is refreshed by other teams' draws daily; re-read it before
+quoting a rank. Public-25 free runs are not a ranking instrument (SE +/-2.46
+on the old stack); hidden-set submissions are, and the noise floor of the
+unmodified notebook is sd 3.93, so **one draw resolves only ~8-point effects;
+a +2.6 change needs ~9 draws per arm.** Prefer changes whose effect can be
+measured without a submission (throughput, startup), and judge prompt/harness
+changes as bundles on mechanism (`experiments/stage7_milestone2_improvements.md`).
+
+### Deadlines
+
+- **Entry / team-merger deadline: 2026-10-26.**
+- **Final submission deadline: 2026-11-02 23:59 UTC.**
+- **Up to 2 final submissions may be selected** for the private-set scoring.
+  Select deliberately: with sd ~2-4 per draw, pick on draw count and mechanism,
+  not on the single highest draw (winner's curse).
+- At 1 submission per UTC day, from 2026-10-09 to 2026-11-02 there are about
+  25 slots left. Do not waste any.
+
+### Open leads (from section 14 and `experiments/stage7_milestone2_improvements.md`)
+
+The run is **decode-bound and compute-starved**: ~700 tok/s x 532 min ~ 22M
+tokens / ~110 games = ~200K tokens per game, against a per-level reference of
+27-67K, and scores were still rising when the clock ended. KV pool 1.01M
+(FP8) peaked at 0.91 usage with `max_running_requests=10`.
+
+1. **More streams / more KV room.** The other two Milestone-2 winners ran 14
+   (lordhansolo, vLLM, KV 1.42M) and 16 (sirikilohit, 1.0M + 48 GB host tier)
+   streams for peak decode 1,135-1,159 vs our 946. Untested here: 12/14 streams
+   and the 32 GB system-RAM KV tier. They need KV room from a smaller KV dtype
+   (NVFP4 KV reportedly costs little NLL vs FP8), shorter retained context, or
+   the host tier -- **not** from the static memory fraction.
+2. **Closed in section 14 (do not retry):** 4 draft tokens is impossible (Qwen
+   QSA caps `speculative_num_draft_tokens` at 4; 3 steps already uses it);
+   `--mem-fraction-static 0.98` OOMs at runtime (lazily loaded Triton kernels
+   need the ~4 GB that 0.96 leaves). Baseline throughput is reproducible
+   (577.8 / 576.5 tok/s).
+3. **Strategy-audit prompt** at 25% of a game's time (lordhansolo's extra).
+4. **Longer retained history** with freed KV (one team went 14.5 -> 22.5 mainly
+   on this; sirikilohit's biggest step was the same change).
+5. **Prompt-side extras** from the other winners (Wang/Ludvig addenda).
+6. Unseparated: how much of 4.58 -> 24.99 is serving efficiency vs harness
+   /perception changes (our switch changed everything at once).
+
+### Environment note: this cloud checkout
+
+The Claude Code cloud environment these notes were last edited in is
+**Linux, no GPU, 4 CPU**. It **cannot reach kaggle.com** unless the
+environment network policy allows it, so it cannot push kernels, submit, or
+read the leaderboard; all Kaggle steps above run on the Windows dev box
+(RTX 2070, scheduled tasks). It can edit code, run the unit tests
+(`pytest tests/ -q`), and push branches to GitHub.
+
+### Branches merged into this one (2026-10-09)
+
+`stage7-milestone2-fork` (incumbent, sections 12-14), `stage7-sheet-momentum`
+(10-11), `stage7-momentum-time`, `stage7-goal-hint` (which contains
+`stage7-hud-perception`), `stage7-codeworld-backtest`. Section 8b (CodeWorldAgent
+verdict overturned) comes from `stage7-goal-hint`.
+
+## HISTORY -- dated status log (sections 1-14; sections 1-9 are SUPERSEDED)
+
+Original 2026-09-07 header, kept for the record: **Everything from "## Status"
+down to the Gotchas section is still accurate as a record of what was tried,
+but it is no longer the plan.** Full analysis:
+`experiments/stage7_strategy_reset.md`; backlog is tracked in GitHub Issues.
 
 ### 1. We were optimizing the wrong objective
 
@@ -360,7 +510,7 @@ defect had already been written down in
 `experiments/stage7_codeworld_backtest.md` as finding #4 and was simply
 not carried into the engine the live agent uses.
 
-### 9. CURRENT STANDING — 2026-09-21 (supersedes the 2026-09-07 header above)
+### 9. CURRENT STANDING — 2026-09-21 (SUPERSEDED by "CURRENT STATUS (2026-10-09)" at the top; kept as history)
 
 **Best score 3.79. Rank ~204 / 3,175. Top 5.7%. The top-10% mission target is
 met.** The header above ("top 10% = 2.99", "we sit at 2.95") is stale; the bar
@@ -649,7 +799,8 @@ token cost -- both untested fixes. Draw 2 (byte-identical, ref 56713526):
 **4.38**. vs anim n=6: p = 1/28 = 0.036. Not separable from anim + momentum
 (4.37, n=1); neither arm's two components are separated.
 Draw 3 (ref 56750615): **4.58**, the project's best. n=3 mean 4.283, sd 0.355;
-vs anim p = 1/84 = 0.012. **Incumbent config for new draws: sheetu12b + momentum.**
+vs anim p = 1/84 = 0.012. **Incumbent config for new draws: sheetu12b + momentum.** *(Superseded 2026-10-02 by section 12.)*
+
 ### 12. Milestone-2 fork (2026-10-02): **24.99**, rank 249 -- top ~7%
 
 Branch `stage7-milestone2-fork`, write-up `experiments/stage7_milestone2_fork.md`.
@@ -4247,6 +4398,7 @@ specifically -- use the free unconditional-diagnostic-cell trick described
 above to narrow it down without spending more of the daily quota.
 
 ## Gotchas learned the hard way (don't re-discover these)
+
 - **(2026-10-05) A Kaggle kernel whose FIRST push is rejected at the 2
   concurrent GPU-session limit never mounts its `dataset_sources`
   afterwards** (`cp: cannot stat /kaggle/input/datasets/...`), on every later
@@ -4255,6 +4407,9 @@ above to narrow it down without spending more of the daily quota.
   whose first push succeeded. Push only when a GPU slot is free
   (`scripts/kaggle_push_queue.py` checks); if it happens, recreate the kernel
   under a new slug.
+- **(2026-10-09) The Claude Code cloud environment (Linux, no GPU, 4 CPU) cannot
+  reach kaggle.com** unless the environment network policy allows it. Kaggle
+  pushes, submissions, watchers and the leaderboard need the Windows dev box.
 - **(2026-10-05) SGLang `--mem-fraction-static 0.98` OOMs on the milestone-2
   stack** a few seconds into serving: Triton kernels load lazily after
   start-up and need the ~4 GB that 0.96 leaves free.
@@ -4415,18 +4570,6 @@ above to narrow it down without spending more of the daily quota.
   mid-sweep. On this dev box specifically, `E:` is a second drive with
   real free space (`Get-PSDrive` to check current free space on any
   drive) -- worth checking before assuming C: is the only option.
-- **The harness's anonymous `ARC_API_KEY` expires within roughly a day,
-  not just between machines/sessions.** Hit this repeatedly across this
-  project's later sessions -- every game-listing call returns HTTP 401,
-  `main.py` silently proceeds with an empty game list, and every agent
-  run in that state produces a technically-valid recording file with zero
-  real actions and zero levels (which can look exactly like a real agent
-  regression if you're mid-comparison, not an infrastructure issue).
-  Refresh via `curl https://three.arcprize.org/api/games/anonkey` and
-  update `.env`'s `ARC_API_KEY` -- and if a comparison run ever comes back
-  suspiciously empty (0 runs found, or every agent scoring 0 across the
-  board), check for this *first*, before assuming a code change broke
-  something.
 - **A deterministic `argmax` over a salience/variance map will default to
   the same fixed index every time the map is flat or near-flat, not a
   "no preference" no-op.** `Hypothesis`'s original click-location
@@ -4516,23 +4659,21 @@ above to narrow it down without spending more of the daily quota.
     a garbage-in-garbage-out training run that still runs to completion
     without erroring.
 
-- **The anonymous `ARC_API_KEY` in `ARC-AGI-3-Agents/.env` can expire
-  between sessions**, even in fully offline mode -- `main.py` always hits
-  the *real* `{ROOT_URL}/api/games` endpoint to get the game list before
-  anything else happens (offline mode only affects gameplay stepping, not
-  this initial listing call), and an expired/invalid key makes that
-  request return HTTP 401. When it does, `main.py` logs the 401, gets an
-  empty game list, and exits immediately -- every agent run in that state
-  silently produces a fully-valid-looking recording file with zero
-  actions and zero levels, which can look exactly like a real agent
-  failure if you're mid-debugging something else (this happened while
-  evaluating Stage 5 -- a first "0 levels completed across 200 runs"
-  result briefly looked like a hypothesis-bundle bug before the real
-  cause turned out to be an expired key). Get a fresh one with
-  `curl https://three.arcprize.org/api/games/anonkey` and update
-  `ARC_API_KEY` in `.env`; a quick single-game run is enough to confirm
-  it's fixed (watch for a nonzero total action count instead of an
-  immediate "No games available to play" error in the log).
+- **The anonymous `ARC_API_KEY` in `ARC-AGI-3-Agents/.env` expires within
+  roughly a day -- between sessions and even within one** (merged from two
+  earlier near-duplicate entries). `main.py` always hits the *real*
+  `{ROOT_URL}/api/games` endpoint to get the game list before anything else
+  (offline mode only affects gameplay stepping), and an expired key returns
+  HTTP 401. `main.py` logs the 401, gets an empty game list, and exits; every
+  agent run in that state silently produces a valid-looking recording file
+  with zero actions and zero levels, which looks exactly like a real agent
+  regression (a first "0 levels completed across 200 runs" Stage 5 result
+  briefly looked like a hypothesis-bundle bug for this reason). If a
+  comparison run comes back suspiciously empty (0 runs found, or every agent
+  scoring 0), check this *first*. Get a fresh key with
+  `curl https://three.arcprize.org/api/games/anonkey`, update `ARC_API_KEY`
+  in `.env`, and confirm with a quick single-game run (nonzero action count,
+  no "No games available to play" in the log).
 - **A Kaggle `dataset_sources` attachment mounts at
   `/kaggle/input/datasets/<owner>/<slug>/`, not `/kaggle/input/<slug>/`**
   -- unlike a competition attachment, which *does* mount at the
