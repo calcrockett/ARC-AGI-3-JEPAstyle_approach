@@ -284,7 +284,7 @@ tokenizer.json is byte-identical. The diff happens on the first check run (see d
 ```
 kaggle datasets files lordhansolo/vllm-main-e975732-arc3          :: runtime-manifest.json, overlay .tar.blob, layer blobs, applier
 kaggle datasets files lordhansolo/taaf-kaggle-source              :: src/ARC3-Inference/configs/draft_vocab_32k.json present
-kaggle models instances versions files lordhansolo/qwen3-8-flash-next-mixed-nvfp4-fp8/pyTorch/hf-mixed-mtp-nvfp4/1
+kaggle models instances versions files lordhansolo/qwen3-8-flash-next-mixed-nvfp4-fp8/PyTorch/hf-mixed-mtp-nvfp4/1
 kaggle datasets download lordhansolo/vllm-main-e975732-arc3 -f arc3_vllm_main_e975732_arc3_overlay.tar.blob -p tmp\vllm
 kaggle datasets download lordhansolo/vllm-main-e975732-arc3 -f runtime-manifest.json -p tmp\vllm
 certutil -hashfile tmp\vllm\arc3_vllm_main_e975732_arc3_overlay.tar.blob SHA256   :: must be e3a6fe0d9f010bc1...e065e0cb
