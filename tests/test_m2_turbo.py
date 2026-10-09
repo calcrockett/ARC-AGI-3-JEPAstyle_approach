@@ -90,6 +90,7 @@ def test_metadata_matches_incumbent_except_identity():
     assert new["id"] == "calamitychasm/arc3-m2-turbo" and new["code_file"] == "arc3-m2-turbo.ipynb"
     for k in ("id", "title", "code_file"):
         inc.pop(k), new.pop(k)
+    assert new.pop("docker_image_pinning_type") == "original"   # variants pin the incumbent's image
     assert inc == new          # same GPU, image, datasets, models; no internet
 
 
@@ -151,6 +152,55 @@ def test_markers_print_what_the_gate_expects():
     line = ("ARC3 REAP: kept 448 of 512 routed experts in each of 48 layers (193536 expert tensors loaded, 27648 "
             "pruned tensors skipped); routers sliced to 448 rows, router sha256 verified; list x")
     assert "REAP448 applied kept=448" in " ".join(["REAP448 applied kept=448 |", line.split("ARC3 REAP: ", 1)[1]])
+
+
+REAP_KERNELS = [("kaggle_submission_m2_turbo", "arc3-m2-turbo"),
+                ("kaggle_submission_m2_turbo_lossless", "arc3-m2-turbo-lossless"),
+                ("kaggle_submission_m2_turbo_tail", "arc3-m2-turbo-tail"),
+                ("kaggle_submission_m2_turbo_lossless_tail", "arc3-m2-turbo-lossless-tail")]
+REAP_LOG_LINE = ("[2026-10-09 01:02:03] ARC3 REAP: kept 448 of 512 routed experts in each of 48 layers (193536 expert "
+                 "tensors loaded, 27648 pruned tensors skipped); routers sliced to 448 rows, router sha256 verified")
+
+
+def _post_run_reap(run_cell: str) -> str:
+    start = run_cell.index("try:   # [calamitychasm turbo] REAP-448 confirmation")
+    end = run_cell.index("    print('REAP448 post-run check failed', repr(_exc), flush=True)\n", start)
+    return run_cell[start:end] + "    print('REAP448 post-run check failed', repr(_exc), flush=True)\n"
+
+
+@pytest.mark.parametrize("dirname,slug", REAP_KERNELS)
+def test_reap_marker_is_rechecked_after_the_run(dirname, slug, tmp_path, capsys):
+    """Regression: the launcher's REAP check runs right after its health loop; a server still loading at the
+    12-min startup deadline (normal boot ~9 min) used to leave a healthy run without the gate's REAP marker.
+    The run cell re-reads serve.log after bm.run and prints the marker the gate expects."""
+    cells = _cells(ROOT / dirname / "notebook" / f"{slug}.ipynb")
+    run = _one(cells, "print('Starting benchmark...')")
+    assert run.index(B.RUN_ANCHOR) < run.index("REAP-448 confirmation from serve.log")
+    code = _post_run_reap(run)
+    assert code == B.REAP_DUMP
+    log = tmp_path / "serve.log"
+    marker = next(m for m in B.kernel_markers([v for v in B.variant_names(B.TURBO)]) if m.startswith("REAP448"))
+    for content, expect in ((None, "REAP448 post-run check failed"),
+                            ("loading...\n", "REAP448 NOT CONFIRMED after the run"),
+                            ("loading...\n" + REAP_LOG_LINE + "\nready\n", marker)):
+        if content is not None:
+            log.write_text(content)
+        exec(compile(code, "run_cell_reap", "exec"), {"Path": Path, "LOG": str(log)})   # never raises
+        out = capsys.readouterr().out
+        assert expect in out, (expect, out)
+    assert "REAP448 applied kept=448 (post-run) | kept 448 of 512" in out
+
+
+def test_variant_kernels_pin_the_docker_image_and_the_incumbent_is_untouched():
+    """Kaggle's latest image moved to Python 3.13 (cp312-only wheelhouse): every variant pins the image."""
+    inc = json.loads((ROOT / "kaggle_submission_m2_level_memory" / "notebook" / "kernel-metadata.json").read_text())
+    assert "docker_image_pinning_type" not in inc and "@sha256:" in inc["docker_image"]
+    dirs = sorted(p for p in ROOT.glob("kaggle_submission_m2_*/notebook/kernel-metadata.json")
+                  if p.parent.parent.name.startswith(("kaggle_submission_m2_lm_", "kaggle_submission_m2_turbo")))
+    assert len(dirs) >= 9
+    for p in dirs:
+        meta = json.loads(p.read_text())
+        assert meta["docker_image_pinning_type"] == "original" and meta["docker_image"] == inc["docker_image"], p
 
 
 @pytest.mark.parametrize("argv,slug", [

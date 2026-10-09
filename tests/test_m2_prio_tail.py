@@ -120,6 +120,7 @@ def test_committed_tail_kernels_are_current(tmp_path, monkeypatch):
         assert meta["id"] == f"calamitychasm/{slug}" and meta["code_file"] == committed.name
         for k in ("id", "title", "code_file"):
             meta.pop(k), inc.pop(k)
+        assert meta.pop("docker_image_pinning_type") == "original"
         assert meta == inc
 
 

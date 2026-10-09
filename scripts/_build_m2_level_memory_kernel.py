@@ -93,6 +93,7 @@ assert "'''" not in LM_SRC, "module source must not contain ''' (it is inlined i
 HC_SRC = (FORK / "history_cache" / "history_cache.py").read_text(encoding="utf-8")
 assert "'''" not in HC_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 INCUMBENT = "arc3-m2-level-memory"
+DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type of every variant build
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
 VARIANT_ORDER = ("histcache", "triedfacts", "tail", "timeoutfix", "reap", "acc", "hotmap", "streams", "all25", "inputs")
@@ -639,6 +640,23 @@ def serving_edits(nb, names) -> None:
 VARIANT_PRE_LAUNCH_CELLS = {"reap": reap_files_cell, "hotmap": hotmap_cell}
 VARIANT_CELLS["timeoutfix"] = timeout_fix_cell
 VARIANT_RUN_DUMP["timeoutfix"] = TF_DUMP
+# The launcher confirms REAP from serve.log right after its health loop; when the server is still loading at
+# SERVER_STARTUP_TIMEOUT (12 min after the notebook started; a normal boot takes ~9) that check finds nothing and the
+# marker the submit gate requires would be missing from a healthy run. Re-check once the benchmark has run.
+REAP_DUMP = (
+    "try:   # [calamitychasm turbo] REAP-448 confirmation from serve.log, after the run (the server may have\n"
+    "    # finished loading only after the launcher released the benchmark at its startup deadline)\n"
+    "    _rp_line = next((ln for ln in Path(LOG).read_text(errors='replace').splitlines()\n"
+    f"                     if 'ARC3 REAP: kept {REAP_KEPT} of' in ln), None)\n"
+    "    if _rp_line:\n"
+    f"        print('REAP448 applied kept={REAP_KEPT} (post-run) |', _rp_line.split('ARC3 REAP: ', 1)[1][:240], "
+    "flush=True)\n"
+    "    else:\n"
+    "        print('REAP448 NOT CONFIRMED after the run: no \"ARC3 REAP: kept\" line in serve.log', flush=True)\n"
+    "except Exception as _exc:\n"
+    "    print('REAP448 post-run check failed', repr(_exc), flush=True)\n"
+)
+VARIANT_RUN_DUMP["reap"] = REAP_DUMP
 
 
 def install_cell(variants=()) -> dict:
@@ -727,6 +745,11 @@ def build(variants=()) -> Path:
     path.write_text(json.dumps(nb, indent=1), encoding="utf-8")
     meta = json.loads((FORK / "notebook" / "kernel-metadata.json").read_text(encoding="utf-8"))
     meta.update(id=kernel_id(variants), title=slug, code_file=path.name, is_private=True)
+    if variants:
+        # Pin the session to `docker_image` explicitly (JustAdev742 lesson 0029: Kaggle's latest image moved to
+        # Python 3.13 by 2026-10-07 and Pennyroyal's wheels are cp312 only). The incumbent v1 metadata stays as pushed.
+        assert meta.get("docker_image", "").count("@sha256:") == 1, "the incumbent metadata must pin an image digest"
+        meta["docker_image_pinning_type"] = DOCKER_PINNING
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return path
 

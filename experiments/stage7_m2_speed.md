@@ -540,3 +540,24 @@ kaggle-ops request examples are in CLAUDE.md ("Operating Kaggle from the cloud")
 `arc3-m2-turbo-tail`, `arc3-m2-turbo-lossless-tail`, `arc3-m2-lm-tail`. Scheduling only, no throughput effect; the
 check run passes on the base kernel's criteria plus the `PRIORITY_TAIL installed` marker. Why and the replay
 (+0.4..+3.9% RHAE simulated, median ~+2.2%): `experiments/stage7_milestone2_improvements.md` section 4.
+
+## Pre-flight review of turbo-tail / turbo-lossless-tail (2026-10-09)
+
+Cell-by-cell diff of `arc3-m2-turbo-tail` against the incumbent and against JustAdev742's own builder output
+(`scripts/build_franzen_nb.py --input-fallback --reap-kept ... --cfg MAXREQ=14 --cfg CUDAGRAPH_MAXBS=14
+--cfg MAMBA_CACHE=84 --cfg SPEC_ACCEPT_*=0.5 --env ARC3_MAX_ACTIVE_STREAMS=14 --hot-tokens ... --full25 25
+--patch ours-sandbox-timeout-keeps-work.patch`, run against da-fr's repo): the launcher cell matches theirs line for
+line apart from comments and our marker prints (same REAP apply point, same override args with the draft kept at
+512, same hot-map sha `ec15348b...`, same streams/graph/Mamba values, MEMFRAC 0.96 so the freed weights go to the
+KV pool: their measured 1.01M -> 1.48M tokens). Every code cell compiles under Python 3.12 (the pinned image), and
+the history-cache / level-memory / timeout-fix / turbo test files pass under 3.12 as well as 3.13; the built
+install + history-cache + timeout-fix cells of the tail kernel compose on the real harness (gate reports 14 streams,
+`_priority_human_actions()` 60, B 8/7/5/5).
+
+Two changes made:
+- **REAP marker re-checked after the run.** The launcher's serve.log check runs right after the health loop, and
+  the loop releases the benchmark at 12 min after notebook start (a normal boot is ~9 min). A server still loading
+  then would have left a healthy check run without `REAP448 applied kept=448` and failed the gate. The run cell now
+  re-reads serve.log after `bm.run` (`REAP448 applied kept=448 (post-run) | ...`; never raises).
+- **`docker_image_pinning_type: "original"`** in every variant kernel's metadata (incumbent v1 untouched), as in
+  JustAdev742's lesson 0029: Kaggle's latest image moved to Python 3.13 while the wheelhouse is cp312 only.

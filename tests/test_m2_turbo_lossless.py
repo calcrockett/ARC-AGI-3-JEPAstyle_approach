@@ -72,6 +72,7 @@ def test_metadata_matches_incumbent_except_identity():
     assert new["title"] == "arc3-m2-turbo-lossless"
     for k in ("id", "title", "code_file"):
         inc.pop(k), new.pop(k)
+    assert new.pop("docker_image_pinning_type") == "original"
     assert inc == new
 
 

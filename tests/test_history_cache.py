@@ -423,6 +423,7 @@ def test_built_kernels_match_the_incumbent_except_the_additions(variants):
     assert m_new["id"] == build.kernel_id(variants) and m_new["title"] == slug and m_new["code_file"] == f"{slug}.ipynb"
     for k in ("id", "title", "code_file"):
         m_inc.pop(k), m_new.pop(k)
+    assert m_new.pop("docker_image_pinning_type") == build.DOCKER_PINNING   # variants pin the image
     assert m_inc == m_new
 
 
