@@ -369,7 +369,7 @@ slot), and one-shot `ARC3Submit_*` tasks (`scripts/kaggle_submit_when_ready.py
   the working Stage 0 harness. Merge to master once Stage 1 clears its
   milestone (see Status below) or is deliberately parked as a documented
   limitation.
-- Remote: `https://github.com/CalamityChasm/ARC-AGI-3-JEPAstyle_approach`
+- Remote: `https://github.com/calcrockett/ARC-AGI-3-JEPAstyle_approach`
   (private). Git identity for commits in this repo: `CalamityChasm
   <calcrockett@gmail.com>` (repo-local config, not global -- check `git
   config user.name`/`user.email` if cloning fresh on a new machine, you'll
