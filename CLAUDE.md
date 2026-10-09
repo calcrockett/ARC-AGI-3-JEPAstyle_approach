@@ -154,6 +154,9 @@ public games x 25 min, gated by `kaggle_submit_when_ready.py`); status of all: *
 
 | kernel | notebook dir | change vs incumbent | evidence / expected effect | check-run pass / kill (detail) |
 |---|---|---|---|---|
+| `arc3-m2-turbo-tail` | `kaggle_submission_m2_turbo_tail` | **primary challenger (arm A)**: turbo + **priority-gate fix** (`ARC3_PRIORITY_HUMAN_ACTIONS=60` + last-level future bonus 0 -> 5, set at runtime in an install cell; marker `PRIORITY_TAIL installed`) | simulated +0.4..+3.9% RHAE, median ~+2.2% (~+0.7 LB pts), **zero throughput cost** (`experiments/stage7_milestone2_improvements.md` section 4, `scripts/sim_m2_priority_gate.py`); turbo evidence as the turbo row | turbo's criteria plus `PRIORITY_TAIL installed` (builder `kernel_markers()` output) |
+| `arc3-m2-turbo-lossless-tail` | `kaggle_submission_m2_turbo_lossless_tail` | **hedge (arm B)**: turbo-lossless + the same priority-gate fix | as above on the lossless turbo base | turbo-lossless's criteria plus `PRIORITY_TAIL installed` |
+| `arc3-m2-lm-tail` | `kaggle_submission_m2_lm_tail` | incumbent + the same priority-gate fix only (no histcache / serving change) | same simulation; ~100 draws per arm to see on its own, so **no slots of its own**: it exists to isolate the gate fix if a tail bundle misbehaves | `PRIORITY_TAIL installed`, incumbent markers, level_memory errors 0 |
 | `arc3-m2-turbo` | `kaggle_submission_m2_turbo` | histcache + sandbox-timeout fix + **REAP-448** (prune 64/512 experts per layer at load, +7.3 GiB KV) + **MTP acceptance 0.5** (lossy) + ARC FR-Spec map + **14 streams** (Mamba 84, mem 0.96); check run plays all 25 public games x 25 min (rerun unchanged) | JustAdev742 (Apache-2.0), **same stack**, same-conditions gates: 641.9 -> 733.2 (REAP+14) -> **819.3 output tok/s (+28%)**, output length unchanged; public-25 full length 56.00 / 42.89 vs Franzen 45.6-47.5; REAP shifts image-turn logprobs (0.048 vs 0.038 floor); their LB draw 56980485 PENDING at port time | markers incl. `REAP448 applied kept=448`, `SPEC_ACCEPT 0.5`, `ARC_HOTMAP sha=ec15348b...`, `TIMEOUT_FIX installed`, `priority gate active: 14 concurrent streams`; gen tok/s >= 664.5 (+15% vs 577.8; kill < 606.7), retracts <= 2x base, histcache zero-counters, LM/TF errors 0 (`stage7_m2_speed.md`, Turbo) |
 | `arc3-m2-turbo-lossless` | `kaggle_submission_m2_turbo_lossless` | exactly turbo **without** the lossy acceptance: histcache + sandbox-timeout fix + REAP-448 + ARC FR-Spec map + 14 streams; `SPEC_ACCEPT_SINGLE/ACC` stay 1.0 (the cell diff vs turbo is the header blurb and the launcher's acceptance lines only) | JustAdev742 measured REAP-448 + 14 streams alone at 733.2 vs 641.9 output tok/s (**+14%**, 49.45 public-25 full length) on our stack; the only unmeasured risk is REAP on image turns; the fallback if acceptance 0.5 proves lossy | markers as turbo minus `SPEC_ACCEPT 0.5`; gen tok/s **>= 640** (kill < 606.7), output tokens/request within +-10% of base, 0 exact repeated assistant turns, other guards as turbo (`stage7_m2_speed.md`, Turbo-lossless) |
 | `arc3-m2-lm-histcache` | `kaggle_submission_m2_lm_histcache` | history cache (compact state file, cached loads/views, incremental sandbox payloads); **zero behaviour change** | local host overhead per action 2.03 s -> 0.065 s at N=1000 (0.20 -> 0.009 at N=100); modelled +15-25% turns median, range +3..+40% (model, not measured) | `history_cache_summary.json`: errors/write_fallbacks/payload_plain/view_misses/loads_stale all 0, payload_delta >> payload_full; kills <= incumbent (`stage7_m2_level_memory.md`) |
@@ -176,28 +179,33 @@ Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-f
 1. **Every UTC day, submit something.** Until a challenger passes its check run, submit the incumbent v1
    (n grows; scores so far 33.29, 28.18, 31.03, 29.38). First verify the 2026-10-07 and 10-08 slots in the
    API (`kaggle competitions submissions -c arc-prize-2026-arc-agi-3 --csv`); this file records neither.
-2. **Push the histcache check runs first** (`arc3-m2-lm-histcache`, then `...-histcache-triedfacts`):
-   highest expected value, lowest risk. Read `history_cache_summary.json` by hand before arming a
-   submission (write_fallbacks / payload_plain / view_misses / loads_stale all 0; payload_delta >>
-   payload_full); the gate does not check these.
-2b. **Push the turbo check run** (`arc3-m2-turbo`) in the other GPU slot: the largest measured effect on our exact
-   stack (+28% output tok/s in JustAdev742's same-conditions gate). Check JustAdev742's LB result for 56980485
-   (their research_log / status.md) first; a catastrophe there is a reason to wait. Criteria in `stage7_m2_speed.md`
-   (Turbo). If it passes, it becomes arm C of the submission plan below (n >= 3 interleaved draws). Its check
-   run now also reports output tokens/request and repeated assistant turns (the lossy-acceptance guards).
-2c. **Push the turbo-lossless check run** (`arc3-m2-turbo-lossless`) right after turbo, when a GPU slot is free
-   (same stack, acceptance 1.0). It is the arm to prefer if JustAdev742's hidden draw (56980485) lands <= ~28, or
-   if turbo's loop/length guards trip. Criteria in `stage7_m2_speed.md` (Turbo-lossless).
+2. **Push the tail check runs first**: `arc3-m2-turbo-tail` (primary challenger, arm A), then
+   `arc3-m2-turbo-lossless-tail` (hedge, arm B) as soon as a GPU slot is free. They are turbo / turbo-lossless
+   (largest measured effect on our exact stack: +28% / +14% output tok/s in JustAdev742's same-conditions gate)
+   plus the zero-throughput-cost priority-gate fix (`stage7_milestone2_improvements.md` section 4). Check
+   JustAdev742's LB result for 56980485 (their research_log / status.md) first; a catastrophe there is a reason
+   to wait. Pass/kill criteria in `stage7_m2_speed.md` (Turbo / Turbo-lossless) plus the `PRIORITY_TAIL installed`
+   marker; the check run also reports output tokens/request and repeated assistant turns (the lossy-acceptance
+   guards). Read `history_cache_summary.json` by hand before arming a submission (write_fallbacks /
+   payload_plain / view_misses / loads_stale all 0; payload_delta >> payload_full); the gate checks it only via
+   `require_zero`.
+2b. **Fallbacks only**: `arc3-m2-turbo` / `arc3-m2-turbo-lossless` (no tail) and the histcache pair
+   (`arc3-m2-lm-histcache`, `...-histcache-triedfacts`) are pushed only if a tail variant fails its check run
+   for a **tail-specific** reason (e.g. `PRIORITY_TAIL` missing, tail-install assert, priority-gate errors,
+   game starvation); a serving-side failure (REAP, acceptance, throughput) hits the plain turbo base too.
+   `arc3-m2-lm-tail` is not scheduled for submissions.
+   If JustAdev742's hidden draw (56980485) lands <= ~28, or turbo-tail's loop/length guards trip, prefer B over A.
 3. **Then the SGLang hicache pair** (`m96s12hic`, `m97s12hic`; `m97s12` as the control), **then** the vLLM
    pair after the day-0 dataset/overlay checks in `stage7_m2_speed.md` (overlay sha256, python ABI,
    draft vocab file). Respect the 2-GPU-session limit: push only via `scripts/kaggle_push_queue.py`
    (a first push rejected at the limit never mounts its datasets). Do not run a submission slot and a
    speed check at the same time.
-4. **Submission plan.** Once histcache passes, alternate incumbent / histcache draws interleaved in time
-   (never run one arm to exhaustion; interleaving lesson in section 9). Add histcache-triedfacts as arm B.
-   Stop an arm after 4 draws if its mean is more than 1 sd (2.2) below the incumbent's. The last ~3 slots go
+4. **Submission plan.** Submit the incumbent v1 daily until arm A (turbo-tail) passes its check run; then
+   interleave incumbent / A / B in time (never run one arm to exhaustion; interleaving lesson in section 9).
+   Drop an arm after 4 draws if its mean is more than 1 sd (2.2) below the incumbent's. The last ~3 slots go
    to the leading arm. Final 2 selections: the best-mean arm (n >= 3) shrunk toward the incumbent; prefer
    two draws of the best arm unless a second arm is within ~1 point; never select an arm with n < 3.
+   `arc3-m2-lm-tail` gets no slots on its own.
 5. **Delete the stray remote branch `wip-histcache-inherited`** (content already merged; the cloud proxy
    blocks ref deletion, so do it from the dev box or GitHub).
 
@@ -257,6 +265,30 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   workflow never replays them. Always change `id`.
 - **Results**: the job log; its last line is `KAGGLE_OPS_RESULT {json}` (one entry per op). The dev
   box's scheduled tasks still work and share the same daily quota.
+- **Examples for the tail kernels** (markers copied from `kernel_markers()` for that variant; re-derive with
+  `python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail` if the builder changes). turbo-tail
+  (arm A):
+  ```json
+  {"id": "tt-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_tail/notebook"}]}
+  {"id": "tt-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail",
+    "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+             "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "SPEC_ACCEPT 0.5", "ARC_HOTMAP sha=",
+             "PRIORITY_TAIL installed", "LEVEL_MEMORY installed", "priority gate active",
+             "priority gate active: 14 concurrent streams", "harness patch applied successfully"]}]}
+  {"id": "tt-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo-tail", "version": 1,
+    "message": "m2 turbo-tail draw 1",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active", "harness patch applied successfully", "INPUT_RESOLVED",
+                "HISTORY_CACHE installed", "PRIORITY_TAIL installed", "TIMEOUT_FIX installed",
+                "REAP448 applied kept=448", "SPEC_ACCEPT 0.5",
+                "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f",
+                "priority gate active: 14 concurrent streams"],
+    "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
+    "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
+                     "timeout_fix_summary.json": ["errors"]}}]}
+  ```
+  turbo-lossless-tail (arm B): same three requests with `kaggle_submission_m2_turbo_lossless_tail/notebook` /
+  `calamitychasm/arc3-m2-turbo-lossless-tail` (ids `ttl-*`, message `m2 turbo-lossless-tail draw 1`) and **no
+  `SPEC_ACCEPT 0.5`** in `grep` or `markers`; everything else, `counters` and `require_zero` identical.
 - **Examples for the turbo kernel** (one request per commit; change `id` every time):
   ```json
   {"id": "turbo-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo/notebook"}]}
@@ -291,7 +323,7 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
     "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
                      "timeout_fix_summary.json": ["errors"]}}]}
   ```
-  Every kernel built with a variant (histcache, triedfacts, turbo, turbo-lossless, spd-*, speed-*, vllm-*, `arc3-m2-lm-inputs`)
+  Every kernel built with a variant (histcache, triedfacts, tail, turbo, turbo-lossless, spd-*, speed-*, vllm-*, `arc3-m2-lm-inputs`)
   resolves its inputs in either Kaggle mount layout and logs one `INPUT_RESOLVED <name> -> <path> (via ...)`
   line per input (5 for the SGLang kernels), or `INPUT_MISSING <name>` plus what it searched and an error. Put
   `"INPUT_RESOLVED"` in `markers` for those kernels (`kernel_markers()` in the builder includes it) and grep
