@@ -90,3 +90,14 @@ task. Three draws: 33.29, 28.18, 31.03 -- mean **30.83**, sd 2.56.
 - t-test using only our own spread (df = 2): t = 3.42, p = 0.038.
 Both clear p < 0.05; the interval now excludes zero. A 4th draw at the same
 mean would reach p < 0.01.
+
+## Draw 4 (2026-10-06): **29.38**
+
+Ref 56864478 (kernel v1, byte-identical), submitted 00:02 UTC by the detached
+task. Four draws: 33.29, 28.18, 31.03, 29.38 -- mean **30.47**, sd 2.21.
+- vs the copies' distribution (25.77, sd 3.93): z = 2.39, **one-sided
+  p = 0.008**; effect **+4.7, 95% CI +0.8 .. +8.6**.
+- t-test using only our own spread (df = 3): t = 4.25, p ~ 0.012.
+Past the p < 0.01 bar on the known-sigma test. Our own draw-to-draw spread
+(sd 2.21) is smaller than the copies' (3.93), so the copies' sd is the
+conservative choice for the interval.

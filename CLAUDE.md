@@ -339,8 +339,26 @@ prompt only at history eviction, so no extra prefill). Check run: 32/44 rules
 captured, 15 blocks applied, 0 errors. Submitted by the detached gated
 submitter (`scripts/kaggle_submit_when_ready.py`), ref 56789553: **33.29**
 vs the copies' 25.77 +/- 3.93 -> p = 0.028 for "no effect" (n=1). Incumbent
-for new draws. **Draw 2: 28.18, draw 3: 31.03** (three-draw mean 30.83, p = 0.013 vs the copies; effect +5.1, 95% CI +0.6..+9.5). Submissions/polling now run as Windows scheduled tasks
+for new draws. **Draws 2-4: 28.18, 31.03, 29.38** (four-draw mean 30.47, p = 0.008 vs the copies; effect +4.7, 95% CI +0.8..+8.6). Submissions/polling now run as Windows scheduled tasks
 (`ARC3KaggleWatch`, `ARC3Submit_*`), independent of any chat session.
+
+### 14. Serving-speed sweep (2026-10-04..06): nothing adoptable yet
+
+`experiments/stage7_m2_speed.md`, kernels `scripts/_build_m2_speed_kernels.py`.
+Baseline throughput is reproducible (577.8 / 576.5 generated tok/s on two
+runs). **4 draft tokens is impossible** on this model (Qwen QSA caps
+speculative_num_draft_tokens at 4; 3 steps already uses it). **mem fraction
+0.98 OOMs** at runtime (lazily loaded Triton kernels need the ~4 GB 0.96
+leaves). 12/14 streams and the 32 GB system-RAM KV tier remain untested:
+they need KV room from a smaller KV dtype, shorter retained context, or the
+host tier -- not from the static memory fraction.
+
+**Automation (Windows Task Scheduler, no AI, survives any chat):**
+`ARC3KaggleWatch` (`scripts/kaggle_watch.py`, every 10 min ->
+`logs/kaggle_watch_latest.txt` / `.jsonl`), `ARC3PushQueue`
+(`scripts/kaggle_push_queue.py`, pushes queued kernels only into a free GPU
+slot), and one-shot `ARC3Submit_*` tasks (`scripts/kaggle_submit_when_ready.py
+--arm "<UTC time>" ...`) that gate on the check run, then submit.
 
 ## Repo / branch layout
 
@@ -3883,6 +3901,21 @@ specifically -- use the free unconditional-diagnostic-cell trick described
 above to narrow it down without spending more of the daily quota.
 
 ## Gotchas learned the hard way (don't re-discover these)
+- **(2026-10-05) A Kaggle kernel whose FIRST push is rejected at the 2
+  concurrent GPU-session limit never mounts its `dataset_sources`
+  afterwards** (`cp: cannot stat /kaggle/input/datasets/...`), on every later
+  push, while identical kernels first pushed into a free slot mount fine.
+  Seen on 4 kernels (3 old slugs + `arc3-m2-spd2-s12`), never on any kernel
+  whose first push succeeded. Push only when a GPU slot is free
+  (`scripts/kaggle_push_queue.py` checks); if it happens, recreate the kernel
+  under a new slug.
+- **(2026-10-05) SGLang `--mem-fraction-static 0.98` OOMs on the milestone-2
+  stack** a few seconds into serving: Triton kernels load lazily after
+  start-up and need the ~4 GB that 0.96 leaves free.
+- **(2026-10-02) The Kaggle check-run notebook and a "date has changed"
+  notice are not a clock** -- arm scheduled submissions from `date -u`, not
+  from an assumed time: one submission was armed for a UTC time that had
+  already passed and would never have fired.
 
 - **(2026-09-05) All three real submission notebooks had silently shrunk the
   gateway-readiness wait from the official reference's proven 600s down to

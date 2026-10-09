@@ -46,3 +46,30 @@ Public-game scores are reported but cannot rank (one 25-game run each).
   despite identical metadata and an unchanged dataset (last updated 09-28);
   base/spec4, pushed ~1 h earlier, mounted it. Treated as a transient Kaggle
   mount failure; re-queued 15:00 UTC (s12 pushed as v2).
+
+## Round 2 results (2026-10-05)
+
+- **Throughput reproduces.** base re-run (v2, 11:43 UTC): 576.5 generated
+  tok/s vs 577.8 in v1 (0.2%); decode 770 tok/s at 10 running; KV peak 0.98;
+  prefix reuse 93.2%.
+- **The dataset-mount failures were kernel-specific, not Kaggle-wide.** A CPU
+  diagnostic kernel with the same inputs mounted the bundle; base v2 mounted
+  it. The old s12/s14/s14hic slugs failed 3x each. Rebuilt under fresh slugs
+  (`arc3-m2-spd2-*`): **s14 mounted fine; spd2-s12 failed again -- and its very
+  first push was the one rejected at the 2-GPU-session limit** (18:19 UTC),
+  exactly like the original three. Working rule: a kernel whose first push is
+  rejected at the session limit never mounts its datasets; push only into a
+  free slot (the queue now checks).
+- **s14 (mem 0.98, 14 streams): server crashed with CUDA OOM** on the first
+  requests ("Tried to allocate 160 MiB ... 49 MiB free"): Triton kernels load
+  lazily after start-up and need the headroom that mem 0.96 leaves (~4.25 GB
+  free). KV pool would have been 1,104,576 (+9%). **mem 0.98 is not viable**;
+  more streams need memory from elsewhere (smaller KV dtype, shorter retained
+  context, or a host-RAM tier), not from the static fraction.
+- **s14hic: cancelled by Kaggle** (CANCEL_ACKNOWLEDGED, no output); not
+  measured. It shares s14's mem 0.98 and would hit the same OOM -- needs a
+  rebuild at mem 0.96 before it can answer the system-RAM question.
+
+**Status of the speed questions:** #1 (more draft tokens) closed -- impossible.
+#2 (more streams) and system-RAM tier both still open; next attempt must keep
+mem 0.96 and find KV room another way.
