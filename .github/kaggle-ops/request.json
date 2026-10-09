@@ -1,1 +1,1 @@
-{"id": "lk-2", "ops": [{"op": "pull_kernel", "kernel": "sujanmajhisuzan/arc-agi-3-m2-top-submission", "max_lines": 200}, {"op": "pull_kernel", "kernel": "leoprovorov/fable-astra-play-arc-3-handbook-harness", "max_lines": 200}, {"op": "pull_kernel", "kernel": "bang1850/arc-prize-2026-sovereign-agent", "max_lines": 200}]}
+{"id": "lk-3", "ops": [{"op": "pull_kernel", "kernel": "sujanmajhisuzan/arc-agi-3-m2-top-submission", "cells": [16], "cell_lines": 400, "max_lines": 400}]}
