@@ -1,6 +1,1 @@
-{"id": "jad81-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081", "show_lines": 3,
-  "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
-           "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
-           "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
-           "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
-           "DEADLINE at", "READY after", "analyzer failed", "view_offset", "logical_grid"]}]}
+{"id": "jad81-push-2", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081/notebook"}]}
