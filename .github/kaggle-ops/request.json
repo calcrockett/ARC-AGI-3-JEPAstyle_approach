@@ -1,1 +1,1 @@
-{"id": "lk-1010a", "ops": [{"op": "list_kernels", "sort_by": "dateCreated", "page_size": 50, "pages": 2}, {"op": "list_kernels", "sort_by": "voteCount", "page_size": 50, "pages": 1}]}
+{"id": "pk-1010a", "ops": [{"op": "pull_kernel", "kernel": "sujanmajhisuzan/arc-agi-3-m2-top-submission", "max_lines": 200}, {"op": "pull_kernel", "kernel": "shiiin9/affectify-arc-31-54-in-a-single-sub", "max_lines": 200}, {"op": "pull_kernel", "kernel": "vladimiryakunin/df-wm", "max_lines": 200}, {"op": "pull_kernel", "kernel": "zhangyues0000/arc-agi-3-m2-franzen-fork", "max_lines": 200}]}
