@@ -1,1 +1,1 @@
-{"id": "hic16-oom-2", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail-hic16", "grep": ["OOM", "out of memory", "retract", "Retract"], "show_lines": 40}]}
+{"id": "vllm14-push-1", "ops": [{"op": "status"}, {"op": "push_kernel", "dir": "kaggle_submission_m2_vllm_s14/notebook"}]}
