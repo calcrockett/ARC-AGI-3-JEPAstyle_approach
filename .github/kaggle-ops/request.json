@@ -1,1 +1,1 @@
-{"id": "trem-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless_tail_re_medium/notebook"}]}
+{"id": "pergame-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless-tail", "grep": ["LEVEL_MEMORY installed"]}, {"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail", "grep": ["LEVEL_MEMORY installed"]}, {"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail-hic16", "grep": ["LEVEL_MEMORY installed"]}]}
