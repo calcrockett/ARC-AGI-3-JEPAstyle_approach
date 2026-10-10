@@ -8,7 +8,8 @@ Results go to the job log (each op prints a block; the last line is
 Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "status", "kernels": [...optional extra owner/slug]}
   {"op": "push_kernel", "dir": "kaggle_submission_.../notebook"}
-  {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true}
+  {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true,
+   "show_lines": N}   (grep only reports present/absent; show_lines prints up to N matching lines per marker)
   {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
    "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
   {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
@@ -569,6 +570,8 @@ class Runner:
         dest.mkdir(parents=True, exist_ok=True)
         self.api.kernels_output(k, path=str(dest), force=True)
         res.update(digest(dest, op.get("grep") or []))
+        if op.get("show_lines"):
+            show_matches(dest, op.get("grep") or [], int(op["show_lines"]))
         res["artifact_dir"] = str(dest)
         if op.get("artifact", True) is False:
             res["artifact_dir"] = None
@@ -757,6 +760,17 @@ def sys_ram(lines: list[tuple[str, float | None]]) -> dict | None:
 
 def mem_problems(text: str) -> dict:
     return {k: len(rx.findall(text)) for k, rx in MEM_PROBLEM_RES.items()}
+
+
+def show_matches(out: Path, markers: list[str], limit: int) -> None:
+    """Print up to `limit` lines per marker from the notebook log (opt-in via the op's show_lines)."""
+    nb = ksr.notebook_log(out)
+    lines = [ln for ln, _ in _log_lines(nb)] if nb else []
+    for m in markers:
+        hits = [ln for ln in lines if m in ln]
+        print(f"  --- lines matching {m!r}: {len(hits)}")
+        for ln in hits[:limit]:
+            print("    " + ln[:300])
 
 
 def digest(out: Path, markers: list[str]) -> dict:

@@ -1,1 +1,1 @@
-{"id": "hic16-ram-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail-hic16", "grep": ["[sys] RAM", "HICACHE_TIER", "Not enough host memory"]}]}
+{"id": "hic16-oom-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail-hic16", "grep": ["OOM", "out of memory", "retract", "Retract"], "show_lines": 40}]}
