@@ -687,3 +687,52 @@ def test_pull_kernel_selected_cells_and_cell_lines(tmp_path, capsys):
     for bad in ({"cells": "1"}, {"cells": [-1]}, {"cell_lines": 0}):
         with pytest.raises(ko.RequestError):
             ko.parse_request(json.dumps({"id": "x", "ops": [{"op": "pull_kernel", "kernel": "a/b", **bad}]}))
+
+
+CENSUS = ("[sys] RAM {used}/176.9 | swap none | proc 4.1 GB, 60 threads, 40 fds | GPU0 90.1/95.0 | "
+          "disk / 20.0/100.0, /kaggle/working 1.0/20.0")
+
+
+def census_log(path: Path, used_list, extra=""):
+    recs = [{"stream_name": "stdout", "time": 100.0 * i, "data": CENSUS.format(used=u) + "\n"}
+            for i, u in enumerate(used_list)]
+    recs.append({"stream_name": "stdout", "time": 9999.0, "data": "[sys] census failed: OSError()\n" + extra})
+    (path / "arc3-m2-level-memory.log").write_text(json.dumps(recs))
+
+
+def test_sys_ram_digest_stats_and_min_time():
+    lines = [("hello", None)] + [(CENSUS.format(used=u), t) for u, t in ((100.0, 1), (150.0, 2), (120.5, 3))]
+    lines.append(("[sys] census failed: x", None))
+    r = ko.sys_ram(lines)
+    # MemAvailable = 176.9 - used: 76.9, 26.9, 56.4 -> min 26.9 at t=2, median 56.4, last 56.4
+    assert r["count"] == 3 and r["min_gib"] == 26.9 and r["median_gib"] == 56.4 and r["last_gib"] == 56.4
+    assert r["min_at"] == 2 and r["all_ge_10"] is True and r["total_gib"] == 176.9
+
+
+def test_sys_ram_flags_below_10_gib_and_line_timestamp_wins():
+    lines = [("2026-10-10 03:00:01 " + CENSUS.format(used=170.0), 5), (CENSUS.format(used=100.0), 6)]
+    r = ko.sys_ram(lines)
+    assert r["min_gib"] == 6.9 and r["all_ge_10"] is False and r["min_at"] == "2026-10-10 03:00:01"
+    assert r["median_gib"] == round((6.9 + 76.9) / 2, 1)
+
+
+def test_sys_ram_none_without_census_lines():
+    assert ko.sys_ram([("[sys] census failed: x", None), ("nothing", None)]) is None
+
+
+def test_mem_problem_counts():
+    t = "Not enough host memory\nOOM killer\nprocess Killed\nKilled again\nBOOM no\nroom"
+    assert ko.mem_problems(t) == {"not_enough_host_memory": 1, "oom": 1, "killed": 2}
+
+
+def test_kernel_output_digest_includes_sys_ram(tmp_path, capsys):
+    def w(p):
+        write_output(p)
+        census_log(p, [10.0, 120.0, 90.0], extra="Not enough host memory\n")
+    api = FakeApi(output={K: w}, kernels=[NS(ref=K, current_version_number=1)])
+    r = runner(api, tmp_path).op_kernel_output({"op": "kernel_output", "kernel": K, "grep": ["[sys] RAM"]})
+    assert r["sys_ram"]["count"] == 3 and r["sys_ram"]["min_gib"] == 56.9 and r["sys_ram"]["min_at"] == 100.0
+    assert r["sys_ram"]["all_ge_10"] is True and r["markers"] == {"[sys] RAM": True}
+    assert r["mem_problems"]["not_enough_host_memory"] == 1
+    out = capsys.readouterr().out
+    assert "sys_ram: 3 census lines" in out and "mem problems" in out

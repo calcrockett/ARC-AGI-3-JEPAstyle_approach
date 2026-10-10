@@ -717,6 +717,48 @@ class Runner:
         return results
 
 
+SYS_RAM_RE = re.compile(r"\[sys\] RAM (\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)")
+ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?")
+MEM_PROBLEM_RES = {"not_enough_host_memory": re.compile(r"Not enough host memory"),
+                   "oom": re.compile(r"\bOOM\b"), "killed": re.compile(r"\bKilled\b")}
+
+
+def _log_lines(path: Path) -> list[tuple[str, float | None]]:
+    """(line, record time) pairs; Kaggle's notebook log is a JSON list of stream records with a
+    'time' (seconds since start). A plain-text log yields time None."""
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        recs = json.loads(raw)
+        return [(ln, e.get("time")) for e in recs for ln in str(e.get("data", "")).splitlines()]
+    except Exception:  # noqa: BLE001
+        return [(ln, None) for ln in raw.splitlines()]
+
+
+def sys_ram(lines: list[tuple[str, float | None]]) -> dict | None:
+    """Digest of the launcher's '[sys] RAM used/total | ...' census lines (GiB; MemAvailable =
+    total - used, as the launcher prints MemTotal-MemAvailable). None when there are none."""
+    pts = []
+    for ln, t in lines:
+        m = SYS_RAM_RE.search(ln)
+        if m:
+            used, total = float(m.group(1)), float(m.group(2))
+            ts = ISO_TS_RE.search(ln)
+            pts.append((total - used, total, ts.group(0) if ts else t))
+    if not pts:
+        return None
+    avail = sorted(p[0] for p in pts)
+    n = len(avail)
+    med = avail[n // 2] if n % 2 else (avail[n // 2 - 1] + avail[n // 2]) / 2
+    low = min(pts, key=lambda p: p[0])
+    return {"count": n, "min_gib": round(low[0], 1), "median_gib": round(med, 1),
+            "last_gib": round(pts[-1][0], 1), "total_gib": pts[-1][1],
+            "min_at": low[2], "all_ge_10": low[0] >= 10.0}
+
+
+def mem_problems(text: str) -> dict:
+    return {k: len(rx.findall(text)) for k, rx in MEM_PROBLEM_RES.items()}
+
+
 def digest(out: Path, markers: list[str]) -> dict:
     """Concise summary of a downloaded kernel output directory."""
     d: dict = {"files": len([p for p in out.rglob("*") if p.is_file()])}
@@ -725,6 +767,8 @@ def digest(out: Path, markers: list[str]) -> dict:
     d["notebook_log"] = nb.name if nb else None
     d["markers"] = {m: (m in text) for m in markers}
     d["tracebacks"], d["tracebacks_outside_teardown"] = tracebacks(text)
+    d["sys_ram"] = sys_ram(_log_lines(nb)) if nb else None
+    d["mem_problems"] = mem_problems("\n".join(ksr.log_text(p) for p in sorted(out.glob("*.log"))))
     bench = out / "benchmark.json"
     if bench.exists():
         try:
@@ -759,6 +803,14 @@ def digest(out: Path, markers: list[str]) -> dict:
     print(f"  files {d['files']}, notebook log {d['notebook_log']}")
     print(f"  markers: {d['markers']}")
     print(f"  tracebacks: {d['tracebacks']} ({d['tracebacks_outside_teardown']} outside teardown)")
+    sr = d["sys_ram"]
+    if sr:
+        print(f"  sys_ram: {sr['count']} census lines, MemAvailable GiB min {sr['min_gib']} (at {sr['min_at']}) "
+              f"/ median {sr['median_gib']} / last {sr['last_gib']} of {sr['total_gib']}; "
+              f">=10 GiB throughout: {sr['all_ge_10']}")
+    else:
+        print("  sys_ram: no '[sys] RAM' census lines")
+    print(f"  mem problems: {d['mem_problems']}")
     print(f"  game states: {d.get('game_states')}")
     for name, c in d["counters"].items():
         print(f"  {name}: {json.dumps(c)[:800]}")
