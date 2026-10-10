@@ -107,7 +107,7 @@ of those was 3.79 / anim 3.43, 3.79, 3.37, 3.02.)
 | 2026-10-06 | 56864478 | m2 + level memory, byte-identical | 29.38 |
 | 2026-10-09 | 57017233 | m2 + level memory v1, draw 5 (submitted via GitHub Actions kaggle-ops, `force_gate` because of the v0 version-lookup bug, since fixed in e98bed7) | **25.21** |
 | 2026-10-10 | -- | arm A turbo-tail v1 draw 1: **NOT SUBMITTED** (kaggle-ops `daily-1010`, run 38017360617: gate passed, Kaggle returned 400 `Your team already has 1 pending submissions`, blocked by 57017233, still PENDING 02:33 UTC; no force, no incumbent fallback) | -- |
-| 2026-10-10 | 57029829 | arm A turbo-tail v1 draw 1, retried 03:37 UTC after 57017233 scored (kaggle-ops `daily-1010-r2`, run 38021143287; gate passed, `VERSION_OK`, no force) | pending |
+| 2026-10-10 | 57029829 | arm A turbo-tail v1 draw 1, retried 03:37 UTC after 57017233 scored (kaggle-ops `daily-1010-r2`, run 38021143287; gate passed, `VERSION_OK`, no force) | **26.59** (COMPLETE, read 13:02 UTC via kaggle-ops `status-1010c`, run 38054153609) |
 
 Notes: the jump 4.58 -> 24.99 came from swapping in the public milestone-2
 solution (serving stack: 94% prefix-cache reuse vs 0%, ~590 vs ~250 generated
@@ -142,6 +142,7 @@ Keep the drop rule: after 4 draws, drop an arm whose mean is more than 2.2 below
 Incumbent so far (n=5): 33.29, 28.18, 31.03, 29.38, 25.21 (mean 29.42, sd 3.03); draw 5 (57017233) scored 25.21, the lowest draw yet.
 If JustAdev742's hidden draw (56980485) lands <= ~28, prefer B over A.
 **It landed: 27.97** (JustAdev742 `docs/status.md`, read 2026-10-10; n=1) -> prefer B over A.
+Arm A (turbo-tail) draw 1 = **26.59** (57029829, n=1; 2.8 below the incumbent mean 29.42, inside the incumbent's own range 25.21-33.29; nothing separable yet). Next slot 10-11: arm B (`ttl-submit-*`). No PENDING submission as of 13:02 UTC.
 
 **Final selection.** Select BOTH slots explicitly before 2026-11-02 23:59 UTC; do not rely on auto-selection. Choose the
 highest public draw of each of the top-2 arms by mean, each arm needing n >= 3. Reasons:
@@ -153,6 +154,7 @@ highest public draw of each of the top-2 arms by mean, each arm needing n >= 3. 
 - Modelled P(top 1%) is about 0.5 at today's bar of 33.4, falling to about 0.2 if the bar reaches 36.
 
 Leaderboard 02:33 UTC 2026-10-10 (kaggle-ops status): 4,078 teams; top-1% bar 33.37 (rank 41); we are rank 44 at 33.29; top-5% 31.00 (rank 204); top-10% 29.53 (rank 408); #1 59.17. 57017233 scored 25.21 (COMPLETE by 03:37 UTC); re-read at 03:37 UTC: 4,078 teams, we are rank 45 at 33.29, top-1% bar 33.37 (rank 41), top-5% 31.00, top-10% 29.53.
+Re-read 13:02 UTC 2026-10-10 (kaggle-ops `status-1010c`): 4,095 teams; #1 Yi-Chia Chen 62.96, #2 Tufa Labs 56.52, #3 mtg 44.32; top-1% bar 33.42 (rank 41), top-5% 31.05 (rank 205), top-10% 29.61 (rank 410); we are rank 46 at 33.29 (best draw). Kernels: hic16 (both arms), tail, lossless-tail, level-memory, vllm-s14 COMPLETE v1; `dprime` and `dprime-ff` not pushed (`kernels.get` denied, as expected).
 
 **Kaggle allows only 1 PENDING submission per team** (400 `FAILED_PRECONDITION`, seen 2026-10-10). A submission lands ~9 h after it is made, so the next one can go only after the previous scores; 57017233 (made 10-09 18:21Z) should score ~03:20Z. Check `status` shows no PENDING before arming a daily draw; a late-evening submission delays the next day's.
 
@@ -233,7 +235,7 @@ cost vc33 / tn36 / tr87 in JustAdev742's notes) are only in the artifact and wer
 | `arc3-m2-turbo-tail` (A) | **772.4** (+34% vs 577.8; target 664.5) | 1779 (+3.6% vs 1718) | 31 levels, mean_score 6.62 | `SPEC_ACCEPT 0.5`, `REAP448 applied kept=448`, `PRIORITY_TAIL installed`, `14 concurrent streams` present; payload_delta 1005 vs payload_full 738 (only ~1.4x, so "delta >> full" is weakly met); KV peak 0.93, accept median 3.02, prefix cache 92.6% |
 | `arc3-m2-turbo-lossless-tail` (B) | **657.4** (+13.8%; target 640, thin margin) | 1579 (-8.1%, inside +-10%) | 36 levels, mean_score 8.17 | payload_delta 996 vs payload_full 714; KV peak 0.92, accept median 2.66 |
 
-Next: submit per "Submission schedule (from 2026-10-10)" below. Submission 57017233 (draw 5, incumbent) scored 25.21; 57029829 (arm A draw 1) is now pending.
+Next: submit per "Submission schedule (from 2026-10-10)" below. Submission 57017233 (draw 5, incumbent) scored 25.21; 57029829 (arm A draw 1) scored 26.59.
 
 All committed on this branch, never run on Kaggle (this cloud box cannot reach it). Slugs are
 `calamitychasm/...`; notebook dir is `kaggle_submission_<slug with - -> _>/notebook/`; every variant is
