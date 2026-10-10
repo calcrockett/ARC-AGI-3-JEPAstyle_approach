@@ -1,1 +1,1 @@
-{"id": "vllm14-push-1", "ops": [{"op": "status"}, {"op": "push_kernel", "dir": "kaggle_submission_m2_vllm_s14/notebook"}]}
+{"id": "trem-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless_tail_re_medium/notebook"}]}
