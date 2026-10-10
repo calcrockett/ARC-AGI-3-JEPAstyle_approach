@@ -171,6 +171,7 @@ def analyse_vllm(d: Path) -> dict:
 
 # ---------------------------------------------------------------- request-log metrics (lossy-acceptance guards)
 
+LONG_COMPLETION_TOKENS = 6000   # "long deliberation" (JustAdev742's exp-082 read: share of tokens in such completions)
 LONG_TURN_CHARS = 200     # a repeated turn shorter than this (e.g. the same one-word tool call) is not loop evidence
 
 
@@ -208,8 +209,13 @@ def request_log_metrics(d: Path) -> dict:
     completion_tokens_per_request: mean usage.completion_tokens over all logged responses (lossy MTP acceptance
     should leave it within +-10% of the base kernel's). repeated_assistant_turns: assistant turns, per game, whose
     content (+ tool calls) exactly equals the previous assistant turn of the same game; *_long counts those of at
-    least LONG_TURN_CHARS serialised characters (the same short tool call twice in a row is not a loop)."""
+    least LONG_TURN_CHARS serialised characters (the same short tool call twice in a row is not a loop).
+    completion_tokens_p90 / completion_token_share_long: the long-deliberation tail (share of completion tokens in
+    responses of >= LONG_COMPLETION_TOKENS); reasoning_effort_sent: the logged chat_template_kwargs' reasoning_effort
+    per response ("default" when absent, i.e. the template's xhigh)."""
     n = comp = prompt = 0
+    comps: list[int] = []
+    effort: dict[str, int] = defaultdict(int)
     turns = repeats = repeats_long = 0
     games = 0
     examples: list[str] = []
@@ -224,9 +230,12 @@ def request_log_metrics(d: Path) -> dict:
             except json.JSONDecodeError:
                 continue          # a truncated final line
             u = rec.get("usage") or {}
+            kw = rec.get("chat_template_kwargs")
+            effort[str((kw or {}).get("reasoning_effort", "default")) if isinstance(kw, dict) else "default"] += 1
             if u.get("completion_tokens") is not None:
                 n += 1
                 comp += u.get("completion_tokens") or 0
+                comps.append(u.get("completion_tokens") or 0)
                 prompt += u.get("prompt_tokens") or 0
             for a in merge_assistant_turns(seq, _assistant_turns(rec.get("messages"))):
                 turns += 1
@@ -241,6 +250,10 @@ def request_log_metrics(d: Path) -> dict:
     return {"request_log_games": games, "requests": n,
             "completion_tokens_per_request": round(comp / n, 1) if n else None,
             "prompt_tokens_per_request": round(prompt / n, 1) if n else None,
+            "completion_tokens_p90": sorted(comps)[int(0.9 * (len(comps) - 1))] if comps else None,
+            "completion_token_share_long": (round(sum(c for c in comps if c >= LONG_COMPLETION_TOKENS) / comp, 3)
+                                            if comp else None),
+            "reasoning_effort_sent": dict(sorted(effort.items())),
             "assistant_turns": turns, "repeated_assistant_turns": repeats,
             "repeated_assistant_turns_long": repeats_long, "repeat_examples": examples}
 

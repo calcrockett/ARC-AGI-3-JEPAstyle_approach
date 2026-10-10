@@ -21,6 +21,8 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
                                                     # arc3-m2-turbo-lossless-tail-audit (see below)
     python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail --hicache-gb 32 --streams 16
                                                     # arc3-m2-turbo-tail-hic16 (host KV tier, see below)
+    python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail --reasoning-effort medium
+                                                    # arc3-m2-turbo-lossless-tail-re-medium (see below)
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
 /kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
@@ -45,6 +47,14 @@ lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT appended to the turn opener once
 ARC3_STRATEGY_AUDIT_TOKENS on one level since it started or since the last audit (module and NOTICE in
 kaggle_submission_milestone2_fork/strategy_audit/). Its own cell, after the install cell; counters in
 strategy_audit_summary.json. With a turbo preset the slug is the preset's plus "-tail-audit" / "-audit".
+
+Reasoning-effort variant (--reasoning-effort LEVEL, token `re-<level>`, LEVEL medium or low;
+experiments/stage7_milestone2_improvements.md section 6): every request's chat_template_kwargs carry
+reasoning_effort=LEVEL instead of the template's default xhigh, by wrapping ToolAgent._harness_template_kwargs at
+runtime (module and NOTICE in kaggle_submission_milestone2_fork/reasoning_effort/). Its own cell, after the install
+cell; it also renders the served chat template (REASONING_EFFORT_TEMPLATE) and probes the live server
+(REASONING_EFFORT_SERVER: the prompt is shorter with the kwarg). Counters in reasoning_effort_summary.json. With a
+turbo preset the slug is the preset's plus "-re-<level>" (after "-tail" / "-audit").
 
 Serving / "turbo" variants (ported from JustAdev742's Milestone-2 work, Apache-2.0; provenance and
 vendored files in kaggle_submission_milestone2_fork/turbo/, see its NOTICE.md). These edit the SGLang
@@ -109,13 +119,16 @@ LM_SRC = (FORK / "level_memory" / "level_memory.py").read_text(encoding="utf-8")
 assert "'''" not in LM_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 HC_SRC = (FORK / "history_cache" / "history_cache.py").read_text(encoding="utf-8")
 SA_SRC = (FORK / "strategy_audit" / "strategy_audit.py").read_text(encoding="utf-8")
+RE_SRC = (FORK / "reasoning_effort" / "reasoning_effort.py").read_text(encoding="utf-8")
+assert "'''" not in RE_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
+RE_LEVELS = ("medium", "low")   # the chat template's values besides its default xhigh
 assert "'''" not in SA_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 assert "'''" not in HC_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
 INCUMBENT = "arc3-m2-level-memory"
 DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type of every variant build
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
+VARIANT_ORDER = ("histcache", "triedfacts", "tail", "audit", "effort", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
                  "all25", "inputs")
 _FIXED_KINDS = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
@@ -207,6 +220,8 @@ def _kind(tok: str) -> str:
         return "streams"
     if re.fullmatch(r"hic[1-9][0-9]?", tok):
         return "hic"
+    if tok in tuple(f"re-{lv}" for lv in RE_LEVELS):
+        return "effort"
     raise SystemExit(f"REFUSING TO BUILD -- unknown variant {tok!r}")
 
 
@@ -231,6 +246,18 @@ def streams_value(variants) -> int | None:
 def hicache_value(variants) -> int | None:
     tok = next((t for t in variant_names(variants) if _kind(t) == "hic"), None)
     return None if tok is None else int(tok[3:])
+
+
+def effort_value(variants) -> str | None:
+    tok = next((t for t in variant_names(variants) if _kind(t) == "effort"), None)
+    return None if tok is None else tok[3:]
+
+
+def effort_token(level: str) -> str:
+    if level not in RE_LEVELS:
+        raise SystemExit(f"REFUSING TO BUILD -- --reasoning-effort {level!r}: allowed {RE_LEVELS} "
+                         "(xhigh is the chat template's default: omit the flag)")
+    return f"re-{level}"
 
 
 def hicache_token(gb: int) -> str:
@@ -285,8 +312,8 @@ def _hic_suffix(names) -> str:
 def _preset(names) -> tuple[str, str] | None:
     """(slug, dir name) of a turbo preset, optionally plus the priority-gate variant `tail` (and `audit`), and
     optionally with the host KV tier, which replaces the preset's 14 streams with its own stream count."""
-    core = set(names) - set(PRESET_EXTRAS)
-    extras = [v for v in PRESET_EXTRAS if v in names]
+    core = {v for v in names if v not in PRESET_EXTRAS and _kind(v) != "effort"}
+    extras = [v for v in PRESET_EXTRAS if v in names] + [v for v in names if _kind(v) == "effort"]
     hic = hicache_value(names) is not None
     if hic:
         if streams_value(names) is None:
@@ -315,7 +342,7 @@ def kernel_dir(variants, root: Path | None = None) -> Path:
     if _preset(names):
         return root / _preset(names)[1] / "notebook"
     return root / ("kaggle_submission_m2_level_memory" if not names else
-                   "kaggle_submission_m2_lm_" + "_".join(names)) / "notebook"
+                   "kaggle_submission_m2_lm_" + "_".join(v.replace("-", "_") for v in names)) / "notebook"
 
 
 def kernel_id(variants) -> str:
@@ -336,6 +363,9 @@ def kernel_markers(variants) -> list[str]:
             out.append(f"SPEC_ACCEPT {accept_value(names)}")
         elif k == "hotmap":
             out.append(f"ARC_HOTMAP sha={hot_map()['sha']}")
+        elif k == "effort":
+            out += [f"REASONING_EFFORT {effort_value(names)} installed", "REASONING_EFFORT_TEMPLATE supports=True",
+                    "REASONING_EFFORT_SERVER received=True"]
         elif k == "streams":
             out.append(f"priority gate active: {streams_value(names)} concurrent streams")
         elif k == "hic":
@@ -356,6 +386,7 @@ def kernel_counters(variants) -> list[str]:
     names = variant_names(variants)
     return (["level_memory_summary.json"] + ["history_cache_summary.json"] * ("histcache" in names)
             + ["strategy_audit_summary.json"] * ("audit" in names)
+            + ["reasoning_effort_summary.json"] * (effort_value(names) is not None)
             + ["timeout_fix_summary.json"] * ("timeoutfix" in names))
 
 
@@ -439,8 +470,50 @@ def strategy_audit_cell() -> dict:
             "source": src.splitlines(True)}
 
 
-# variant -> builder of a cell inserted right after the level-memory install cell (before the run cell)
-VARIANT_CELLS = {"histcache": history_cache_cell, "audit": strategy_audit_cell}
+def reasoning_effort_cell(level: str) -> dict:
+    src = (
+        f"# [calamitychasm] REASONING EFFORT {level} (variant re-{level}) -- see "
+        "experiments/stage7_milestone2_improvements.md section 6.\n"
+        "# Every request's chat_template_kwargs carry reasoning_effort (the served template's default is xhigh, which\n"
+        "# adds a 'think carefully ... consider plausible alternatives' line to the system prompt). Wraps\n"
+        "# ToolAgent._harness_template_kwargs, which the request builder and the request log both read. Provenance:\n"
+        "# kaggle_submission_milestone2_fork/reasoning_effort/NOTICE.md in our repo.\n"
+        "import os as _os, sys as _sys, types as _types\n"
+        f"_RE_SRC = r'''{RE_SRC}'''\n"
+        "REASONING_EFFORT = _types.ModuleType('reasoning_effort')\n"
+        "_sys.modules['reasoning_effort'] = REASONING_EFFORT\n"
+        "exec(compile(_RE_SRC, 'reasoning_effort.py', 'exec'), REASONING_EFFORT.__dict__)\n"
+        "import inference.agent.tool_agent as _re_ta\n"
+        "assert not _os.environ.get('ARC3_REASONING_EFFORT_LADDER', ''), 'the incumbent runs without the ladder'\n"
+        f"assert REASONING_EFFORT.install(_re_ta.ToolAgent, {level!r})\n"
+        "assert _re_ta.ToolAgent._harness_template_kwargs.__module__ == 'reasoning_effort'\n"
+        "_re_kw = _re_ta.ToolAgent._harness_template_kwargs(_types.SimpleNamespace(_reasoning_effort_rung=-1))\n"
+        f"assert _re_kw.get('reasoning_effort') == {level!r}, _re_kw\n"
+        f"print('REASONING_EFFORT {level} installed', 'kwargs', json.dumps(_re_kw), flush=True)\n"
+        f"_re_tc = REASONING_EFFORT.template_check(MODEL_DIR, {level!r})\n"
+        "print(f\"REASONING_EFFORT_TEMPLATE supports={_re_tc['supports']}\", json.dumps(_re_tc), flush=True)\n"
+        "# the server may still be loading: a daemon thread waits for /health, then sends two max_tokens=1 requests\n"
+        f"_re_probe_thread = REASONING_EFFORT.start_server_probe(SERVER_BASE_URL, SERVED_MODEL_NAME, {level!r})\n"
+    )
+    return _code_cell(src)
+
+
+def re_dump(level: str) -> str:
+    return (
+        "try:   # [calamitychasm] reasoning effort counters (re-probe the server if the boot-time probe failed)\n"
+        "    if (REASONING_EFFORT.summary().get('server') or {}).get('received') is not True:\n"
+        "        print(REASONING_EFFORT.server_line(REASONING_EFFORT.server_probe(SERVER_BASE_URL, SERVED_MODEL_NAME, "
+        f"{level!r}, timeout=30)), flush=True)\n"
+        "    (WORKING_DIR / 'reasoning_effort_summary.json').write_text(json.dumps(REASONING_EFFORT.summary(), indent=2))\n"
+        "    print('REASONING_EFFORT summary', json.dumps(REASONING_EFFORT.summary()), flush=True)\n"
+        "except Exception as _exc:\n"
+        "    print('REASONING_EFFORT summary failed', repr(_exc), flush=True)\n"
+    )
+
+
+# variant kind -> builder of a cell inserted right after the level-memory install cell (before the run cell);
+# "effort" takes the level as its argument
+VARIANT_CELLS = {"histcache": history_cache_cell, "audit": strategy_audit_cell, "effort": reasoning_effort_cell}
 # variant -> lines appended to the run cell's counter dump
 VARIANT_RUN_DUMP = {"histcache": HC_DUMP, "audit": SA_DUMP}
 
@@ -838,6 +911,15 @@ def _blurb(v: str, names) -> str:
         return (f"MTP speculative acceptance thresholds single = acc = {accept_value(names)} (incumbent 1.0, "
                 "lossless): a draft token is also accepted when the target is confident enough, as in "
                 "JustAdev742's measured config (Apache-2.0). Lossy by design.")
+    if k == "effort":
+        lv = effort_value(names)
+        return (f"Reasoning effort {lv!r} on every request: the served chat template's reasoning_effort kwarg (default "
+                "xhigh, which prepends 'Reasoning effort is set to xhigh. Please think carefully through the task, "
+                "validate key assumptions, consider plausible alternatives ...' to the system prompt) is sent as "
+                f"{lv!r}; the truncation ladder (off here) would still step below it. Installed by its own cell, which "
+                "also renders the served template and probes the server. Idea and evidence: juliancamilovilla's "
+                "single-knob runs on this stack and JustAdev742's exp-082 (Apache-2.0); our own implementation. "
+                "Provenance: kaggle_submission_milestone2_fork/reasoning_effort/NOTICE.md in our repo.")
     if k == "hic":
         return (f"System-RAM KV tier: SGLang --enable-hierarchical-cache --hicache-size {hicache_value(names)} "
                 "(write_through, kernel io; KV + Mamba + QSA host pools, as in sirikilohit's 16-stream run), so more "
@@ -875,11 +957,13 @@ def build(variants=()) -> Path:
     run_idx = [i for i, s in enumerate(src) if s.startswith("print('Starting benchmark...')")]
     assert len(run_idx) == 1, run_idx
     r = run_idx[0]
-    dump = RUN_DUMP + "".join(VARIANT_RUN_DUMP.get(_kind(v), "") for v in variants)
+    dump = RUN_DUMP + "".join(re_dump(effort_value(variants)) if _kind(v) == "effort"
+                              else VARIANT_RUN_DUMP.get(_kind(v), "") for v in variants)
     set_src(nb, r, sub(src[r], RUN_ANCHOR, dump, "bm.run summary dump"))
     for v in reversed(variants):      # inserted at r in reverse: they end up in VARIANT_ORDER
-        if v in VARIANT_CELLS:
-            nb["cells"].insert(r, VARIANT_CELLS[v]())
+        k = _kind(v)
+        if k in VARIANT_CELLS:
+            nb["cells"].insert(r, VARIANT_CELLS[k](effort_value(variants)) if k == "effort" else VARIANT_CELLS[k]())
     nb["cells"].insert(r, install_cell(variants))
     pre = [VARIANT_PRE_LAUNCH_CELLS[v]() for v in variants if v in VARIANT_PRE_LAUNCH_CELLS]
     if pre:                           # the launcher is before the run cell: indices above r are unaffected
@@ -891,7 +975,7 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "audit", "inputs"}) else
+          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "audit", "effort", "inputs"}) else
              TURBO_NOTE if accept_value(variants) is not None else TURBO_NOTE_LOSSLESS)))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
@@ -936,6 +1020,10 @@ def main(argv=None) -> int:
     ap.add_argument("--strategy-audit", action="store_true",
                     help="lordhansolo's strategy-audit prompt once a level has used ~25%% of a game's token share "
                          "(with --turbo-lossless --prio-tail: arc3-m2-turbo-lossless-tail-audit)")
+    ap.add_argument("--reasoning-effort", choices=RE_LEVELS, default=None, metavar="LEVEL",
+                    help="send the chat template's reasoning_effort=LEVEL (medium|low) with every request instead "
+                         "of its default xhigh (with --turbo-lossless --prio-tail: "
+                         "arc3-m2-turbo-lossless-tail-re-medium)")
     ap.add_argument("--hicache-gb", type=int, nargs="?", const=HICACHE_DEFAULT_GB, default=None, metavar="N",
                     help=f"system-RAM KV tier of N GB (default {HICACHE_DEFAULT_GB}, {HICACHE_MIN_GB}..{HICACHE_MAX_GB}); "
                          f"allows up to {MAX_STREAMS_WITH_HICACHE} streams; with a turbo preset the streams default to "
@@ -951,6 +1039,8 @@ def main(argv=None) -> int:
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
                 + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail
                 + ["audit"] * args.strategy_audit)
+    if args.reasoning_effort is not None:
+        variants.append(effort_token(args.reasoning_effort))
     if args.spec_accept is not None and args.spec_accept != 1.0:
         variants.append(accept_token(args.spec_accept))
     hic = args.hicache_gb is not None

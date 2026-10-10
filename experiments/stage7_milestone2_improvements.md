@@ -222,3 +222,87 @@ Pass, all of:
 Kill: any of `errors` > 0, `audits_confirmed` == 0 with a level past 56K tokens, resets after audits above the bar,
 a level-memory or histcache regression, or any guard above tripping. Kill date for a slot decision: the audit only
 competes for slots after arm B (`arc3-m2-turbo-lossless-tail`) has n >= 3; until then it is check-run only.
+
+## 6. Static reasoning effort "medium" [READ + BUILT, 2026-10-10; never run]
+
+**Variant built: `--reasoning-effort medium` (token `re-medium`)** on `--turbo-lossless --prio-tail` (arm B) ->
+`calamitychasm/arc3-m2-turbo-lossless-tail-re-medium` (`kaggle_submission_m2_turbo_lossless_tail_re_medium/`).
+Module `kaggle_submission_milestone2_fork/reasoning_effort/reasoning_effort.py` (ours; provenance in its `NOTICE.md`),
+tests `tests/test_m2_reasoning_effort.py`. Arm B is lossless, so B's check run is the control for exactly one change.
+
+### 6.1 Mechanism (read in the code and the template)
+
+- The served Qwen3.8-Flash-Next `chat_template.jinja` resolves `reasoning_effort|default('xhigh')` (accepted: xhigh,
+  medium, low; anything else raises). At xhigh it prepends *"Reasoning effort is set to xhigh. Please think carefully
+  through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness,
+  consistency, and clarity in the final answer."* to the system prompt; medium adds nothing; low adds "Keep your
+  thinking brief and focused ...". Source: JustAdev742's verbatim fixture (sha256 `c3cf9e34...`; their
+  `mtp-drafter-finetune.md` records the same hash for the template served on Franzen's Intel W4A16 stack) and their
+  lesson 0021. Our launcher passes `--chat-template MODEL_DIR/chat_template.jinja` to SGLang.
+- Franzen's harness (`tool_agent.py` `ToolAgent._harness_template_kwargs`, from the upstream harness patch) sends only
+  `preserve_thinking`, plus `reasoning_effort` from the truncation ladder `ARC3_REASONING_EFFORT_LADDER`, which the
+  incumbent leaves unset. **So every incumbent request runs at xhigh.**
+- The variant wraps `_harness_template_kwargs` at runtime (own cell after the install cell) and adds
+  `reasoning_effort="medium"` unless the ladder set a value. That method feeds both the posted payload
+  (`_chat_completion` merges it into `chat_template_kwargs`) and the request log, so `<game>_requests.jsonl` records
+  what was sent. Same behaviour as JustAdev742's `ours-09-reasoning-effort.patch` (exp-082) and juliancamilovilla's
+  E1 (`ARC3_STATIC_REASONING_EFFORT`); our own code.
+- Three checks that it is not a silent no-op, each a gate marker: `REASONING_EFFORT medium installed` (prints the
+  kwargs dict the harness now builds), `REASONING_EFFORT_TEMPLATE supports=True` (renders the served template with
+  jinja2 at default and at medium; the xhigh line must disappear; logs its sha256), `REASONING_EFFORT_SERVER
+  received=True` (a daemon thread waits for /health, then sends two `max_tokens=1` requests without / with the kwarg;
+  the server applied it iff `usage.prompt_tokens` is lower with it, expected delta ~40 tokens; re-probed after the run
+  if the boot probe failed).
+
+### 6.2 Evidence (none of it a hidden-set ablation)
+
+| source | conditions | result | weight |
+|---|---|---|---|
+| juliancamilovilla E1 (`arc-agi3-e1-med-g15`), tabulated in JustAdev742 `docs/research/beat-tufa/intel-oct10.md` s2.3 | Franzen's unchanged stack (Intel W4A16, 10 streams), hard 15 at 37.5 min on 10 slots (~25 slot-min/game), one run per arm, runs 6.7 h apart | levels 17 -> 32 (score 5.37 -> 16.66); 9 games up, 1 down (sign test p ~0.02); tokens/action 1,154 -> 876; gen tok/s 541 -> 593 | strongest, but n=1 per arm, short budget |
+| same, easy 10 (`arc-agi3-e1-med`) | 25 min/game, 10 slots | levels 47.5 +/- 1.0 (4 base runs, 2 authors) -> 41 (score 49.1 -> 38.01); tr87 lost level 1 | a real cost on games that need long planning |
+| request logs ka59, tn36 (same runs) | | mean completion -25..-32%; p90 5.4k -> 3.4k and 4.8k -> 3.4k; median unchanged; share of tokens in completions >= 6k 28% -> 17%, 41% -> 0% | mechanism: medium cuts the long-deliberation tail |
+| JustAdev742 exp-037 (Sep 23) | older TAAF anim harness, full length | 6.70 / 37 levels vs 7.86 / 38; +35% requests, -35% tokens/request | null at full length on a weaker harness |
+| JustAdev742 exp-082 (pushed 2026-10-10 01:43 UTC) | their D' + REAP-448 + 14 streams + acceptance 0.5, 25 games x 121 min | **pending** at the time of writing; their rule: hard-15 >= 60 and score >= 47.3 -> repeat; <= 50 -> drop | the full-length test on our serving stack; read it before spending a slot |
+| leaderboard | | no hidden-set draw of any medium-effort notebook yet | |
+
+Also learned in this read: JustAdev742's exp-074t (REAP-448 + acceptance 0.5, submission 56980485) drew **27.97**
+on the hidden set (their status.md, 2026-10-10 00:15 UTC). By CLAUDE.md's rule (<= ~28) that is a reason to prefer
+arm B over arm A; n=1, so weak.
+
+Prior: the hidden set probably behaves like the hard games (most hidden games stay near level 1), which is why the
+sign could be positive. But julian's runs gave each game ~25 slot-minutes, while the hidden rerun gives ~70
+(532 min x 14 slots / ~110 games), the regime of a full-length public-25 run, where exp-037 saw nothing and exp-082
+is the pending test. Our check run (25 games x 25 min on 14 slots) is again the short regime, so a check-run gain
+over-predicts the hidden-set gain. Expected effect: -1..+3 points (JustAdev742's estimate), sign unknown; not
+resolvable by one draw.
+
+### 6.3 Check run: pass / kill (25 public games x 25 min on 14 streams, arm B's shape)
+
+Control: arm B's check run (2026-10-09): **657.4 gen tok/s, 1,579 output tokens/request, 36 levels, mean_score
+8.17**; read B's per-game levels (hard 15 vs easy 10) and its `request_log` long-tail share from B's artifact before
+judging (not recorded in this repo).
+
+Mechanism (each must hold, or the run is a no-op / broken -- kill):
+- markers: B's plus the three above; `REASONING_EFFORT_TEMPLATE` sha256 logged (expect `c3cf9e34...`);
+  `REASONING_EFFORT_SERVER` delta > 0.
+- `reasoning_effort_summary.json`: `errors` 0, `ladder_kept` 0, `set` == `calls`.
+- `request_log.reasoning_effort_sent`: every response "medium" (no "default").
+- **output tokens/request falls**: <= 1,500 (B -5%; expected about -25%, i.e. ~1,200), `completion_tokens_p90` and
+  `completion_token_share_long` (tokens in completions >= 6k) below B's.
+- serving unchanged: gen tok/s >= 624.5 (B -5%); retractions <= 2x B's; 0 long repeated assistant turns;
+  level_memory / history_cache / timeout_fix counters as B.
+
+Outcome (registered now, before the data; one public-25 run has SE ~2.5 points, so the bar is set at the size of
+julian's effect, not at "any gain"):
+- **Advance** (candidate for slots, see below): total levels >= 42 (B +6) **and** hard-15 levels >= B's hard-15 + 6
+  **and** mean_score >= 8.17.
+- **Kill**: total levels <= 33, or hard-15 levels not above B's, or mean_score < 5.7 (B - 2.5).
+- Otherwise: one repeat check run before deciding.
+- Also read, not gated: actions per solved level (RHAE pays for efficiency; medium acts more and thinks less),
+  tokens per action, and which easy games lose levels (tr87 lost level 1 in julian's run).
+- External kill: if JustAdev742's exp-082 (same mechanism, our serving stack, full length) comes back <= 50 hard-15
+  levels (their own drop rule), do not give this variant slots even if the check run advances.
+
+Slots: not in the 10-10..10-17 explore schedule (A/B only). If it advances and exp-082 is not a drop, it competes in
+the exploit phase as a third arm against B (it is B plus one change), alternating with B until n >= 3; the drop rule
+of the schedule (mean more than 2.2 below the incumbent after 4 draws) applies.

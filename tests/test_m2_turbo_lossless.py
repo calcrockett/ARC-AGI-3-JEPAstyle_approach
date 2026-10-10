@@ -204,7 +204,8 @@ def test_repeat_is_per_game_and_short_repeats_are_reported_separately(tmp_path):
 def test_request_log_tolerates_junk_and_missing_files(tmp_path):
     assert rep.request_log_metrics(tmp_path) == {
         "request_log_games": 0, "requests": 0, "completion_tokens_per_request": None,
-        "prompt_tokens_per_request": None, "assistant_turns": 0, "repeated_assistant_turns": 0,
+        "prompt_tokens_per_request": None, "completion_tokens_p90": None, "completion_token_share_long": None,
+        "reasoning_effort_sent": {}, "assistant_turns": 0, "repeated_assistant_turns": 0,
         "repeated_assistant_turns_long": 0, "repeat_examples": []}
     _write(tmp_path, "g", ['{"event": "response", "messages": [', _resp([U, _a("ok")], 50),
                            _resp([U], 70).replace('"completion_tokens": 70', '"completion_tokens": null')])
