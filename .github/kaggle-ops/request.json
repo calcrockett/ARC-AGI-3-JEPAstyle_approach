@@ -1,19 +1,43 @@
-{"id": "daily-1010", "ops": [
-  {"op": "status"},
-  {"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo-tail", "version": 1,
+{
+ "id": "daily-1010-r2",
+ "ops": [
+  {
+   "op": "status"
+  },
+  {
+   "op": "submit",
+   "kernel": "calamitychasm/arc3-m2-turbo-tail",
+   "version": 1,
    "message": "m2 turbo-tail draw 1",
-   "markers": ["LEVEL_MEMORY installed", "priority gate active", "harness patch applied successfully", "INPUT_RESOLVED",
-               "HISTORY_CACHE installed", "PRIORITY_TAIL installed", "TIMEOUT_FIX installed",
-               "REAP448 applied kept=448", "SPEC_ACCEPT 0.5",
-               "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f",
-               "priority gate active: 14 concurrent streams"],
-   "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
-   "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
-                    "timeout_fix_summary.json": ["errors"]}},
-  {"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail-hic16",
-   "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
-            "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "SPEC_ACCEPT 0.5", "ARC_HOTMAP sha=",
-            "PRIORITY_TAIL installed", "LEVEL_MEMORY installed", "priority gate active: 16 concurrent streams",
-            "STREAMS max_running_requests=16 cuda_graph_bs=", "HICACHE requested", "HICACHE_TIER",
-            "harness patch applied successfully", "[sys] RAM", "Not enough host memory"]}
-]}
+   "markers": [
+    "LEVEL_MEMORY installed",
+    "priority gate active",
+    "harness patch applied successfully",
+    "INPUT_RESOLVED",
+    "HISTORY_CACHE installed",
+    "PRIORITY_TAIL installed",
+    "TIMEOUT_FIX installed",
+    "REAP448 applied kept=448",
+    "SPEC_ACCEPT 0.5",
+    "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f",
+    "priority gate active: 14 concurrent streams"
+   ],
+   "counters": [
+    "level_memory_summary.json",
+    "history_cache_summary.json",
+    "timeout_fix_summary.json"
+   ],
+   "require_zero": {
+    "history_cache_summary.json": [
+     "write_fallbacks",
+     "payload_plain",
+     "view_misses",
+     "loads_stale"
+    ],
+    "timeout_fix_summary.json": [
+     "errors"
+    ]
+   }
+  }
+ ]
+}
