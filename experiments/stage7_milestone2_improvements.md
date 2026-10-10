@@ -571,3 +571,45 @@ a positive sign in both independent replays (ours: ≥ tail in every world), and
 rather than adding to it. Proposed: after its check run passes, **give D′ arm A's remaining explore slots** (A is the
 lossy-acceptance arm we already deprioritised after exp-074t's 27.97; B stays as the tail control so B vs B-D′ is a same-stack,
 same-period comparison of the scheduler alone). Do not take slots from B. Ranking still needs n >= 3 per arm.
+
+### 8.7 Fresh-first hedge: `calamitychasm/arc3-m2-turbo-lossless-dprime-ff` [BUILT + SIM, 2026-10-10; never pushed]
+
+Ready if the D′ check run trips its starvation criterion (> 8 games with 0 actions). `python scripts/_build_m2_level_memory_kernel.py
+--turbo-lossless --dprime-fresh-first` -> `kaggle_submission_m2_turbo_lossless_dprime_ff/notebook/` (token `ff`, implies `dprime`,
+refused with `tail`). Differs from the dprime kernel in exactly two cells (header blurb; install cell, +`ff` lines after D′'s).
+
+- **Mechanism**: D′'s module is installed verbatim by its own `install_d` (sha256 `6456efdd…` still pinned; the notebook embeds it
+  unchanged). The `ff` lines then wrap `_PriorityGate.acquire` once more: a priority at or above `_PRIORITY_UNTRIMMED_BASE -
+  _PRIORITY_BAND` (a never-started game; the harness gives it `2,000,000 - dispatch_index`) takes upstream's own `acquire` body
+  (`_enqueue_and_wait(priority)` without a snapshot), so it queues in the band above every priced game, in dispatch order, and
+  nothing re-ranks it; any other priority goes to D′'s acquire. D′'s formula, pace tracker, fade 0.4 and handover pricing of started
+  games are untouched. Because D′'s own fresh pricing is bypassed, `fresh_replaced` stays 0.
+- **Markers**: `PRIORITY_DPRIME installed` and `DPRIME_FRESH_FIRST installed`. `dprime_summary.json` = D′'s {calls, errors,
+  last_error, fresh_replaced} plus `fresh_first_admissions` (every game's first acquire: expect = number of game threads, 25 in the
+  check run, ~110 in a submission).
+- **Replay** (same sim, 120 draws, common random numbers; LB points vs upstream; ff = `dprime-ff`, alias of `dprime (fresh first)`).
+  Full-run shape, 110 games × 532 min, 10 × 70 / 14 × 47 tok/s:
+
+  | world | tail 10 / 14 | D′ 10 / 14 | **D′-ff 10 / 14** | ff − D′ 10 / 14 | ff − tail 10 / 14 | D′ starved 10 / 14 (ff 0) |
+  |---|---|---|---|---|---|---|
+  | public_like | +0.45 / +0.69 | +0.91 / +1.03 | +0.90 / +0.99 | −0.01 / −0.04 | +0.45 / +0.30 | 0 / 0 |
+  | tok2.5 | +1.11 / +1.00 | +2.83 / +2.71 | +2.74 / +2.56 | −0.09 / −0.16 | +1.62 / +1.55 | 3.2 / 4.1 |
+  | tok2_u.12 | +0.79 / +0.77 | +1.75 / +1.72 | +1.70 / +1.68 | −0.05 / −0.04 | +0.91 / +0.91 | 0.9 / 2.0 |
+  | unsolv.20 | +0.20 / +0.22 | +0.54 / +0.49 | +0.55 / +0.50 | +0.01 / +0.01 | +0.35 / +0.27 | 0 / 0 |
+  | depth1.15 | +1.03 / +1.06 | +2.62 / +2.58 | +2.47 / +2.35 | −0.15 / −0.23 | +1.44 / +1.30 | 5.9 / 8.4 |
+  | finalU3x | +0.73 / +0.71 | +1.81 / +1.81 | +1.77 / +1.76 | −0.04 / −0.05 | +1.04 / +1.05 | 2.1 / 3.0 |
+  | siggame0.3 | +0.85 / +1.01 | +2.98 / +3.12 | +2.73 / +2.74 | −0.25 / −0.38 | +1.88 / +1.73 | 4.1 / 5.7 |
+  | coupled0.7 | +0.44 / +0.48 | +1.38 / +1.63 | +1.37 / +1.58 | −0.01 / −0.04 | +0.93 / +1.11 | 0.1 / 0.3 |
+  | eff1.5 | +0.45 / +0.43 | +0.44 / +0.46 | +0.45 / +0.46 | +0.01 / 0.00 | 0.00 / +0.03 | 0 / 0 |
+  | coupled0.7_eff1.5 | +0.25 / +0.14 | +0.22 / +0.16 | +0.23 / +0.17 | +0.01 / +0.01 | −0.02 / +0.03 | 0 / 0 |
+
+  Reading: ff gives up 0.00-0.38 LB points against D′ (median −0.04; worst in the worlds where D′ starves most, which is the
+  cost of playing the 2-9 games D′ never starts), keeps 85-100% of D′'s gain, and still beats the shipped tail fix by +0.3..+1.9
+  wherever D′ does (eff1.5 worlds: tie). Starvation is 0 in every cell (D′: up to 8.4 of 110 games). Check-run shape (25 games ×
+  25 min, 14 × 47 tok/s): D′ starves **6.0 / 5.3** games (public_like / tok2.5), ff **0.05 / 0.03** (upstream 0.05).
+- **Check run**: D′'s criteria with the starvation line replaced by **0 games with 0 actions** (any game with 0 actions and no error
+  is a defect of the wrapper), `fresh_first_admissions` == 25 and `fresh_replaced` == 0 instead of `fresh_replaced` == 25.
+  Throughput/token guards, kills and the grep list are D′'s. Its public-25 numbers are comparable to arm B's (all 25 games play).
+- **Tests**: `tests/test_m2_dprime_ff.py` runs the wrapper on the real patched harness (fresh games admitted first in dispatch
+  order, then started games in D′ order; control build prices a fresh game at the formula value; ff queues it at
+  `2,000,000 - 1`), pins the notebook, its two-cell diff against the dprime kernel and the verbatim module.

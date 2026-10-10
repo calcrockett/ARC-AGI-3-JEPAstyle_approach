@@ -18,7 +18,7 @@ tokens). Scored with RHAE (w_l = l, S = min(1.15, h/a)^2, E = min(completion, ef
 Calibration: hidden-like worlds score ~28-32 (our LB 30.5); draw-to-draw sd ~2.5-3.9 (copies: 3.93).
 
     python scripts/sim_m2_priority_gate.py --draws 150 --slots 10,14
-    python scripts/sim_m2_priority_gate.py --draws 120 --slots 10:70,14:47 --variants tail,dprime,dprime+final5
+    python scripts/sim_m2_priority_gate.py --draws 120 --slots 10:70,14:47 --variants tail,dprime,dprime-ff,dprime+final5
 
 D' (section 8 of the write-up): shiiin9's slot priority A*M*C + B*phi, executed from the vendored module
 kaggle_submission_milestone2_fork/dprime/ours_form_priority.py (verbatim from their notebook), with its two other
@@ -259,7 +259,7 @@ def _parse_slots(spec: str) -> list[tuple[int, float]]:
     return out
 
 
-ALIASES = {"tail": "h60+final5 (shipped: tail)"}
+ALIASES = {"tail": "h60+final5 (shipped: tail)", "dprime-ff": "dprime (fresh first)"}
 
 
 def main(argv=None) -> int:

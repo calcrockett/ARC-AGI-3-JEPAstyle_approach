@@ -25,6 +25,8 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
                                                     # arc3-m2-turbo-lossless-tail-re-medium (see below)
     python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --dprime
                                                     # arc3-m2-turbo-lossless-dprime (D' slot priority, see below)
+    python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --dprime-fresh-first
+                                                    # arc3-m2-turbo-lossless-dprime-ff (D' + fresh-first hedge)
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
 /kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
@@ -51,6 +53,10 @@ NOTICE.md); we add only a call/error counter around the priority function (dprim
 `tail` variant (both set the slot priority; refused together). A dprime build also carries the 2026-10-10 standing
 rule's boot grace: ARC3_HTTP_RETRY_INITIAL_SECONDS 900 -> 2400 in the setup cell (kernels built before stay as
 pushed). With a turbo preset the slug is the preset's plus "-dprime".
+Fresh-first hedge (--dprime-fresh-first, token `ff`, implies dprime; section 8.7): D' installed verbatim, plus a wrapper
+of _PriorityGate.acquire that sends never-started games through upstream's own band queue (dispatch order, above every
+priced game) so none is starved; slug plus "-ff"; marker DPRIME_FRESH_FIRST installed; dprime_summary.json gains
+fresh_first_admissions.
 
 Strategy-audit variant (--strategy-audit, token `audit`; experiments/stage7_milestone2_improvements.md section 5):
 lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT appended to the turn opener once the game has generated
@@ -140,9 +146,9 @@ INCUMBENT = "arc3-m2-level-memory"
 DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type of every variant build
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "tail", "dprime", "audit", "effort", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
+VARIANT_ORDER = ("histcache", "triedfacts", "tail", "dprime", "ff", "audit", "effort", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
                  "all25", "inputs")
-_FIXED_KINDS = ("histcache", "triedfacts", "tail", "dprime", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
+_FIXED_KINDS = ("histcache", "triedfacts", "tail", "dprime", "ff", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
 # turbo without the lossy MTP acceptance (upstream SPEC_ACCEPT_SINGLE / SPEC_ACCEPT_ACC stay 1.0)
@@ -219,9 +225,33 @@ VARIANT_INSTALL_LINES = {
         "    return dict(DPRIME_STATS, fresh_replaced=_dp_mod.FRESH['replaced'])\n"
         "print('PRIORITY_DPRIME installed', _dp_line, flush=True)\n"
     ),
+    # runs right after the "dprime" lines (VARIANT_ORDER): D' stays installed verbatim, only gate.acquire is wrapped
+    "ff": (
+        "# [calamitychasm] D' fresh-first hedge -- never-started games are admitted before any started game is re-ranked,\n"
+        "# as upstream's gate does; D''s formula is unchanged (experiments/stage7_milestone2_improvements.md section 8.7).\n"
+        "_ff_floor = _lm_ta._PRIORITY_UNTRIMMED_BASE - _lm_ta._PRIORITY_BAND\n"
+        "assert _ff_floor >= 1_000_000, _ff_floor   # far above any D' value (<~ 50,000)\n"
+        "_ff_dp_acquire = _lm_ta._PriorityGate.acquire\n"
+        "assert getattr(_ff_dp_acquire, '_ours_d', False)   # D''s acquire is in place\n"
+        "FF_STATS = {'fresh_first_admissions': 0}\n"
+        "def _ff_acquire(self, priority):\n"
+        "    if priority < _ff_floor:   # a started game: D''s own path\n"
+        "        return _ff_dp_acquire(self, priority)\n"
+        "    FF_STATS['fresh_first_admissions'] += 1\n"
+        "    with self._cond:   # upstream's acquire, verbatim: the band queues never-started games in dispatch order\n"
+        "        self._enqueue_and_wait(priority)\n"
+        "_ff_acquire._ours_d = True\n"
+        "_ff_acquire._ours_ff = True\n"
+        "_lm_ta._PriorityGate.acquire = _ff_acquire\n"
+        "def dprime_summary():\n"
+        "    return dict(DPRIME_STATS, fresh_replaced=_dp_mod.FRESH['replaced'],\n"
+        "                fresh_first_admissions=FF_STATS['fresh_first_admissions'])\n"
+        "print('DPRIME_FRESH_FIRST installed', 'floor', _ff_floor, flush=True)\n"
+    ),
 }
 VARIANT_MARKERS = {"histcache": "HISTORY_CACHE installed", "triedfacts": "TRIED_FACTS installed",
                    "tail": "PRIORITY_TAIL installed", "dprime": "PRIORITY_DPRIME installed",
+                   "ff": "DPRIME_FRESH_FIRST installed",
                    "audit": "STRATEGY_AUDIT installed",
                    "timeoutfix": "TIMEOUT_FIX installed", "reap": "REAP448 applied kept=448"}
 VARIANT_BLURB = {
@@ -244,6 +274,10 @@ VARIANT_BLURB = {
               "grow B = 16/14/10/0, tail fade phi over the final 40%; never-started games are priced by the same "
               "formula instead of queued first. Scheduling only, nothing the model sees changes. We add only a "
               "call/error counter (dprime_summary.json). Setup also waits 2400 s (was 900) for a slow server boot.",
+    "ff": "Fresh-first hedge on D': never-started games are admitted before any started game is re-ranked, as in "
+          "upstream's gate (they queue in dispatch order in the band above every priced game); D' itself is installed "
+          "verbatim and its formula is unchanged. Only gate.acquire is wrapped. Counter fresh_first_admissions in "
+          "dprime_summary.json.",
     "audit": "Strategy audit (lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT, ported with three harness "
              "references adapted; provenance in kaggle_submission_milestone2_fork/strategy_audit/NOTICE.md in our "
              "repo): once a game has generated 56,000 tokens (about a quarter of its expected token share) on one "
@@ -289,6 +323,8 @@ def variant_names(variants) -> tuple[str, ...]:
         raise SystemExit(f"REFUSING TO BUILD -- two values for one variant: {toks}")
     if "tail" in kinds and "dprime" in kinds:
         raise SystemExit("REFUSING TO BUILD -- `tail` and `dprime` both set the slot priority: pick one")
+    if "ff" in kinds and "dprime" not in kinds:
+        raise SystemExit("REFUSING TO BUILD -- `ff` (fresh-first) is a hedge on D': it needs `dprime`")
     return tuple(sorted(toks, key=lambda t: VARIANT_ORDER.index(_kind(t))))
 
 
@@ -359,7 +395,7 @@ def check_serving(variants) -> None:
 
 # harness variants that ride on a turbo preset as slug suffixes, in this order:
 # turbo-lossless + tail + audit -> arc3-m2-turbo-lossless-tail-audit
-PRESET_EXTRAS = ("tail", "dprime", "audit")
+PRESET_EXTRAS = ("tail", "dprime", "ff", "audit")
 
 
 def _hic_suffix(names) -> str:
@@ -1047,7 +1083,7 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "dprime", "audit", "effort", "inputs"}) else
+          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "dprime", "ff", "audit", "effort", "inputs"}) else
              TURBO_NOTE if accept_value(variants) is not None else TURBO_NOTE_LOSSLESS)))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
@@ -1092,6 +1128,9 @@ def main(argv=None) -> int:
     ap.add_argument("--dprime", action="store_true",
                     help="shiiin9's D' slot priority instead of upstream's (and instead of --prio-tail); "
                          "with --turbo-lossless: arc3-m2-turbo-lossless-dprime")
+    ap.add_argument("--dprime-fresh-first", action="store_true",
+                    help="--dprime plus the fresh-first hedge: never-started games are admitted before any started game "
+                         "(D' verbatim, only gate.acquire wrapped); with --turbo-lossless: arc3-m2-turbo-lossless-dprime-ff")
     ap.add_argument("--strategy-audit", action="store_true",
                     help="lordhansolo's strategy-audit prompt once a level has used ~25%% of a game's token share "
                          "(with --turbo-lossless --prio-tail: arc3-m2-turbo-lossless-tail-audit)")
@@ -1112,7 +1151,8 @@ def main(argv=None) -> int:
         raise SystemExit("REFUSING TO BUILD -- --turbo and --turbo-lossless are different presets")
     variants = (["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
-                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail + ["dprime"] * args.dprime
+                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail + ["dprime"] * (args.dprime or args.dprime_fresh_first)
+                + ["ff"] * args.dprime_fresh_first
                 + ["audit"] * args.strategy_audit)
     if args.reasoning_effort is not None:
         variants.append(effort_token(args.reasoning_effort))
