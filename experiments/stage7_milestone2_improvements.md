@@ -159,6 +159,8 @@ Reading it:
 
 ## 5. Next harness challenger: lordhansolo's strategy audit [READ + BUILT, 2026-10-09; never run]
 
+**Check run done 2026-10-09: 663.4 tok/s, 1547 tok/req, 39 levels / 9.25 public-25, 0 errors, but only 1 audit fired in 25 games (threshold 56K tokens), 0 audited levels cleared; not scheduled.**
+
 **Variant built: `--strategy-audit` (token `audit`)** on `--turbo-lossless --prio-tail` ->
 `calamitychasm/arc3-m2-turbo-lossless-tail-audit` (`kaggle_submission_m2_turbo_lossless_tail_audit/`). Module
 `kaggle_submission_milestone2_fork/strategy_audit/strategy_audit.py`, provenance and the exact text diffs in its
