@@ -627,7 +627,7 @@ host tier exists to absorb, and it is exactly sirikilohit's working combination 
 the host tier has never run on our stack (the incumbent-based `m96s12hic` is built, never run), and the Mamba-retention
 patch skips write-through on non-branch chunks. Built as `arc3-m2-turbo-tail-hic16` (next section).
 
-## Turbo-tail-hic16: host KV tier + 16 streams on arm A (built 2026-10-09; check run read 2026-10-10: BORDERLINE)
+## Turbo-tail-hic16: host KV tier + 16 streams on arm A (built 2026-10-09; check run read 2026-10-10: near-pass)
 
 `python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail --hicache-gb` -> `calamitychasm/arc3-m2-turbo-tail-hic16`
 (`kaggle_submission_m2_turbo_tail_hic16/notebook/`; metadata = the incumbent's except identity, plus
@@ -665,13 +665,13 @@ the harness gate, got 16). Counters as turbo-tail.
 **Kill:** gen tok/s < 772.4 (no better than turbo-tail), or any pass guard tripped. Between 772.4 and 834.2: not adopted,
 no slots; read decode tok/s at 15-16 running requests in serve.log before deciding whether 15 streams is worth a run.
 
-**Result (check run COMPLETE, read via kaggle-ops `daily-1010`, 2026-10-10): BORDERLINE -- between kill and pass.**
+**Result (check run COMPLETE, read via kaggle-ops `daily-1010`, 2026-10-10): near-pass -- between kill and pass.**
 
 | criterion | bar | measured | |
 |---|---|---|---|
 | gen tok/s | >= 834.2 (kill < 772.4) | **831.6** (+7.7% vs 772.4) | 2.6 short, not a pass |
 | `hicache_attached=True` | yes | yes (post-run line; `UnifiedRadixCache`, `hybrid_ssm=True`) | ok |
-| `MemAvailable` >= 10 GiB in every `[sys] RAM` line | yes | **not checked** (digest prints only that the marker exists; artifact download is blocked from the cloud box) | open |
+| `MemAvailable` >= 10 GiB in every `[sys] RAM` line | yes | 15 lines, min 29.9 GiB / median 32.1 / last 31.4 (of 176.9) | ok |
 | retractions | <= 4 | 2 | ok |
 | tokens/request | 1601..1957 | 1736 (-2.4%) | ok |
 | repeated assistant turns | 0 | 0 (760 turns) | ok |
@@ -685,7 +685,16 @@ p90 1252, running median 16. Decode tok/s by running requests: 12 -> 1106, 13 ->
 there is no visible per-request gain from 15-16 running requests over 12-14 in this single run. A peak of 0.99 with only 2
 retractions suggests the tier absorbed the overflow. By the rule above: not adopted, no slots. Not a KILL either (the tier
 attached and nothing broke); the missing `MemAvailable` check and a +7.7% vs +8% bar miss are within one run's noise.
-Next: read the `[sys] RAM` lines from the artifact (dev box), and only then decide whether a second check run is worth a GPU slot.
+**OOM lines (kaggle-ops `hic16-oom-2`, 2026-10-10).** The digest's `mem_problems.oom = 13` counts `\bOOM\b` over all top-level
+`*.log` files. All 13 are one benign SGLang advisory in serve.log, 22:47:45-22:48:58: "Triton kernel '_qsa_graph_layout_kernel' /
+'alloc_extend_kernel' / 'assign_req_to_token_pool' device-loaded after serving started (free device mem: 0.96, then 0.84 GiB).
+Pre-load it during engine init to avoid CUDA OOM." No allocation failure, no OOM-driven retraction, no process kill
+(`killed` 0, `Not enough host memory` 0, 0 tracebacks); the single `retract` hit is the `server_args` echo. The only
+signal is thin device headroom (0.84 GiB free at lazy kernel load, cf. the mem 0.98 OOM in section 14). Tooling: the
+digest's `grep` reports present/absent only; the op's new `show_lines: N` prints the matching lines from all `*.log`.
+
+**Verdict:** near-pass, not adopted under the pre-registered rule; candidate to replace arm A only if arm A's hidden
+draws hold up and a second check run confirms >= +8%.
 
 ## MTP drafter fine-tune (feasibility, 2026-10-09; desk study, nothing built or run)
 
