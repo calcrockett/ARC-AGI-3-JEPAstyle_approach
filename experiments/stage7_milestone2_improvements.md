@@ -444,3 +444,130 @@ kernels), MTP-off (only pays at their width). The only lever on our stack that b
    tokens/request within +-10% of 1579; the check run says nothing about the score.
 
 Do not bundle the retire rule into arms A/B: its sign is unknown and it would contaminate the arm comparison.
+
+## 8. D′ slot priority (shiiin9 / AFF AI CLUB) on arm B [READ + SIM + BUILT, 2026-10-10; never run]
+
+Public notebook `shiiin9/affectify-arc-31-54-in-a-single-sub` = Franzen's Milestone-2 notebook with one change: the
+scheduler's slot priority "D′", patched in the cell before `await bm.run(...)`. Claimed LB 31.54 (n=1).
+
+### 8.1 Code and licence
+
+- **Exact code obtained** without a kaggle-ops pull: JustAdev742 vendored the notebook unmodified
+  (`kaggle/dprime/affectify-arc-31-54-in-a-single-sub.ipynb`, pulled 2026-10-07, sha256 `f649d005…`). The module is the
+  string `_FP_SOURCE` in cell 21; we extracted it verbatim to `kaggle_submission_milestone2_fork/dprime/ours_form_priority.py`
+  (sha256 `6456efdd…`, pinned by `tests/test_m2_dprime.py`, which re-extracts it from JustAdev742's copy when present).
+  Today's kaggle-ops pull (`pk-1010a`) shows the same 26-cell notebook and the same description.
+- **Licence**: public Kaggle notebooks are Apache-2.0 (Kaggle's default for public code; the kernel metadata has no other
+  licence field). Franzen's harness is Apache-2.0. Compatible with our rules. Provenance in `dprime/NOTICE.md`.
+- **What `install_d(tool_agent, solver)` does** (read in the module; the published formula matches the code, test
+  `test_formula_matches_the_published_description`):
+  - `priority = A·M·C + B·φ`, ×1000 to an int. A = (1 + 0.5(ℓ−1))·norm(N)·(300/(300+a))^2.5, norm = 55/(N(N+1)/2) with
+    N clamped to 6..10; M = clip((30,000/p)^0.4, 0.25, 4), p = the game's mean generated tokens per cleared level (1
+    before the first clear); C = 0.1·max(0.1, 1−a/115) + 0.9·max(0.1, 1−t/T), T = 225,000·clip(p/30,000, 0.5, 2)^0.5;
+    B = 16 / 14 / 10 / 0 for ≥3 / 2 / 1 / 0 levels remaining; φ = tail fade over the last **40%** of the run.
+  - Replaces `tool_agent.priority_value`, `tool_agent.ProgressPace` (by `FormPace`), sets `ARC3_PRIORITY_PACE=1`,
+    `..._REFRESH_QUEUE=1`, `..._TAIL_FADE=1`, `..._TAIL_FADE_FRACTION=0.4` (upstream 0.2).
+  - Removes fresh-first: `_PriorityGate.acquire` prices a never-started game by the formula (ℓ = 1, a = t = 0, its
+    level count taken in a wrapped `_HarnessGameSession.play`) instead of the 2,000,000 band.
+  - Compared with our `tail` fix: D′ has no h-collapse (its efficiency factor halves at ~83 actions, upstream's at h = 25),
+    keeps last-level B = 0, and B dominates the value (16 vs A·M·C ≈ 1-5), so the order is "levels remaining" first.
+
+### 8.2 Hidden-set evidence
+
+| config | draws (hidden, public LB) | n | mean |
+|---|---|---|---|
+| Franzen, unmodified, unselected | jvilladuque 25.01, 25.17, 23.39, 27.15, 27.63, 25.97; ours 24.99; D′ authors' resubmission 27.62 | 8 | **25.87** (sd 1.51) |
+| Franzen, selected bests (not used) | 27.89 (Franzen's team best of 90), 31.47 / 34.30 (notebook bests), spark328 30.75, vinicius 28.85 | -- | -- |
+| **D′ unchanged** | shiiin9 31.54 (published because of it), JustAdev742 copy **28.87** (pre-registered, unselected) | 2 | **30.20** |
+| D′ + REAP-448 + 14 streams + acceptance 0.5 (JustAdev742 exp-074t) | 27.97 (unselected) | 1 | -- |
+| D′ forks, notebook bests (not used) | amatlas 29.27 → 30.82, lwq255 29.15; AFF AI CLUB team 33.92 (config unknown) | -- | -- |
+| ours: Franzen + level memory (incumbent) | 33.29, 28.18, 31.03, 29.38, 25.21 | 5 | 29.42 |
+
+- D′ (n=2) vs Franzen (n=8): **+4.3**; known-σ test with the copies' σ = 3.93: z = 1.40, one-sided **p = 0.08**; Welch
+  t = 3.02, df 1.3, p ≈ 0.08. Adding exp-074t (D′ + serving, n=3): +3.6, z 1.35, p 0.09 (Welch t 3.0, df 3.1, p 0.03).
+- Without the published 31.54 (selection): 28.87 vs 25.87 = +3.0, z = 0.72. One unselected draw.
+- Same period (Oct 3-9) as the jvilladuque control, so no period confound. **Reading: suggestive, not established**;
+  the size is about our own level-memory effect (+3.6 vs the same control), so D′ alone ≈ level memory alone.
+- Priors: D′'s authors estimate +1.5 over their own earlier formula (not over Franzen); JustAdev742's hazard-calibrated
+  replay puts D′ +1.2 [0.1, 2.6] (14 slots) / +2.2 [0.5, 4.2] (10 slots) public-25 points above Franzen's gate, i.e.
+  roughly +0.7 / +1.3 LB points (`docs/research/beat-tufa/time-allocation.md`).
+
+### 8.3 Replay (`scripts/sim_m2_priority_gate.py`, variants `dprime*`)
+
+D′ is executed from the vendored module (its `d_parts`), with its pace tracker, fade 0.4 and fresh-game pricing; the
+sim tracks games that never got a slot (`starved`). 120 draws per cell, common random numbers; LB points vs upstream
+(base) and vs our shipped `tail` gate. 10 slots × 70 tok/s (upstream) and 14 × 47 (arm B's 657 tok/s):
+
+| world (base 10 / 14) | tail | **D′** | D′ fresh-first | D′ + final B 5 | **D′ − tail** | starved games (D′) |
+|---|---|---|---|---|---|---|
+| tok2.5 (28.5 / 26.7) | +1.11 / +1.00 | **+2.83 / +2.71** | +2.74 / +2.56 | +2.91 / +2.72 | +1.72 / +1.71 | 3.2 / 4.1 |
+| tok2_u.12 (29.9 / 28.2) | +0.79 / +0.77 | +1.75 / +1.72 | +1.70 / +1.68 | +1.75 / +1.73 | +0.96 / +0.95 | 0.9 / 2.0 |
+| unsolv.20 (31.0 / 30.6) | +0.20 / +0.22 | +0.54 / +0.49 | +0.55 / +0.50 | +0.55 / +0.50 | +0.34 / +0.26 | 0 / 0 |
+| depth1.15 (30.0 / 28.4) | +1.03 / +1.06 | +2.62 / +2.59 | +2.47 / +2.35 | +2.71 / +2.74 | +1.59 / +1.53 | 5.9 / 8.4 |
+| finalU3x (30.7 / 29.0) | +0.73 / +0.71 | +1.81 / +1.81 | +1.77 / +1.76 | +1.85 / +1.80 | +1.08 / +1.10 | 2.1 / 3.0 |
+| siggame0.3 (28.5 / 26.4) | +0.85 / +1.01 | +2.98 / +3.12 | +2.73 / +2.74 | +2.99 / +3.18 | +2.13 / +2.11 | 4.1 / 5.7 |
+| coupled0.7 (29.0 / 27.2) | +0.44 / +0.48 | +1.38 / +1.63 | +1.37 / +1.59 | +1.41 / +1.62 | +0.94 / +1.15 | 0.1 / 0.3 |
+| eff1.5 (28.2 / 26.8) | +0.45 / +0.43 | +0.44 / +0.46 | +0.45 / +0.46 | +0.46 / +0.50 | −0.01 / +0.03 | 0 / 0 |
+| coupled0.7_eff1.5 (26.5 / 25.4) | +0.25 / +0.14 | +0.22 / +0.16 | +0.23 / +0.17 | +0.25 / +0.18 | −0.03 / +0.03 | 0 / 0 |
+| public_like (60.2 / 58.1) | +0.45 / +0.69 | +0.91 / +1.03 | +0.90 / +0.99 | +0.87 / +1.02 | +0.46 / +0.34 | 0 / 0 |
+
+Reading:
+- **D′ ≥ our tail fix in every world** (+0.0..+2.1 LB, P(draw > 0) 0.47-0.94), and ≥ upstream everywhere (+0.2..+3.1, i.e.
+  +0.6% to +11%). Its edge over tail is largest where tokens are scarce (tok2.5, depth1.15, siggame0.3) and vanishes when
+  slow levels also cost actions (eff1.5 worlds), the same pattern as section 4's h effect. The 14-slot / 47 tok/s
+  (arm B) numbers match the 10-slot ones: D′'s constants are not tuned to 10 streams in any way the model sees
+  (B and the fade are relative, the pace reference is per level, not per slot).
+- **Our tail tweak adds nothing on top of D′**: last-level B 0 → 5 or 10 is +0.0..+0.25 (cf. JustAdev742's +0.26 for B = 10),
+  inside noise, so the build keeps D′ verbatim (one fewer unmeasured change; the scored 31.54 / 28.87 are verbatim D′).
+- **Where the gain comes from**: most of it is the formula (fresh-first D′ keeps ~90% of it). Pricing fresh games buys the
+  rest by **never starting 2-9 of 110 games** in token-scarce worlds (their slot time goes to deeper levels of fast games).
+  That is a real hidden-set risk if the model's level-value assumptions are wrong; fresh-first D′ is the hedge (zero
+  starvation, ~−0.1..−0.4 LB vs D′), not built.
+- **Relation to the hidden evidence**: the sim's D′ − upstream (median ~+1.8 at 10 slots in hidden-like worlds) and
+  JustAdev742's (+0.7..+1.3 LB) sit below the draws' +3.0..+4.3 but well inside their noise (SE ≈ 3); the draws cannot
+  falsify the sim, and the sim says the draw gap is at least half luck. As with tail, the replay is a model, and public-25
+  replays get the sign of scheduler changes wrong (JustAdev742 §4.5).
+- **Check-run shape** (25 games × 25 min, 14 × 47 tok/s): D′ starves ~5-6 of the 11 waiting games in the sim (upstream
+  0.05), because the first trims come at ~22 min and D′ re-admits trimmed games over fresh ones. The check run's public-25
+  numbers are therefore NOT comparable to B's (fewer games played); only mechanism and throughput are read from it.
+
+### 8.4 Compatibility
+
+- **Level memory, history cache, timeout fix**: orthogonal. D′ touches `tool_agent.priority_value`, `ProgressPace`,
+  `_PriorityGate.acquire`, `_HarnessGameSession.play` and four `ARC3_PRIORITY_*` env vars (read at call time); level
+  memory wraps `ToolAgent._build_user_prompt / _trim_messages_for_context / _ensure_session`; the history cache wraps
+  `play` again (composes: it calls the wrapped original). Tested against the real patched harness
+  (`test_install_replaces_priority_pace_and_fresh_queueing`): the gate's `_snapshot_priority` returns D′'s value, a fresh
+  `acquire` is priced, pace records mean tokens per level.
+- **14 streams**: no slot-count dependence in the formula (above); JustAdev742 ran D′ at 14 streams for three 121-min
+  public-25 runs and the exp-074t hidden draw without a mechanism problem.
+- **Not with `tail`**: both set the priority; the builder refuses the combination.
+
+### 8.5 Built: `calamitychasm/arc3-m2-turbo-lossless-dprime` (never pushed)
+
+`python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --dprime` -> `kaggle_submission_m2_turbo_lossless_dprime/`.
+Arm B's stack (turbo-lossless: histcache + timeout fix + REAP-448 + ARC hotmap + 14 streams + level memory) with D′ in place
+of PRIORITY_TAIL, plus the 2026-10-10 standing rule's boot grace (`ARC3_HTTP_RETRY_INITIAL_SECONDS` 900 -> 2400; only this new
+kernel). Versus `arc3-m2-turbo-lossless` it differs in exactly four cells (header, setup grace line, install cell + D′ lines,
+run-cell counter dump; `test_differs_from_turbo_lossless_only_where_intended`). Our only addition to D′ is a call/error counter
+around `d_priority` (falls back to upstream's value on an exception) -> `dprime_summary.json` {calls, errors, last_error,
+fresh_replaced}. Markers: arm B's minus `PRIORITY_TAIL installed`, plus `PRIORITY_DPRIME installed` (the line carries D′'s own
+`#OURS_FORM ok version=d_prime ...`); the run cell also prints `#OURS_FRESH replaced=N`.
+
+**Check run (pre-registered; 25 public games × 25 min, arm B's shape). Mechanism + catastrophe only:**
+- Pass: every marker incl. `PRIORITY_DPRIME installed` and `INPUT_RESOLVED`; `dprime_summary.json` errors 0, calls > 0,
+  `fresh_replaced` = 25 (every game's first acquire priced); 0 tracebacks; histcache / timeout_fix / level_memory counters
+  clean; gen tok/s >= **624.5** (−5% of B's 657.4); retractions <= 4; tokens/request 1421-1737 (B 1579 ±10%).
+- Starvation: games with 0 actions <= **8** (sim expects ~5-6 at this shape; B ~0), each a never-admitted game with no
+  error, and every other game ends gave_up/won. Kill if > 11 (more than the 11 that wait at start: admission broken) or any
+  game thread dies.
+- Outcome (catastrophe only; public-25 is not comparable to B here): kill if total levels <= 26 or hard-15 <= 8 (B 36 / 15).
+- Also grep `DEADLINE at`, `READY after`, `analyzer failed` (standing rule 2).
+
+### 8.6 Recommendation
+
+D′ is the best-evidenced scheduler change available: two hidden draws +3.0..+4.3 over the same-period Franzen control (p ~0.08),
+a positive sign in both independent replays (ours: ≥ tail in every world), and zero throughput cost. It replaces our tail fix
+rather than adding to it. Proposed: after its check run passes, **give D′ arm A's remaining explore slots** (A is the
+lossy-acceptance arm we already deprioritised after exp-074t's 27.97; B stays as the tail control so B vs B-D′ is a same-stack,
+same-period comparison of the scheduler alone). Do not take slots from B. Ranking still needs n >= 3 per arm.

@@ -18,6 +18,12 @@ tokens). Scored with RHAE (w_l = l, S = min(1.15, h/a)^2, E = min(completion, ef
 Calibration: hidden-like worlds score ~28-32 (our LB 30.5); draw-to-draw sd ~2.5-3.9 (copies: 3.93).
 
     python scripts/sim_m2_priority_gate.py --draws 150 --slots 10,14
+    python scripts/sim_m2_priority_gate.py --draws 120 --slots 10:70,14:47 --variants tail,dprime,dprime+final5
+
+D' (section 8 of the write-up): shiiin9's slot priority A*M*C + B*phi, executed from the vendored module
+kaggle_submission_milestone2_fork/dprime/ours_form_priority.py (verbatim from their notebook), with its two other
+changes: fade over the final 40%, and never-started games priced by the formula (l = 1, a = t = 0) instead of
+queued first. Its pace M is the game's mean generated tokens per cleared level (FormPace).
 """
 from __future__ import annotations
 
@@ -33,6 +39,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "kaggle_submission_milestone2_fork" / "upstream" / "arc-agi-3-milestone-2-solution.ipynb"
+DPRIME_SRC = ROOT / "kaggle_submission_milestone2_fork" / "dprime" / "ours_form_priority.py"
 
 # base_actions_per_level of the 25 public games (benchmark.json of a milestone-2 run)
 PUBLIC = {"ar25": [32, 50, 75, 37, 89, 159, 233, 73], "bp35": [21, 48, 44, 38, 33, 87, 86, 131, 163],
@@ -71,7 +78,13 @@ VARIANTS = {   # name -> run() kwargs; "base" is the incumbent (h 25, last-level
     "h60+final5 (shipped: tail)": dict(human=60.0, final_b=5.0),
     "fade0.4": dict(fade=0.4),
     "lookup80k": dict(lookup=True),
+    # D' (shiiin9): its priority, fade 0.4, fresh games priced by the formula; + its parts and + our tail idea
+    "dprime": dict(prio="dprime"),
+    "dprime (fresh first)": dict(prio="dprime", fresh_first=True),
+    "dprime+final5": dict(prio="dprime", final_b=5.0),
+    "dprime+final10": dict(prio="dprime", final_b=10.0),
 }
+DEFAULT_VARIANTS = tuple(v for v in VARIANTS if not v.startswith("dprime"))
 SLOT_RATE = {10: 70.0, 14: 55.0}   # generated tok/s per held slot (~700 aggregate at 10; ~770 at 14)
 
 
@@ -94,6 +107,18 @@ def load_priority_scheduler() -> types.ModuleType:
 
 PS = load_priority_scheduler()
 BASE_80K = dict(PS.TAIL_LOOKUP_80K)
+
+
+def load_dprime() -> types.ModuleType:
+    """shiiin9's D' module, verbatim (the file their notebook exec's as `ours_form_priority`)."""
+    mod = types.ModuleType("ours_form_priority")
+    sys.modules[mod.__name__] = mod
+    exec(compile(DPRIME_SRC.read_text(encoding="utf-8"), "ours_form_priority.py", "exec"), mod.__dict__)
+    return mod
+
+
+DP = load_dprime()
+DP_BASE = dict(DP.D_PRIME)
 
 
 class World:
@@ -125,32 +150,50 @@ def score_game(levels, solved_actions) -> float:
     return min(comp, eff)
 
 
-def run(world: World, *, slots=10, minutes=532.0, tok_per_slot_s=70.0, fade=0.2, final_b=0.0,
-        lookup="remaining", human=25.0) -> dict:
+def run(world: World, *, slots=10, minutes=532.0, tok_per_slot_s=70.0, fade=None, final_b=0.0,
+        lookup="remaining", human=25.0, prio="franzen", fresh_first=None) -> dict:
+    """prio "franzen": upstream priority_value (fade default 0.2, fresh games first); "dprime": D' (fade default 0.4,
+    fresh games priced by the formula unless fresh_first=True; final_b is D''s B with 0 levels remaining)."""
     PS.TAIL_LOOKUP_REMAINING = {n: (8.0,) * (n - 3) + (7.0, 5.0, final_b) for n in range(6, 11)}
     PS.TAIL_LOOKUP_80K = {n: v[:-1] + (final_b / 0.8,) for n, v in BASE_80K.items()}
+    dprime = prio == "dprime"
+    fade = (0.4 if dprime else 0.2) if fade is None else fade
+    fresh_first = (not dprime) if fresh_first is None else fresh_first
     rng = random.Random(world.trim_seed)
     T, G = minutes * 60.0, len(world.games)
     window = fade * T
     st_ = [dict(level=0, a=0.0, t=0.0, solved=[], next_trim=rng.gauss(62000, 6000), parked_last=0.0,
-                active_last=0.0) for _ in range(G)]
+                active_last=0.0, pace_tok=0.0, pace_n=0, played=0.0) for _ in range(G)]
     trims = [random.Random(rng.random()) for _ in range(G)]
+    if dprime:
+        dp_params = dict(DP_BASE)
 
-    def prio(gi, now):
+    def prio_value(gi, now):
         s = st_[gi]
+        frac = max(0.0, T - now) / window
+        if dprime:   # D''s FormPace: mean tokens per cleared level, 0 before the first clear
+            pace = s["pace_tok"] / s["pace_n"] if s["pace_n"] else 0.0
+            snap = PS.PrioritySnapshot(s["level"] + 1, int(s["a"]), s["t"], pace, len(world.games[gi]))
+            phi = min(1.0, max(0.0, frac))
+            u, v = DP.d_parts(snap.level, snap.actions, snap.tokens, pace, snap.total_levels, dp_params)
+            if snap.level >= snap.total_levels:      # 0 levels remaining: D''s B is 0; the variant's final_b
+                v = final_b
+            return max(1, int((u + v * phi) * DP.SCALE))
         snap = PS.PrioritySnapshot(s["level"] + 1, int(s["a"]), s["t"], 1.0, len(world.games[gi]))
-        return PS.priority_value(snap, tail_fraction=max(0.0, T - now) / window, normalize_score=True,
+        return PS.priority_value(snap, tail_fraction=frac, normalize_score=True,
                                  tail_lookup=lookup, human_actions=human)
 
     fresh = list(world.order)
     active, fresh, waiting = fresh[:slots], fresh[slots:], []
+    if not fresh_first:     # D': never-started games wait in the same queue, priced like everyone else
+        waiting, fresh = fresh, []
 
     def admit(now):
         while len(active) < slots and (fresh or waiting):
             if fresh:
                 active.append(fresh.pop(0))
                 continue
-            best = max(range(len(waiting)), key=lambda k: (prio(waiting[k], now), -k))
+            best = max(range(len(waiting)), key=lambda k: (prio_value(waiting[k], now), -k))
             active.append(waiting.pop(best))
 
     now = 0.0
@@ -165,6 +208,7 @@ def run(world: World, *, slots=10, minutes=532.0, tok_per_slot_s=70.0, fade=0.2,
         dt = min(best[0] / tok_per_slot_s, T - now)
         for gi in active:
             s = st_[gi]
+            s["played"] += dt
             s["t"] += dt * tok_per_slot_s
             s["a"] += dt * tok_per_slot_s * world.games[gi][s["level"]]["rate"]
             s["next_trim"] -= dt * tok_per_slot_s
@@ -180,6 +224,8 @@ def run(world: World, *, slots=10, minutes=532.0, tok_per_slot_s=70.0, fade=0.2,
         s = st_[gi]
         if kind == "solve":
             s["solved"].append(s["a"])
+            s["pace_tok"] += s["t"]
+            s["pace_n"] += 1
             s["level"] += 1
             s["a"] = s["t"] = 0.0
             if s["level"] >= len(world.games[gi]):
@@ -193,44 +239,75 @@ def run(world: World, *, slots=10, minutes=532.0, tok_per_slot_s=70.0, fade=0.2,
     parked = sum(s["parked_last"] for s in st_)
     return dict(score=100.0 * sum(score_game(world.games[g], st_[g]["solved"]) for g in range(G)) / G,
                 levels=sum(len(s["solved"]) for s in st_),
+                starved=sum(1 for s in st_ if s["played"] <= 0.0),
                 parked_last_share=parked / max(1e-9, parked + sum(s["active_last"] for s in st_)))
 
 
 def job(args):
-    wname, seed, slots = args
-    world = World(random.Random(f"{wname}/{seed}"), **WORLDS[wname])
-    return wname, slots, {v: run(world, slots=slots, tok_per_slot_s=SLOT_RATE[slots], **kw)
-                          for v, kw in VARIANTS.items()}
+    wname, seed, slots, rate, variants, n_games, minutes = args
+    world = World(random.Random(f"{wname}/{seed}"), n_games=n_games, **WORLDS[wname])
+    return wname, slots, {v: run(world, slots=slots, tok_per_slot_s=rate, minutes=minutes, **VARIANTS[v])
+                          for v in ("base",) + tuple(x for x in variants if x != "base")}
+
+
+def _parse_slots(spec: str) -> list[tuple[int, float]]:
+    """"10,14" (default per-slot rates) or "10:70,14:47" (slots:generated tok/s per held slot)."""
+    out = []
+    for item in spec.split(","):
+        n, _, r = item.partition(":")
+        out.append((int(n), float(r) if r else SLOT_RATE[int(n)]))
+    return out
+
+
+ALIASES = {"tail": "h60+final5 (shipped: tail)"}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--draws", type=int, default=100)
-    ap.add_argument("--slots", default="10")
+    ap.add_argument("--slots", default="10", help='"10,14" or "10:70,14:47" (slots:tok/s per slot)')
     ap.add_argument("--worlds", default=",".join(WORLDS))
+    ap.add_argument("--variants", default=",".join(DEFAULT_VARIANTS[1:]),
+                    help="comma list of VARIANTS keys (alias: tail); base is always run")
+    ap.add_argument("--vs", default="", help="also report each variant against this one (e.g. tail)")
+    ap.add_argument("--games", type=int, default=110)
+    ap.add_argument("--minutes", type=float, default=532.0)
     ap.add_argument("--procs", type=int, default=4)
     a = ap.parse_args(argv)
-    slots = [int(x) for x in a.slots.split(",")]
+    slots = _parse_slots(a.slots)
     worlds = a.worlds.split(",")
-    tasks = [(w, s, sl) for sl in slots for w in worlds for s in range(a.draws)]
+    variants = tuple(ALIASES.get(v, v) for v in a.variants.split(",") if v)
+    vs = ALIASES.get(a.vs, a.vs)
+    for v in variants + ((vs,) if vs else ()):
+        if v not in VARIANTS:
+            raise SystemExit(f"unknown variant {v!r}; known: {list(VARIANTS)}")
+    if vs and vs not in variants:
+        variants += (vs,)
+    tasks = [(w, s, sl, rate, variants, a.games, a.minutes) for sl, rate in slots for w in worlds
+             for s in range(a.draws)]
     with Pool(a.procs) as p:
         res = p.map(job, tasks, chunksize=4)
     boot = random.Random(0)
-    for sl in slots:
+    for sl, rate in slots:
         for w in worlds:
             rows = [o for wn, s2, o in res if wn == w and s2 == sl]
             base = [r["base"]["score"] for r in rows]
-            print(f"\n== {w}  slots={sl}  draws={len(rows)}  base {st.mean(base):.2f} (sd {st.stdev(base):.2f})  "
-                  f"last-level parked share {st.mean(r['base']['parked_last_share'] for r in rows):.2f}")
-            for v in VARIANTS:
-                if v == "base":
-                    continue
-                d = [r[v]["score"] - r["base"]["score"] for r in rows]
-                bs = sorted(st.mean(boot.choices(d, k=len(d))) for _ in range(2000))
-                print(f"  {v:28s} {st.mean(d):+.3f} [{bs[100]:+.3f}, {bs[1900]:+.3f}]  "
-                      f"{100 * st.mean(d) / st.mean(base):+.2f}%  P(draw>0) {sum(x > 0 for x in d) / len(d):.2f}  "
-                      f"levels {st.mean(r[v]['levels'] - r['base']['levels'] for r in rows):+.2f}  "
-                      f"parked share {st.mean(r[v]['parked_last_share'] for r in rows):.2f}")
+            print(f"\n== {w}  slots={sl} x {rate:g} tok/s  draws={len(rows)}  base {st.mean(base):.2f} "
+                  f"(sd {st.stdev(base):.2f})  last-level parked share "
+                  f"{st.mean(r['base']['parked_last_share'] for r in rows):.2f}  "
+                  f"starved {st.mean(r['base']['starved'] for r in rows):.2f}")
+            for ref in ("base",) + ((vs,) if vs else ()):
+                for v in variants:
+                    if v == ref:
+                        continue
+                    d = [r[v]["score"] - r[ref]["score"] for r in rows]
+                    bs = sorted(st.mean(boot.choices(d, k=len(d))) for _ in range(2000))
+                    tag = v if ref == "base" else f"{v} - {ref}"
+                    print(f"  {tag:40s} {st.mean(d):+.3f} [{bs[100]:+.3f}, {bs[1900]:+.3f}]  "
+                          f"{100 * st.mean(d) / st.mean(base):+.2f}%  P(draw>0) {sum(x > 0 for x in d) / len(d):.2f}  "
+                          f"levels {st.mean(r[v]['levels'] - r[ref]['levels'] for r in rows):+.2f}  "
+                          f"parked share {st.mean(r[v]['parked_last_share'] for r in rows):.2f}  "
+                          f"starved {st.mean(r[v]['starved'] for r in rows):.2f}")
     return 0
 
 

@@ -23,6 +23,8 @@ Two edits to the upstream notebook (kaggle_submission_milestone2_fork/upstream/)
                                                     # arc3-m2-turbo-tail-hic16 (host KV tier, see below)
     python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail --reasoning-effort medium
                                                     # arc3-m2-turbo-lossless-tail-re-medium (see below)
+    python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --dprime
+                                                    # arc3-m2-turbo-lossless-dprime (D' slot priority, see below)
 
 Input mount layouts: Kaggle mounts inputs either at /kaggle/input/{datasets/<owner>,competitions}/<slug> or at
 /kaggle/input/<slug>. EVERY build with at least one variant (and the speed and vLLM kernels, which derive from
@@ -41,6 +43,14 @@ the install cell sets ARC3_PRIORITY_HUMAN_ACTIONS=60 (upstream 25; the public ga
 level) and gives a game on its LAST level the future bonus B=5 instead of 0 (TAIL_LOOKUP_REMAINING 8/7/5/0 ->
 8/7/5/5), both at runtime -- the harness patch is untouched. It composes with every other variant; with a
 turbo preset the slug is the preset's plus "-tail".
+
+D' variant (--dprime, token `dprime`; experiments/stage7_milestone2_improvements.md section 8): shiiin9's (AFF AI
+CLUB) slot priority "D'" replaces the scheduler's priority_value, pace tracker and fresh-first queueing, exactly as their
+public notebook installs it (module verbatim in kaggle_submission_milestone2_fork/dprime/, Apache-2.0, see its
+NOTICE.md); we add only a call/error counter around the priority function (dprime_summary.json). It replaces the
+`tail` variant (both set the slot priority; refused together). A dprime build also carries the 2026-10-10 standing
+rule's boot grace: ARC3_HTTP_RETRY_INITIAL_SECONDS 900 -> 2400 in the setup cell (kernels built before stay as
+pushed). With a turbo preset the slug is the preset's plus "-dprime".
 
 Strategy-audit variant (--strategy-audit, token `audit`; experiments/stage7_milestone2_improvements.md section 5):
 lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT appended to the turn opener once the game has generated
@@ -96,6 +106,9 @@ sys.path.insert(0, str(SCRIPTS))
 from _m2_input_resolver import MARKER as INPUT_MARKER, apply_input_resolver  # noqa: E402
 from _build_m2_speed_kernels import HICACHE_MAX_GB, hicache_line  # noqa: E402
 
+FORK = ROOT / "kaggle_submission_milestone2_fork"
+DP_SRC = (FORK / "dprime" / "ours_form_priority.py").read_text(encoding="utf-8")
+
 
 
 def sub(text: str, old: str, new: str, what: str) -> str:
@@ -113,7 +126,6 @@ def set_src(nb, i, text):
     nb["cells"][i]["source"] = text.splitlines(True)
 
 
-FORK = ROOT / "kaggle_submission_milestone2_fork"
 UPSTREAM = FORK / "upstream" / "arc-agi-3-milestone-2-solution.ipynb"
 LM_SRC = (FORK / "level_memory" / "level_memory.py").read_text(encoding="utf-8")
 assert "'''" not in LM_SRC, "module source must not contain ''' (it is inlined in r'''...''')"
@@ -128,9 +140,9 @@ INCUMBENT = "arc3-m2-level-memory"
 DOCKER_PINNING = "original"   # kernel-metadata docker_image_pinning_type of every variant build
 # variant kind -> slug suffix order; the slug and the checks below follow this order whatever the CLI order is.
 # Kinds "acc" and "streams" carry a value in their token: acc50 = acceptance 0.5, s14 = 14 streams.
-VARIANT_ORDER = ("histcache", "triedfacts", "tail", "audit", "effort", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
+VARIANT_ORDER = ("histcache", "triedfacts", "tail", "dprime", "audit", "effort", "timeoutfix", "reap", "acc", "hotmap", "streams", "hic",
                  "all25", "inputs")
-_FIXED_KINDS = ("histcache", "triedfacts", "tail", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
+_FIXED_KINDS = ("histcache", "triedfacts", "tail", "dprime", "audit", "timeoutfix", "reap", "hotmap", "all25", "inputs")
 TURBO = ("histcache", "timeoutfix", "reap", "acc50", "hotmap", "s14", "all25")
 TURBO_SLUG = "arc3-m2-turbo"
 # turbo without the lossy MTP acceptance (upstream SPEC_ACCEPT_SINGLE / SPEC_ACCEPT_ACC stay 1.0)
@@ -139,6 +151,11 @@ TURBO_LOSSLESS_SLUG = "arc3-m2-turbo-lossless"
 # priority-gate variant `tail` (see the module docstring)
 TAIL_HUMAN_ACTIONS = 60.0     # upstream 25; median of base_actions_per_level over the 25 public games (183 levels)
 TAIL_FINAL_B = 5.0            # upstream 0: B of a game on its last level (= B with one level left)
+# D' variant (see the module docstring): the boot grace of the 2026-10-10 standing rule rides on it
+BOOT_GRACE_OLD = "os.environ['ARC3_HTTP_RETRY_INITIAL_SECONDS'] = '900'\n"
+BOOT_GRACE_NEW = ("os.environ['ARC3_HTTP_RETRY_INITIAL_SECONDS'] = '2400'   # [calamitychasm] boot grace (was 900): "
+                  "a server ready after ~32 min no longer loses the gate-slot games\n")
+BOOT_GRACE_KINDS = ("dprime",)
 MAX_STREAMS = 14              # 16 was measured by nobody on this stack and adds retractions at long contexts
 MAX_STREAMS_WITHOUT_REAP = 12  # without REAP's freed 7.3 GiB the 1.01M-token KV pool is oversubscribed past 12
 # Host KV tier (token hic<GB>): 16 x ~98K tokens/stream (turbo-tail's peak 0.93 x 1.48M / 14) = ~1.57M against the
@@ -170,9 +187,42 @@ VARIANT_INSTALL_LINES = {
         "print('PRIORITY_TAIL installed', 'human_actions', _lm_ta._priority_human_actions(),\n"
         "      'B', {_n: _v[-4:] for _n, _v in sorted(_ps.TAIL_LOOKUP_REMAINING.items())}, flush=True)\n"
     ),
+    "dprime": (
+        "# [calamitychasm] D' slot priority (shiiin9 / AFF AI CLUB, public notebook affectify-arc-31-54-in-a-single-sub,\n"
+        "# Apache-2.0): their module verbatim, installed by their own install_d -- see\n"
+        "# experiments/stage7_milestone2_improvements.md section 8. Only addition: a call/error counter.\n"
+        "import dataclasses as _dp_dc\n"
+        "import os as _os\n"
+        "import inference.framework.solver as _dp_solver\n"
+        f"_DP_SRC = {DP_SRC!r}\n"
+        "_dp_mod = _types.ModuleType('ours_form_priority')\n"
+        "_sys.modules['ours_form_priority'] = _dp_mod\n"
+        "exec(compile(_DP_SRC, 'ours_form_priority.py', 'exec'), _dp_mod.__dict__)\n"
+        "_dp_upstream = _lm_ta.priority_value\n"
+        "assert _dp_upstream.__module__.endswith('priority_scheduler'), _dp_upstream.__module__\n"
+        "_dp_line = _dp_mod.install_d(_lm_ta, _dp_solver)\n"
+        "assert _lm_ta.priority_value is _dp_mod.d_priority and _lm_ta.ProgressPace is _dp_mod.FormPace\n"
+        "assert getattr(_lm_ta._PriorityGate.acquire, '_ours_d', False)\n"
+        "assert getattr(_dp_solver._HarnessGameSession.play, '_ours_d', False)\n"
+        "assert _os.environ['ARC3_PRIORITY_PACE'] == '1' and _os.environ['ARC3_PRIORITY_TAIL_FADE_FRACTION'] == '0.4'\n"
+        "DPRIME_STATS = {'calls': 0, 'errors': 0, 'last_error': ''}\n"
+        "def _dp_counted(state, **kw):\n"
+        "    DPRIME_STATS['calls'] += 1\n"
+        "    try:\n"
+        "        return _dp_mod.d_priority(state, **kw)\n"
+        "    except Exception as _exc:   # never seen; fall back to upstream's value rather than kill the game thread\n"
+        "        DPRIME_STATS['errors'] += 1\n"
+        "        DPRIME_STATS['last_error'] = repr(_exc)[:300]\n"
+        "        return _dp_upstream(_dp_dc.replace(state, cost_multiplier=1.0), **kw)\n"
+        "_lm_ta.priority_value = _dp_counted\n"
+        "def dprime_summary():\n"
+        "    return dict(DPRIME_STATS, fresh_replaced=_dp_mod.FRESH['replaced'])\n"
+        "print('PRIORITY_DPRIME installed', _dp_line, flush=True)\n"
+    ),
 }
 VARIANT_MARKERS = {"histcache": "HISTORY_CACHE installed", "triedfacts": "TRIED_FACTS installed",
-                   "tail": "PRIORITY_TAIL installed", "audit": "STRATEGY_AUDIT installed",
+                   "tail": "PRIORITY_TAIL installed", "dprime": "PRIORITY_DPRIME installed",
+                   "audit": "STRATEGY_AUDIT installed",
                    "timeoutfix": "TIMEOUT_FIX installed", "reap": "REAP448 applied kept=448"}
 VARIANT_BLURB = {
     "histcache": "A history cache (in-memory game history, compact batched state writes, a per-frame ascii "
@@ -187,6 +237,13 @@ VARIANT_BLURB = {
             "25 makes A collapse after a few dozen actions, and on the last level A is all there is) and the last "
             "level gets the future bonus B = 5 (as with one level left) instead of 0. Both set at runtime in the "
             "install cell; scheduling only, nothing the model sees changes.",
+    "dprime": "Slot priority D' (shiiin9 / AFF AI CLUB's public notebook affectify-arc-31-54-in-a-single-sub, "
+              "Apache-2.0; their module verbatim, installed by their own install_d): priority = A*M*C + B*phi with "
+              "A = (1 + 0.5(l-1)) norm(N) (300/(300+a))^2.5, pace M = clip((30000/p)^0.4, 0.25, 4) from the game's "
+              "mean tokens per cleared level, patience C = 0.1 max(0.1, 1-a/115) + 0.9 max(0.1, 1-t/T), room to "
+              "grow B = 16/14/10/0, tail fade phi over the final 40%; never-started games are priced by the same "
+              "formula instead of queued first. Scheduling only, nothing the model sees changes. We add only a "
+              "call/error counter (dprime_summary.json). Setup also waits 2400 s (was 900) for a slow server boot.",
     "audit": "Strategy audit (lordhansolo's Milestone-2 STRATEGY_AUDIT_PROMPT, ported with three harness "
              "references adapted; provenance in kaggle_submission_milestone2_fork/strategy_audit/NOTICE.md in our "
              "repo): once a game has generated 56,000 tokens (about a quarter of its expected token share) on one "
@@ -230,6 +287,8 @@ def variant_names(variants) -> tuple[str, ...]:
     kinds = [_kind(t) for t in toks]
     if len(set(kinds)) != len(kinds):
         raise SystemExit(f"REFUSING TO BUILD -- two values for one variant: {toks}")
+    if "tail" in kinds and "dprime" in kinds:
+        raise SystemExit("REFUSING TO BUILD -- `tail` and `dprime` both set the slot priority: pick one")
     return tuple(sorted(toks, key=lambda t: VARIANT_ORDER.index(_kind(t))))
 
 
@@ -300,7 +359,7 @@ def check_serving(variants) -> None:
 
 # harness variants that ride on a turbo preset as slug suffixes, in this order:
 # turbo-lossless + tail + audit -> arc3-m2-turbo-lossless-tail-audit
-PRESET_EXTRAS = ("tail", "audit")
+PRESET_EXTRAS = ("tail", "dprime", "audit")
 
 
 def _hic_suffix(names) -> str:
@@ -386,6 +445,7 @@ def kernel_counters(variants) -> list[str]:
     names = variant_names(variants)
     return (["level_memory_summary.json"] + ["history_cache_summary.json"] * ("histcache" in names)
             + ["strategy_audit_summary.json"] * ("audit" in names)
+            + ["dprime_summary.json"] * ("dprime" in names)
             + ["reasoning_effort_summary.json"] * (effort_value(names) is not None)
             + ["timeout_fix_summary.json"] * ("timeoutfix" in names))
 
@@ -515,7 +575,15 @@ def re_dump(level: str) -> str:
 # "effort" takes the level as its argument
 VARIANT_CELLS = {"histcache": history_cache_cell, "audit": strategy_audit_cell, "effort": reasoning_effort_cell}
 # variant -> lines appended to the run cell's counter dump
-VARIANT_RUN_DUMP = {"histcache": HC_DUMP, "audit": SA_DUMP}
+DP_DUMP = (
+    "try:   # [calamitychasm] D' slot-priority counters\n"
+    "    (WORKING_DIR / 'dprime_summary.json').write_text(json.dumps(dprime_summary(), indent=2))\n"
+    "    print('PRIORITY_DPRIME summary', json.dumps(dprime_summary()), flush=True)\n"
+    "    print('#OURS_FRESH replaced=' + str(_dp_mod.FRESH['replaced']), flush=True)\n"
+    "except Exception as _exc:\n"
+    "    print('PRIORITY_DPRIME summary failed', repr(_exc), flush=True)\n"
+)
+VARIANT_RUN_DUMP = {"histcache": HC_DUMP, "audit": SA_DUMP, "dprime": DP_DUMP}
 
 
 # ------------------------------------------------------------------ turbo variants (JustAdev742, Apache-2.0)
@@ -951,6 +1019,10 @@ def build(variants=()) -> Path:
     check_serving(variants)
     nb = json.loads(UPSTREAM.read_text(encoding="utf-8"))
     serving_edits(nb, variants)      # upstream cells only, before any insertion
+    if any(_kind(v) in BOOT_GRACE_KINDS for v in variants):
+        hit = [i for i, c in enumerate(cells_of(nb)) if BOOT_GRACE_OLD in c]
+        assert len(hit) == 1, hit
+        set_src(nb, hit[0], sub(cells_of(nb)[hit[0]], BOOT_GRACE_OLD, BOOT_GRACE_NEW, "boot grace"))
     if resolves_inputs(variants):
         apply_input_resolver(nb)
     src = cells_of(nb)
@@ -975,7 +1047,7 @@ def build(variants=()) -> Path:
           "Jeroen Cottaar and Tufa Labs). One addition: solved-level memory, ported from sirikilohit's "
           "Milestone-2 patch M85 and adapted to this harness's prefix cache. Installed by the cell before the run.\n"
           + "".join(f"\nVariant `{v}`: {_blurb(v, variants)}\n" for v in variants)
-          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "audit", "effort", "inputs"}) else
+          + (("" if not ({_kind(v) for v in variants} - {"histcache", "triedfacts", "tail", "dprime", "audit", "effort", "inputs"}) else
              TURBO_NOTE if accept_value(variants) is not None else TURBO_NOTE_LOSSLESS)))
     nb["cells"].insert(0, {"cell_type": "markdown", "metadata": {}, "source": md.splitlines(True)})
     slug = kernel_slug(variants)
@@ -1017,6 +1089,9 @@ def main(argv=None) -> int:
     ap.add_argument("--prio-tail", action="store_true",
                     help=f"priority gate: h={TAIL_HUMAN_ACTIONS:g} in A, last-level B={TAIL_FINAL_B:g} "
                          "(kernel arc3-m2-lm-tail; with a turbo preset, its slug + -tail)")
+    ap.add_argument("--dprime", action="store_true",
+                    help="shiiin9's D' slot priority instead of upstream's (and instead of --prio-tail); "
+                         "with --turbo-lossless: arc3-m2-turbo-lossless-dprime")
     ap.add_argument("--strategy-audit", action="store_true",
                     help="lordhansolo's strategy-audit prompt once a level has used ~25%% of a game's token share "
                          "(with --turbo-lossless --prio-tail: arc3-m2-turbo-lossless-tail-audit)")
@@ -1037,7 +1112,7 @@ def main(argv=None) -> int:
         raise SystemExit("REFUSING TO BUILD -- --turbo and --turbo-lossless are different presets")
     variants = (["histcache"] * args.history_cache + ["triedfacts"] * args.tried_facts
                 + ["timeoutfix"] * args.timeout_fix + ["reap"] * args.reap + ["hotmap"] * args.arc_hotmap
-                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail
+                + ["all25"] * args.check_all25 + ["inputs"] * args.input_resolver + ["tail"] * args.prio_tail + ["dprime"] * args.dprime
                 + ["audit"] * args.strategy_audit)
     if args.reasoning_effort is not None:
         variants.append(effort_token(args.reasoning_effort))
