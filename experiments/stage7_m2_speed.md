@@ -945,3 +945,63 @@ Levels per game:
 | wa30 | hard | 1 | 1 | 1 |
 
 B's hard-15 (15) / easy-10 (21) are the control for the reasoning-effort check run (`stage7_milestone2_improvements.md` section 6.3): advance needs total >= 42 and hard-15 >= 21; kill if hard-15 is not above 15.
+
+## Boot-time / slow-storage robustness audit (2026-10-10)
+
+Trigger: JustAdev742's lesson 0038 (`docs/lessons/0038-kaggle-input-storage-can-be-several-times-slower.md`, research
+log 2026-10-10 00:50 / 01:29 / 04:05): on some sessions `/kaggle/input` reads 4-5x slower (26-53 s per safetensors
+shard instead of 5-9; wheel precache 31.5 s instead of 7-10), still ~2x slow an hour later; one training server took
+26.7 min to boot. Audited the three scored notebooks (incumbent v1, arm A turbo-tail, arm B turbo-lossless-tail). All
+three carry upstream's startup logic unchanged (cell 5 and the launcher cell are identical to
+`kaggle_submission_milestone2_fork/upstream/` apart from our REAP/marker prints).
+
+**1. Readiness timeout and what happens past it.** `SERVER_STARTUP_TIMEOUT = 12 * 60` counts from `NOTEBOOK_START_TIME`
+(cell 5). The `/health` loop does not abort: at 12 min it prints `DEADLINE at ...s from notebook start; releasing the
+benchmark with the server still loading` and the run continues. `ARC3_WARMUP_ACTION_GAMES=1` makes the first game issue
+one RESET straight to the engine (Kaggle's 15-min first-action rule). In a submission `concurrency = 120`, so all ~110
+sessions start, but only the gate-slot holders (10 incumbent, 14 arms A/B) send requests; the rest wait in
+`gate.acquire`. Each agent's first request gets `ARC3_HTTP_RETRY_INITIAL_SECONDS = 900` s of retries (per agent,
+consumed once). After that a dead endpoint is an ordinary failure (3 retries x 5 s, then a 10 s analyzer backoff,
+~25-27 s per failed turn); `ARC3_MAX_ANALYZER_FAILURES = 10` -> the 11th consecutive failure **ends that game for good**
+(`solver_note "analyzer failed 11 times consecutively"`, `n_passes = 1`, no requeue). So: server ready by ~12.5 + 15 +
+~5 = **~32 min** after cell 5 -> nothing lost but idle time; ready later -> the first 10 (incumbent) / 14 (A/B) games in
+queue order are given up with whatever they had (likely nothing): ~9% / ~13% of the ~110 games, i.e. roughly -3 / -4
+points at a ~30 mean. No path plays games with no model beyond that (the games that wait on the gate meet a ready server).
+
+**2. Time budget.** In a submission `soft_end = None`; each game stops at `started_at + max_runtime_s_per_game`
+(532 min), with `started_at` = session construction (`field(default_factory=time.monotonic)`, solver.py L480), i.e. at
+`bm.run`, ~12-14 min after cell 5 because the release is clamped at 12 min. **The end is anchored to the release, not to
+server-ready**, so a 27-min boot does not push anything past the 9-h cap; it costs the ~15 min between release and ready
+with every stream idle (~3% of the 532 playing minutes). Anchoring the budget to server-ready "with the global deadline
+respected" would be min(ready + 532, global end) = the same global end: nothing to gain. The only way the end moves is
+if the cells before the health loop (bundle copy, wheel precache, pip install from the wheelhouse) themselves take more
+than 12 min; normally ~1-2 min, so even 5x slower storage leaves margin. REAP (A/B) adds no read pass: `wrap_weights`
+filters SGLang's own weight iterator and drops the 64 pruned experts after they are yielded (the bytes are still read),
+plus sha256 of 48 small router tensors. So A/B boot time scales exactly like the base load (JustAdev742's D' runs, the
+same REAP + 14-stream stack: ready 8.9-11.7 min normally; their session-A storage would have put readiness near 29 min).
+The upstream model precache thread (3 threads, starts 60 s after the server) reads the same files concurrently; on slow
+storage it competes with the load, but it is upstream behaviour in all three kernels.
+
+**3. Local evidence of our boot times.** None for the three SGLang kernels. The check-run digests in this file record
+throughput, not readiness (the only `ready_after` we have is vllm-s14's 668 s, a different stack); kaggle-ops logs and
+artifacts are not readable from the cloud box (GitHub's blob storage returns 403 through the proxy); scored reruns
+expose no log at all. Draw 5 (57017233, 25.21) was submitted 2026-10-09 18:21 UTC, so its boot was ~6 h before
+JustAdev742's first slow-storage observation (2026-10-10 00:14, right after the weekly reset; their earlier 22 D' runs
+were all normal). Nothing ties draw 5 to slow storage; 25.21 is 1.7 sd below the other four draws, inside the copies'
+spread (jvilladuque n=6: 23.4-27.6). Arm A draw 1 (57029829, submitted 03:37 UTC 2026-10-10) fell in the window where
+JustAdev742 still saw ~2x slow reads (servers healthy ~15.5 min after start: inside the grace, ~1% cost).
+
+**4. Proposed fix (not applied; the three committed notebooks are unchanged).** Risk is real but bounded: only a boot
+slower than ~32 min (the 4-5x tail, not the ~2x case) loses games. Minimal change, zero cost when the server is up in
+time because the grace covers only each agent's first request -- in cell 5 of the next rebuilt candidate:
+
+```python
+os.environ['ARC3_HTTP_RETRY_INITIAL_SECONDS'] = '900'    # current (all three)
+os.environ['ARC3_HTTP_RETRY_INITIAL_SECONDS'] = '2400'   # proposed: covers readiness up to ~57 min after cell 5
+```
+
+Keep `SERVER_STARTUP_TIMEOUT = 12 * 60` (the release anchors the 532-min game clock; delaying it would push the end
+toward the 9-h cap) and keep the budget as is (see 2). Optional, diagnostic only: print the boot time post-run
+(`grep -n "READY after\|DEADLINE at" ` already in the notebook log; add the first `/health` 200 time from a background
+poll after the release) and grep `DEADLINE at` and `analyzer failed` in every check run's `kernel_output`. Apply the
+grace at the next rebuild of any candidate (it needs a new kernel version and check run, like any change).
