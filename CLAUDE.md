@@ -169,6 +169,18 @@ Submit requests (one per commit, new `id` every time, bump the draw number in `m
     "counters": ["level_memory_summary.json"]}]}
   ```
 
+### Standing rule for any rebuilt kernel version (2026-10-10)
+
+From the boot-time / slow-storage audit (`experiments/stage7_m2_speed.md`, section "Boot-time / slow-storage robustness audit (2026-10-10)"):
+
+1. Set `ARC3_HTTP_RETRY_INITIAL_SECONDS` to **2400** (was 900) in cell 5. With 900, a server that becomes ready after ~32 min
+   permanently loses the 10-14 gate-slot games (about -3 to -4 pts); the grace covers only each agent's first request, so it
+   costs nothing when boot is normal. Kaggle slow-storage sessions (JustAdev742 lesson 0038) reach ~27-29 min boots.
+2. Add `DEADLINE at`, `READY after` and `analyzer failed` to every check run's `kernel_output` grep.
+3. Do NOT push a new version of a kernel that a scheduled submit request pins to `version` 1 (the submit op refuses when the
+   latest version differs). The change rides only on new kernels, or on a deliberate re-versioning with the schedule's submit
+   requests updated to match.
+
 ### Leaderboard snapshot (2026-10-02, updated 2026-10-08) and calibration
 
 **2026-10-09 ~18:20 UTC, VERIFIED via the Kaggle API (supersedes the unverified 10-08 figures below):**
