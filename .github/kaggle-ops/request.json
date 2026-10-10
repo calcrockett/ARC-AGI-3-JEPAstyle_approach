@@ -1,6 +1,6 @@
-{"id": "tldff-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless-dprime-ff", "show_lines": 3,
-  "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
-           "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "ARC_HOTMAP sha=", "PRIORITY_DPRIME installed",
-           "#OURS_FORM ok version=d_prime", "#OURS_FRESH replaced=", "PRIORITY_DPRIME summary", "LEVEL_MEMORY installed",
-           "priority gate active: 14 concurrent streams", "harness patch applied successfully",
-           "DPRIME_FRESH_FIRST installed", "DEADLINE at", "READY after", "analyzer failed"]}]}
+{"id": "jad81-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081", "show_lines": 3,
+  "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+           "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+           "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+           "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
+           "DEADLINE at", "READY after", "analyzer failed", "view_offset", "logical_grid"]}]}
