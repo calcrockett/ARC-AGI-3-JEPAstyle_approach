@@ -613,3 +613,204 @@ refused with `tail`). Differs from the dprime kernel in exactly two cells (heade
 - **Tests**: `tests/test_m2_dprime_ff.py` runs the wrapper on the real patched harness (fresh games admitted first in dispatch
   order, then started games in D′ order; control build prices a fresh game at the formula value; ff queues it at
   `2,000,000 - 1`), pins the notebook, its two-cell diff against the dprime kernel and the verbatim module.
+
+## 9. JustAdev742 exp-081 (2026-10-10) [READ; nothing built]
+
+JustAdev742's exp-081 drew **34.04** on the hidden set (submission 57026621, rank 25 of 4,089), against 27.97 for their
+exp-074t and 28.87 for their unchanged D′ copy. Source: their repo (github.com/JustAdev742/Arc-Agi-3-Kaggle-comp, Apache-2.0),
+read at commit `c7a462b`. Main records: `docs/research_log.md` entries 2026-10-08 17:05..2026-10-10 10:19, `docs/status.md`,
+`docs/SUBMITTING.md`, `scripts/build_candidates.sh`, `scripts/build_franzen_nb.py`, `kaggle/franzen/patches/`,
+`docs/research/beat-tufa/patch-*.md`.
+
+### 9.1 What exp-081 is
+
+Notebook `scottmahony/arc3-dprime-r14a05-harness4-percept-full` (script version 356590073; private). Built with their builder
+`scripts/build_franzen_nb.py` on `--base dprime`, the public D′ notebook in `kaggle/dprime/`. That notebook is Franzen's with only
+the slot priority replaced; it is the same D′ we vendored in `kaggle_submission_milestone2_fork/dprime/`. Their exp-084 entry
+(research log 2026-10-10 04:10) says exp-084 is "exp-081's exact build (reproduced byte-identically apart from today's 55-min
+fail-fast limit)" plus the fine-tuned draft and the 2400 s grace. So exp-081's flags are `build_candidates.sh`'s exp084 command
+without `--draft/--draft-manifest` and without `--env ARC3_HTTP_RETRY_INITIAL_SECONDS=2400`:
+
+```
+build_franzen_nb.py --base dprime --full25 121 --input-fallback --wait-inputs 120 \
+  --env ARC3_MAX_ACTIVE_STREAMS=14 \
+  --cfg MAXREQ=14 --cfg CUDAGRAPH_MAXBS=14 --cfg MAMBA_CACHE=84 --cfg SPEC_ACCEPT_SINGLE=0.5 --cfg SPEC_ACCEPT_ACC=0.5 \
+  --reap-kept kaggle/franzen/reap448_kept_experts.json --hot-tokens kaggle/franzen/hot_tokens_64k_arc.pt --fail-fast \
+  --env-add OURS_BUDGET_METER=1 --env-add OURS_WIN_LEDGER=1 --env-add OURS_SEARCH_HELPER=1 \
+  --env-add OURS_LEVEL_MEM=1 --env-add OURS_PERCEPTION=1 \
+  --patch ours-sandbox-timeout-keeps-work.patch --patch ours-02-budget-meter.patch --patch ours-04-search-helper.patch \
+  --patch ours-03b-win-ledger-on-02-04.patch --patch ours-05-level-mem.patch \
+  --patch ours-08b-perception-on-01-02-04-03b-05.patch --compact
+```
+
+`--full25` and `--fail-fast` change only the Save & Run. The competition rerun is D′'s own path.
+
+Changes vs Franzen's milestone-2 notebook:
+
+| layer | exp-081 | our arm A (turbo-tail) | our arm B |
+|---|---|---|---|
+| model / draft | Intel W4A16 + albucino MTP (unchanged) | same | same |
+| REAP-448 at load | yes | yes (ported from them) | yes |
+| MTP acceptance | 0.5 / 0.5 (lossy) | 0.5 / 0.5 | 1.0 |
+| ARC FR-Spec map | yes | yes | yes |
+| streams / Mamba / mem | 14 / 84 / 0.96 | same | same |
+| first-request grace | 900 s (D′ default) | 900 s | 900 s |
+| scheduler | **D′ (verbatim)** | PRIORITY_TAIL (Franzen's gate + our fix) | PRIORITY_TAIL |
+| sandbox-timeout fix | source patch ours-01 | runtime `timeout_fix.py` (same fix) | same as A |
+| history cache | no | yes | yes |
+| our level memory (M85) | no | yes | yes |
+| EXPOSE_RESET | off (default) | off | off |
+| harness bundle (below) | **02 / 04 / 03b / 05 / 08b** | no | no |
+
+The bundle is five source patches applied with `git apply` right after Franzen's harness patch in cell 4. Each patch is behind an
+env flag. With its flag off the harness is byte-identical.
+
+- **ours-02 budget meter** (`OURS_BUDGET_METER`; new `inference/utils/budget_bar.py`, hooks in `tool_agent.py` and
+  `python_tool_sandbox.py`). It reads the edge "budget bar" from the frames and adds one user-prompt line ("about N more actions
+  before it is empty"), a "budget death" verdict after a game over, and a `budget` dict in the sandbox.
+- **ours-04 search helper** (`OURS_SEARCH_HELPER`; `search_helper.py`). It adds `search()` (BFS / A* / beam over a step function
+  the model writes) and `run_plan()` (one real action at a time, stopping at the first surprise) to the sandbox. It costs 10 prompt
+  lines (+461 cached tokens), and a call that uses `search(` gets +15 s on its time limit. It uses its own sandbox bootstrap
+  (`_SANDBOX_BOOTSTRAP_SEARCH`).
+- **ours-03b win ledger** (`OURS_WIN_LEDGER`). At each level-up the opener gets an exact record of the win (about 280 tokens:
+  actions, game overs, object changes). At every context trim, a ledger of all win records, the current level's game overs and
+  the retained function names is re-pinned right after the system prompt (about 400 tokens). The sandbox gets `level_wins`.
+- **ours-05 level mem** (`OURS_LEVEL_MEM`). This is a sandbox dict `mem` that persists across python calls on one level (JSON
+  only, up to 200 KB, emptied at a level change). It costs 3 system-prompt lines and one `mem` field per tool result. It is
+  **not** our level memory: it is scratch storage for the model's own data. It does not pin anything across levels.
+- **ours-08b perception helpers** (`OURS_PERCEPTION`; host `ours_perception.py`, sandbox `ours_perception_sandbox.py` spliced
+  into the bootstrap, 4 system-prompt lines, a 10-line segmentation change). These are the "perception helpers":
+  1. A whole-view scroll estimate. It keeps a running `view_offset` on every frame and adds a `[view] scrolled at step N` line
+     to the action echo.
+  2. `left_view`: objects a scroll carried out of view, such as lf52's cart.
+  3. `logical_grid()`: the frame's cell lattice, one character per cell.
+  4. `.segmentation8`: 8-connected segmentation.
+
+  Their validation used 39 recorded runs (107,083 frames). All 285 scrolls were measured exactly, and none was claimed on
+  103,477 still steps. The cost is 1.7 ms per action.
+
+What the bundle is not: no fresh start (07 rejected: 39.73 / 45.02), no effect table (06b dropped), no RESET exposure (it hurt
+in exp-077/078), no reasoning-effort change.
+
+### 9.2 Evidence
+
+Their hidden draws, all on the Franzen M2 family:
+
+| draw | config | score |
+|---|---|---:|
+| 2026-10-07 (56922501) | exp-070d: D′ copy, unchanged | 28.87 |
+| 2026-10-09 (56980485) | exp-074t: D′ + REAP-448 + 14 streams + acceptance 0.5 + sandbox fix | 27.97 |
+| 2026-10-10 (57026621) | **exp-081**: exp-074t + ARC map + bundle 02/04/03b/05/08b | **34.04** |
+
+The two D′ configurations above are the closest control for exp-081. Other draws of the same family:
+- D′'s author: 31.54.
+- Franzen-family copies: 25.8 ± 3.9 per draw.
+- Our arm A (same serving as exp-081, our harness extras and tail instead of the bundle and D′): **26.59** (n=1).
+- Our incumbent: 29.42 (n=5).
+
+**34.04 is n=1.** The per-draw sd is ~2-4, and the sd of a two-draw difference is ~5.5. Against exp-074t the +6.1 is about
+1.1 sd. Against the mean of the three same-serving draws without the bundle (27.97, our 26.59, and D′ 28.87 at lower
+throughput) it is about +6.3. That is suggestive, not established.
+
+Their public-25 runs, at full length (25 games × 121 min/game; not comparable to our 25 × 25 min check runs):
+- exp-081: **50.00, 113 levels**, 5,690 actions, 803 output tok/s, accept 3.14. The `[view]` notes fired in exactly the two
+  scrolling games: bp35 (9) and lf52 (6). The model read `view_offset` 46× / 26×, `left_view` 10× (lf52) and `logical_grid()`
+  28× in 6 games. lf52 cleared 3/10 levels (base 1-3). NameErrors were 35 per ~2,770 tool results (earlier bundles 53-64).
+- Base config without the bundle: 56.00 / 42.89, plus 49.45 lossless.
+- Bundle without perception: 48.96 (RESET on) and 46.48.
+
+So on public-25 no bundle differs from the base beyond noise (one run's sd ~4.5). The public-25 to hidden-set ratio is 0.68 for
+exp-081 against 0.57 for exp-074t. That gap is either a hidden-set effect of the bundle or the high draw itself.
+
+Their next candidates do not carry the same draft as exp-081:
+- exp-084 (exp-081 + a fine-tuned MTP draft + 2400 s grace; 48.83 / 114, accept 3.33) replaces exp-081 in their rotation from
+  Oct 12.
+- exp-085 (exp-084 + "untried objects" notices, ours-10) is running.
+
+The draft mounts the private kernel output `scottmahony/arc3-mtp-session-a`, so exp-084 cannot be forked unless they publish it.
+Their exp-084 draws are still evidence on the bundle, at no cost to us.
+
+### 9.3 Mapping onto our stack
+
+- **Serving**: identical to arm A, no work. Arm B differs only by acceptance 1.0. exp-081's 34.04 with acceptance 0.5 weakens
+  the "0.5 is suspect" reading we took from exp-074t's 27.97.
+- **D′**: we have it verbatim in `kaggle_submission_m2_turbo_lossless_dprime*/` (built, never pushed).
+- **Timeout fix**: we have it as a runtime install. Their bundle patches carry ours-01's context lines, so the bundle needs the
+  **source** patch ours-01 applied first. A port would drop our runtime `--timeout-fix`.
+- **Bundle into our builder** (arm B + D′ + 01/02/04/03b/05/08b): this has a real conflict with our **history cache**.
+  `history_cache.install` rewrites only `SB._SANDBOX_BOOTSTRAP`. It anchors on
+  `history = _history_from_payload(state_payload.get("history"))` and sends `history` as a token plus deltas. With
+  `OURS_SEARCH_HELPER` or `OURS_PERCEPTION` on, the sandbox runs `_SANDBOX_BOOTSTRAP_SEARCH` or `_OURS_PERCEPTION_BOOTSTRAPS[...]`.
+  Those strings are built at import time from the unpatched text, so they would receive the token and fail. A port needs
+  `patch_bootstrap` applied to all four bootstrap strings, plus a check that perception's `ours_view` state rides along in the
+  delta path. We would also have to add `perception=` and `search_helper=` to every wrapped signature (`run_sandboxed_python` is
+  wrapped `*args, **kwargs`, which is fine).
+  - Effort: about a day, including a CPU bed run of the combined tree.
+  - Risk: medium-high. The composite has never run anywhere, and a silent sandbox-state mismatch is exactly the failure that
+    looks like a weak result.
+- **Our level memory vs their bundle**: the overlap is with **03b, not 05**. Both act at the context trim:
+  - ours appends facts + "Rule for level N:" lines at the end of the system prompt;
+  - theirs re-pins exact win records right after it.
+
+  Mechanically they compose: our runtime wrappers on `_build_user_prompt` and `_trim_messages_for_context` would wrap their
+  patched methods. Both fire when the prefix is already broken, so there is no extra cache cost. The content is partly
+  redundant: ~400 ledger tokens plus our block, and two level-up insertions in one opener. Our +4.8 was measured without a
+  ledger, so its marginal value on top of 03b is unknown, and probably smaller.
+- **Forking exp-081 verbatim**: cleanly reproducible. Every input is in their repo at `c7a462b`:
+  - the builder, `franzen_tree.py` and its `bundle/` delta + manifest;
+  - the D′ notebook (sha-pinned in the builder);
+  - the six patches;
+  - the REAP list + meta, the ARC map and `sglang_reap_patch.py`.
+
+  The apply check needs Franzen's public repo (`da-fr/arc-agi-3-solution` @ 10882e3). The only edits needed are the builder's
+  hard-coded `scottmahony/` kernel id (line ~1034) and the notes cell. The inputs are the same public datasets and models our
+  incumbent mounts.
+  - Effort: ~2 h. Vendor the files with their LICENSE + NOTICE (as for `turbo/`), add a wrapper script and a test pinning the
+    built notebook.
+  - Risk: low. It is the exact artifact that drew 34.04 and ran a clean full-length public-25.
+  - It brings no history cache and no level memory.
+
+### 9.4 Recommendation (pre-registered)
+
+1. **Build arm C = exp-081 verbatim**: `calamitychasm/arc3-jad-exp081`, with their flags above and their builder at `c7a462b`.
+   - The single deviation is `--env ARC3_HTTP_RETRY_INITIAL_SECONDS=2400`. That is our 2026-10-10 standing rule, and their own
+     exp-083/084 do the same. It changes nothing unless the server boots late.
+   - Keep it verbatim otherwise, so that our draws pool with JustAdev742's exp-081 draw. This mirrors the Franzen fork that gave
+     us +5.
+   - Do not add our level memory or the history cache to arm C.
+2. **Check run** (one push, full length so it compares with their nine full-length runs: `--full25 121`, ~2.4 GPU-h; push only
+   into a free GPU slot). Their notebook prints none of our markers, so the gate markers are theirs.
+   - **Pass, mechanism**:
+     - `harness patch applied successfully`;
+     - `our harness patches applied successfully: 6`;
+     - D′'s `#OURS_FORM ok version=d_prime`;
+     - `priority gate active: 14 concurrent streams`;
+     - serve.log `ARC3 REAP: kept 448 of 512 ... router sha256 verified`;
+     - `ours: FR-Spec map hot_tokens_64k_arc.pt written`;
+     - 0 tracebacks outside serving teardown, and every game terminal;
+     - `[view] scrolled` lines present in bp35 and lf52;
+     - `view_offset` or `logical_grid()` used at least once.
+   - **Pass, serving**:
+     - output tok/s ≥ 763 (−5% of their 803);
+     - accept 3.0-3.3;
+     - exact repeated assistant turns ≤ 1;
+     - retractions ≤ 4.
+   - **Reproduction**: score ≥ 39.7 and levels ≥ 95 (the lowest of their nine full-length runs).
+   - **Kill**:
+     - any patch-apply, REAP or FR-map assert failure;
+     - tracebacks raised from `ours_*` modules;
+     - tok/s < 723;
+     - more than 2 repeated turns;
+     - score < 35 or levels < 90.
+   - **Near-pass** (tok/s 723-763 or levels 90-95): rerun once before taking any slots.
+3. **Slots**: if C passes, it takes **arm A's remaining explore slots** (10-12, 10-14, 10-16).
+   - Arm A (n=1, 26.59) has the same serving as C, so A vs C is the bundle + D′ against our harness extras + tail.
+   - B keeps its slots as the lossless control.
+   - C supersedes the D′ kernel's claim on A's slots (§8.6), because C already contains D′ and has a hidden draw. The D′ kernel
+     stays built and unpushed.
+   - The drop rule and the n ≥ 3 rule apply unchanged. Re-read JustAdev742's exp-084 draws (Oct 12 on), and pool them as
+     bundle evidence with a draft caveat.
+4. **Later, only if C's mean leads after n ≥ 3**: arm C+LM, which is C plus our level-memory install cell. It is a runtime wrapper,
+   so the harness patches are untouched. Check-run criteria: C's, plus `LEVEL_MEMORY installed`, LM errors 0 and blocks applied
+   > 0, and tokens/request within +10% of C's. Do not port the bundle into arm B's histcache stack unless the history cache is
+   first fixed to patch every bootstrap variant (§9.3).
