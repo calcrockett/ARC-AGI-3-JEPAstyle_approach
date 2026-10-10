@@ -1,1 +1,6 @@
-{"id": "jad81-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081/notebook"}]}
+{"id": "tldff-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless-dprime-ff", "show_lines": 3,
+  "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+           "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "ARC_HOTMAP sha=", "PRIORITY_DPRIME installed",
+           "#OURS_FORM ok version=d_prime", "#OURS_FRESH replaced=", "PRIORITY_DPRIME summary", "LEVEL_MEMORY installed",
+           "priority gate active: 14 concurrent streams", "harness patch applied successfully",
+           "DPRIME_FRESH_FIRST installed", "DEADLINE at", "READY after", "analyzer failed"]}]}
