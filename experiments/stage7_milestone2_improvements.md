@@ -324,6 +324,16 @@ turns. Outcome by the registered rule: **KILL (hard-15 14 not above B's 15)**, a
 The expected token cut did not appear (-7% not -25%), consistent with the 25-min short regime and one-run SE ~2.5; this
 is not evidence against medium at full length (exp-082 pending), but no slots. Watch games: vc33 3, tn36 2, tr87 0.
 
+### 6.5 exp-082 result (2026-10-10): the reasoning-effort line is closed
+
+JustAdev742's exp-082 (reasoning effort medium on every request, full length, our serving stack: D' + REAP-448 + 14
+streams + acceptance 0.5, 25 games x 121 min; their `docs/research_log.md` 2026-10-10 04:05 UTC, lesson 0040):
+**hard-15 29 levels** against 39-58 in their other runs, **easy-10 55** against 56-66, **84 levels in total, the
+worst of their 9 runs**. Read second-hand; n=1. Section 6.3's external kill rule (exp-082 hard-15 <= 50) fires, on
+top of our own check-run KILL (6.4). **The reasoning-effort line is closed**, including a stuck-level-only variant
+(xhigh until a level has used T generated tokens, then medium; proposed 2026-10-10, not built for this reason): the
+full-length test shows medium hurting the hard games most, which is where that variant would apply it.
+
 ## 7. Artificial Agency Lab route (2026-10-10) [READ (second-hand) + SIM; nothing built]
 
 Question: Artificial Agency Lab (team `artificialagencylab.com`, Kaggle `richardcsaky` + `cmechevalier`; LB 38.62,

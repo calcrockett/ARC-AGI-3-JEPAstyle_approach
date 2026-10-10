@@ -808,6 +808,11 @@ before its first GPU run spends our quota on their debugging.
   quality. Worth doing before 11-02 only via one of these two paths; if their replica check is NO-GO or their gain
   is < +4%, drop it (expected value ~+0.5-1 point does not justify a from-scratch build).
 
+**Update 2026-10-10: their drafter exists but is not adoptable.** JustAdev742's fine-tuned MTP draft raised held-out
+accept length 2.755 -> 2.995, but full-batch output tok/s rose only **+0.4-3.5%** (exp-083/084). It is unpublished
+(private kernel output `scottmahony/arc3-mtp-session-a`, no licence) and paired to REAP-448 + the ARC hot map (arms
+A/B only). Not adoptable unless published under a usable licence, and the expected gain is small.
+
 ## REAP image-turn shift (feasibility, 2026-10-09; desk study, nothing built or run)
 
 Question: arms A/B serve REAP-448 (JustAdev742's kept list, `kaggle_submission_milestone2_fork/turbo/`), whose
