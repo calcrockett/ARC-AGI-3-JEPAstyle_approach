@@ -323,3 +323,114 @@ Mechanism was real, not a no-op: all three markers, template sha `c3cf9e34...`, 
 turns. Outcome by the registered rule: **KILL (hard-15 14 not above B's 15)**, and advance is far out of reach (34 < 42).
 The expected token cut did not appear (-7% not -25%), consistent with the 25-min short regime and one-run SE ~2.5; this
 is not evidence against medium at full length (exp-082 pending), but no slots. Watch games: vc33 3, tn36 2, tr87 0.
+
+## 7. Artificial Agency Lab route (2026-10-10) [READ (second-hand) + SIM; nothing built]
+
+Question: Artificial Agency Lab (team `artificialagencylab.com`, Kaggle `richardcsaky` + `cmechevalier`; LB 38.62,
+Oct 7 22:01; rank 9 on Oct 9) reached ~38.6 with a documented serving-heavy route. What did their scored setup do, and
+what of it ports to arm B (`arc3-m2-turbo-lossless-tail`)?
+
+### 7.1 Sources and what could be read
+
+- **Primary artifacts were not readable from here.** The cloud box's egress proxy rejects kaggle.com (CONNECT 403;
+  WebFetch: DNS failure), artificialagencylab.com is rejected too, no public GitHub repo was found (github.com/richardcsaky
+  404; web search finds nothing), and kaggle-ops `pull_kernel` was not used (request.json left untouched).
+- **Every configuration claim below is second-hand**, from JustAdev742 `docs/research/beat-tufa/intel-oct8.md` §1.3
+  (marked there "verified: I read the configs; I did not run anything"), which read `configs/comparison.json` of the
+  public dataset `richardcsaky/arc-arena-hero-v2-blocks2-p50-int3-runtime` (variant "hero-v2", dated 29 Sep), plus the
+  sibling datasets `arc-expert-gptq-arc-v1` (64 GB) and `arc-expert-int3-g16-v1` (49 GB). Licence field: "other".
+- **Mapping to a score is inference.** The config predates their climb 20.17 (10-02) -> 28.12 (10-03) -> 37.94 (10-04)
+  -> 38.62 (10-07) (intel-oct8 §1.1, monitor history); no submission id is tied to it, and the team's 48 submissions
+  could have used later variants. Earlier public kernels exist and were not read: `richardcsaky/arc-agi-3-milestone-2-submission`
+  (v20) and `cmechevalier/face-of-agi-arc-agi-3-rtx6000`, the team then at 20.00 (ppx16 ledger leaderboard CSVs 09-29..10-01).
+- intel-oct8 is internally inconsistent on the model: §1.3 lists int3 g16 routed experts "re-rounded from GPTQ-ARC",
+  §2.3 says they "serve the base NVFP4 model" (Swift profile kept, unused). Likely an NVFP4 base with the int3 expert
+  overlay; unresolved.
+
+### 7.2 Their configuration vs arm B
+
+| item | Artificial Agency Lab (hero-v2; evidence: doc claim of read config) | arm B (read in our notebook/builder) | portable? |
+|---|---|---|---|
+| serving | custom "arena" runtime (vLLM-style, `max_num_seqs` 80), 257 MB | Pennyroyal SGLang fork | no (whole-stack swap; our vLLM attempt vllm-s14 was killed by its prefix-cache probe) |
+| streams / window | **76 games at 98,304 tokens** | 14 at `CTX` 136K, analyzer window 128K, drain 58K (contexts ~58-118K; KV peak 0.92 of 1.48M) | width only via the host tier (below) |
+| KV dtype | **int4** | fp8_e4m3 | **no**: our QSA backend has no FP4/int4 read path (CLAUDE.md, 2026-10-09 source audit) |
+| experts | **50% pruned** (`prune50-layer`) + **int3 g16 GPTQ calibrated on ARC traffic** | W4A16 AutoRound, REAP-448 (12.5% pruned) | no: our 448 list is a router-row match to a third-party pruned checkpoint (`turbo/reap448_kept_experts.meta.json`), there is no ranking for 256/384; their overlay is "other"-licensed (rules need a permissive licence) |
+| MTP | **off** (sensible when compute-bound at 76 wide) | 3-step MTP, accept median 2.66 (the source of B's speed) | no reason to |
+| other memory | PLE + input embedding in host memory (UVA); int8 dense kernels (lm_head, GDN in-proj, QSA qkv/out) | none | no (kernel work in their runtime) |
+| admission | "exact KV gate", never preempts | bounded admission, 2 retractions per check run | already equivalent |
+| schedule | two wall-clock blocks of 15,250 s: 76 games then 34 | priority gate, fresh-first, slots change hands at trims/wins, tail fade | no (the gate is the stronger form) |
+| **retire rule** | a game with no level cleared retires at **90,000 completion tokens**; allowance **90,000 x (levels cleared + 1)** | none (`max_generated_tokens_per_game` exists upstream, unset); the gate's C factor rations stuck games instead | **yes**, runtime patch (7.3) |
+| harness | Duck port ("duck-transfer"), reasoning kept verbatim, one model-written summary at the context cap, nine fixes, `run_plan` helper | milestone-2 harness + level memory + tail | no (different harness; upstream has unused `ARC3_SUMMARY_*` knobs, unmeasured) |
+| unscored code | Gittins / hazard-index / Thompson schedulers, adaptive thinking, trained draft head, Holo4-27B probe (2.10M KV) | -- | nothing scored to port |
+
+Two readings of the allowance cannot be told apart second-hand: (a) cumulative game tokens >= 90K x (L+1), with L =
+levels cleared; (b) tokens on the current level >= 90K x (L+1). Both coincide at L = 0. With ~190K generated tokens
+per game for B in the rerun (657 tok/s x 532 min / 110), (a) binds in practice only at L = 0 and L = 1.
+
+### 7.3 Is the retire rule worth porting? Two models disagree
+
+Mechanism on our stack: override `_HarnessGameSession.token_limit_reached` (upstream already calls it from `should_stop`
+at every loop boundary, reading `_analyzer_reported_tokens(self.analyzer) - self.game_token_baseline`) with a
+level-scaled limit from `self.game.current_state.levels_completed`; `play()`'s `finally` releases the gate slot. About 15
+lines in an install cell, the `--prio-tail` pattern; no serving or prompt change.
+
+**Our replay** (scratch extension of `scripts/sim_m2_priority_gate.py`, not committed: base = the shipped tail gate,
+14 slots x 47 tok/s = B's 657; a game that hits its limit leaves every queue for good; 120 draws per world). RHAE
+change vs B's gate, LB points:
+
+| rule | 8 hidden-like worlds (26-31) | `unsolv.20` world | public-like (59) |
+|---|---|---|---|
+| (a) cumulative 90K x (L+1) | **+0.25..+0.79** (+0.9..+3.0%) | **-0.41** | +0.12 |
+| (b) per-level 90K x (L+1) | +0.13..+0.57 | -0.12 | +0.25 |
+| L = 0 only, 90K | +0.10..+0.48 | -0.09 | +0.16 |
+| (a) at 60K / 75K / 110K / 120K | 60K -3.2..+2.4 (unstable); 75K up to +2.3 but -1.3 in unsolv.20; 110K +0.04..+0.28; 120K <= +0.14 | | |
+| flat 300K per game (upstream knob) | -0.2..-0.9 | -1.5 | -2.1 |
+
+At arm A's 772 tok/s, (a) is +0.84..+1.54 in 6 worlds and -1.07 in unsolv.20 (60 draws). The gain sits on a cliff in
+the threshold relative to the assumed per-level cost (median 22K x 2-2.5 here), and it turns negative where compute is
+not the constraint (unsolv.20: cheap levels, so retired games forfeit tokens nobody needs).
+
+**JustAdev742's hazard-calibrated replay says the opposite for time-based give-ups** (`docs/research/beat-tufa/time-allocation.md`
+§3-4, fitted on three full-length D′ runs, 14 slots): measured P(solved) 0.85 by 30 active minutes, hazard still
+0.027/min at 30-45 min; "give up after X active minutes on a level" is -6.9 [-13.5, -1.7] at 30 min, -1.7 at 40, never
+positive at <= 40 min in any of 11 variants (harder worlds included), ~0 at 50-60 min. `hopeless-signal.md`: level 1
+is hopeless (> 60 active min) only 2.3% of the time. 90K tokens is ~32 active minutes at B's 47 tok/s per slot. Their
+rule ends every level, AAL's binds mainly on levels 1-2, so neither model tests AAL's rule exactly; ours is calibrated to
+the LB level, theirs to measured hazards, and theirs is the better evidence on the question that decides the sign
+(how often a level unsolved at ~30 active minutes is still solved).
+
+Why AAL needed it and we may not: at 76 wide with a two-block wall-clock schedule and no priority gate, a token cap is
+their only rationing of stuck games. Our gate already rations them (C halves after ~62K tokens on a level; per
+time-allocation §4.3, a D′ game stuck 50 active minutes gets only ~19K more tokens).
+
+Not measurable either way: a 25-game x 25-min check run generates ~40K tokens per game (657 tok/s x ~25 min / 25), so a
+90K limit never fires, and JustAdev742 §4.5 shows public-25 replays flip the sign of give-up rules. A hidden draw (sd
+2.2-3.9) cannot resolve +-0.5.
+
+### 7.4 Recommendation
+
+**Nothing in AAL's width/compression stack ports**: int4 KV (no QSA read path), 50% pruning (no expert ranking; needs a
+GPU calibration pass, JustAdev742's plan item 3), the int3 GPTQ-ARC overlay and the runtime (licence "other", custom
+kernels), MTP-off (only pays at their width). The only lever on our stack that buys AAL-style width is the host KV tier.
+
+1. **Build: `arc3-m2-turbo-lossless-tail-hic16`** (`python scripts/_build_m2_level_memory_kernel.py --turbo-lossless
+   --prio-tail --hicache-gb --streams 16`): arm B + 32 GB system-RAM KV tier + 16 streams (Mamba 96). Mechanism and
+   evidence: on arm A the same change measured 831.6 vs 772.4 gen tok/s (+7.7%), KV peak 0.99, MemAvailable min 29.9 GiB,
+   2 retractions, tokens/request -2.4%; B is now the preferred arm (JustAdev742's hidden draw 27.97). Expected: ~+7-8%
+   generated tokens, all else unchanged; the score effect is not measurable by draws, so adoption rides on throughput
+   (CLAUDE.md rule: same mechanism, better measured throughput may take an arm's slots).
+   - Pass: gen tok/s >= **710** (+8% over B's 657.4); `HICACHE_TIER attached hicache_attached=True` (post-run);
+     `STREAMS max_running_requests=16`; MemAvailable >= 10 GiB in every `[sys] RAM` line; no `Not enough host memory`;
+     retractions <= 4; tokens/request 1421-1737 (B 1579 +-10%); 0 repeated assistant turns; 0 tracebacks; 25/25
+     gave_up; histcache / timeout_fix / level_memory counters clean.
+   - Kill: gen tok/s < 657.4, `hicache_attached` missing, a host-memory error, or catastrophe (total levels <= 29 or
+     hard-15 <= 9; B 36 / 15).
+   - 657.4-710: near-pass, rerun once before any adoption (as hic16 on A).
+2. **Optional, no slots: B + retire at L = 0** (`RETIRE0 installed R=90000`; the least aggressive reading, ~+0.1..+0.5
+   in our replay, likely <= 0 by JustAdev742's hazards). Build only if a hazard-calibrated rerun model with an "L = 0
+   only, 90K cumulative" row shows a positive point estimate. Check run is mechanism-only, with R scaled to the check
+   run's budget (R_check = 20K) so it fires: marker present, `retire_summary.json` errors 0 and retired >= 1, every
+   retired game ends `gave_up` with 0 levels and its slot is re-admitted, 0 tracebacks, gen tok/s within -5% of 657.4,
+   tokens/request within +-10% of 1579; the check run says nothing about the score.
+
+Do not bundle the retire rule into arms A/B: its sign is unknown and it would contaminate the arm comparison.
