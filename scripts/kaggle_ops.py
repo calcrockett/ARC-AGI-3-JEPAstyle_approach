@@ -9,7 +9,7 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "status", "kernels": [...optional extra owner/slug]}
   {"op": "push_kernel", "dir": "kaggle_submission_.../notebook"}
   {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true,
-   "show_lines": N}   (grep only reports present/absent; show_lines prints up to N matching lines per marker)
+   "show_lines": N}   (grep only reports present/absent; show_lines prints up to N matching lines per marker from all *.log)
   {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
    "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
   {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
@@ -763,14 +763,14 @@ def mem_problems(text: str) -> dict:
 
 
 def show_matches(out: Path, markers: list[str], limit: int) -> None:
-    """Print up to `limit` lines per marker from the notebook log (opt-in via the op's show_lines)."""
-    nb = ksr.notebook_log(out)
-    lines = [ln for ln, _ in _log_lines(nb)] if nb else []
+    """Print up to `limit` lines per marker from every top-level *.log (opt-in via the op's show_lines;
+    the same files mem_problems counts, so its counts and these lines agree)."""
+    lines = [(p.name, ln) for p in sorted(out.glob("*.log")) for ln, _ in _log_lines(p)]
     for m in markers:
-        hits = [ln for ln in lines if m in ln]
+        hits = [(n, ln) for n, ln in lines if m in ln]
         print(f"  --- lines matching {m!r}: {len(hits)}")
-        for ln in hits[:limit]:
-            print("    " + ln[:300])
+        for n, ln in hits[:limit]:
+            print(f"    [{n}] " + ln[:300])
 
 
 def digest(out: Path, markers: list[str]) -> dict:
