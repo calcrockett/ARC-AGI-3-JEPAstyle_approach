@@ -63,7 +63,7 @@ BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
 GPU_LIMIT = 2
 # Only the milestone-2 family can hold a GPU session; the old graph-explorer / hypothesis / serving
 # benchmark kernels are skipped (their status calls only fed Kaggle's rate limiter, run 37994686371).
-GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2")
+GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2", "arc3-jad-")
 STATUS_SPACING_S = 0.5
 LIST_SORTS = ("hotness", "commentCount", "dateCreated", "dateRun", "relevance", "scoreAscending",
               "scoreDescending", "viewCount", "voteCount")
