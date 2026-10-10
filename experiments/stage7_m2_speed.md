@@ -1001,7 +1001,7 @@ os.environ['ARC3_HTTP_RETRY_INITIAL_SECONDS'] = '2400'   # proposed: covers read
 ```
 
 Keep `SERVER_STARTUP_TIMEOUT = 12 * 60` (the release anchors the 532-min game clock; delaying it would push the end
-toward the 9-h cap) and keep the budget as is (see 2). Optional, diagnostic only: print the boot time post-run
-(`grep -n "READY after\|DEADLINE at" ` already in the notebook log; add the first `/health` 200 time from a background
-poll after the release) and grep `DEADLINE at` and `analyzer failed` in every check run's `kernel_output`. Apply the
+toward the 9-h cap) and keep the budget as is (see 2). Optional, diagnostic only: the notebook log already says `READY after Ns` or `DEADLINE at Ns`;
+add `DEADLINE at`, `READY after`, `first analyzer request failed` and `analyzer failed` to every check run's
+`kernel_output` grep, and (later rebuild) a background `/health` poll that logs the real ready time after a DEADLINE. Apply the
 grace at the next rebuild of any candidate (it needs a new kernel version and check run, like any change).
