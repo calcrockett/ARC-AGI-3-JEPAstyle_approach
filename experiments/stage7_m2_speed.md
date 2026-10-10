@@ -885,3 +885,45 @@ No evidence either way, and no evidence of harm:
   (~2 agent-h), probe base/old/new (~1.3 GPU-h) and one check run; or (b) after >= 3 hidden draws, arm B (lossless
   REAP) sits > 1 sd (2.2) below the incumbent while its throughput guards pass -- REAP quality then becomes the leading
   suspect and the swap list is the targeted fix; or (c) GPU quota is idle late in a week with nothing else queued.
+
+## Per-game check-run levels (2026-10-10)
+
+Read with the `per_game` digest in `scripts/kaggle_ops.py` `kernel_output` (request `pergame-1`, workflow run 38024038318; source: `benchmark.json` `game_runs`, `levels_completed` / `final_score`). Check runs of 2026-10-09, 25 public games x 25 min, v1 of each kernel. Hard-15 / easy-10 split from JustAdev742 `docs/research/beat-tufa/intel-oct10.md` section 2.3 (hard 15: bp35 cd82 cn04 dc22 g50t ka59 lf52 ls20 m0r0 s5i5 sk48 sp80 su15 tn36 wa30; easy 10: ar25 ft09 lp85 r11l re86 sb26 sc25 tr87 tu93 vc33). Totals match the earlier digests (B 36, A 31). One run per kernel; the SE of one public-25 run is about 2.5 points, so single-game differences are noise-level.
+
+| kernel | total levels | hard-15 levels | easy-10 levels | hard-15 score sum | easy-10 score sum | vc33 | tn36 | tr87 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| B (turbo-lossless-tail) | 36 | 15 | 21 | 72.5 | 131.8 | 3 | 1 | 0 |
+| A (turbo-tail) | 31 | 10 | 21 | 34.9 | 130.5 | 2 | 0 | 0 |
+| hic16 (turbo-tail-hic16) | 43 | 16 | 27 | 104.6 | 216.1 | 3 | 0 | 0 |
+
+Levels per game:
+
+| game | set | B | A | hic16 |
+|---|---|---:|---:|---:|
+| ar25 | easy | 2 | 2 | 2 |
+| bp35 | hard | 1 | 0 | 0 |
+| cd82 | hard | 0 | 0 | 0 |
+| cn04 | hard | 3 | 1 | 2 |
+| dc22 | hard | 1 | 0 | 3 |
+| ft09 | easy | 2 | 1 | 2 |
+| g50t | hard | 0 | 0 | 0 |
+| ka59 | hard | 1 | 1 | 2 |
+| lf52 | hard | 1 | 1 | 1 |
+| lp85 | easy | 4 | 5 | 6 |
+| ls20 | hard | 0 | 1 | 0 |
+| m0r0 | hard | 2 | 1 | 2 |
+| r11l | easy | 2 | 2 | 2 |
+| re86 | easy | 1 | 2 | 2 |
+| s5i5 | hard | 1 | 1 | 1 |
+| sb26 | easy | 1 | 1 | 7 |
+| sc25 | easy | 3 | 3 | 0 |
+| sk48 | hard | 1 | 0 | 0 |
+| sp80 | hard | 1 | 1 | 3 |
+| su15 | hard | 1 | 2 | 1 |
+| tn36 | hard | 1 | 0 | 0 |
+| tr87 | easy | 0 | 0 | 0 |
+| tu93 | easy | 3 | 3 | 3 |
+| vc33 | easy | 3 | 2 | 3 |
+| wa30 | hard | 1 | 1 | 1 |
+
+B's hard-15 (15) / easy-10 (21) are the control for the reasoning-effort check run (`stage7_milestone2_improvements.md` section 6.3): advance needs total >= 42 and hard-15 >= 21; kill if hard-15 is not above 15.
