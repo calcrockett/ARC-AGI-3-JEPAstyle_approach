@@ -773,6 +773,57 @@ def show_matches(out: Path, markers: list[str], limit: int) -> None:
             print(f"    [{n}] " + ln[:300])
 
 
+HARD_15 = ("bp35", "cd82", "cn04", "dc22", "g50t", "ka59", "lf52", "ls20", "m0r0", "s5i5", "sk48", "sp80",
+           "su15", "tn36", "wa30")
+EASY_10 = ("ar25", "ft09", "lp85", "r11l", "re86", "sb26", "sc25", "tr87", "tu93", "vc33")
+# Split from JustAdev742 docs/research/beat-tufa/intel-oct10.md section 2.3 (hard 15 / easy 10 of the public 25).
+WATCH_GAMES = ("vc33", "tn36", "tr87")
+SUMMARY_GAME_RE = re.compile(r"^\W*([a-z][a-z0-9]{3})\b.*?levels=([\d.]+)/")
+SUMMARY_SCORE_RE = re.compile(r"score[=:\s]+([\d.]+)")
+
+
+def per_game_rows(out: Path) -> list[dict]:
+    """Per-game {game, levels, score} from benchmark.json game_runs (levels_completed, final_score);
+    falls back to 'levels=X/Y' lines in summary.txt. Empty when neither exists."""
+    bench = out / "benchmark.json"
+    rows: list[dict] = []
+    if bench.exists():
+        try:
+            runs = json.loads(bench.read_text(encoding="utf-8")).get("game_runs", [])
+            for r in runs:
+                gid = r.get("game_id")
+                if not gid:
+                    continue
+                rows.append({"game": str(gid).split("-")[0], "levels": int(r.get("levels_completed") or 0),
+                             "score": round(float(r.get("final_score") or 0.0), 2)})
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            rows = []
+    if not rows and (out / "summary.txt").exists():
+        for ln in (out / "summary.txt").read_text(encoding="utf-8", errors="replace").splitlines():
+            m = SUMMARY_GAME_RE.search(ln)
+            if m:
+                sc = SUMMARY_SCORE_RE.search(ln)
+                rows.append({"game": m.group(1), "levels": int(float(m.group(2))),
+                             "score": round(float(sc.group(1)), 2) if sc else None})
+    return sorted(rows, key=lambda r: r["game"])
+
+
+def per_game_digest(out: Path) -> dict | None:
+    rows = per_game_rows(out)
+    if not rows:
+        return None
+    by = {r["game"]: r for r in rows}
+
+    def sub(names):
+        have = [by[g] for g in names if g in by]
+        return {"games": len(have), "missing": [g for g in names if g not in by],
+                "levels": sum(r["levels"] for r in have),
+                "score": round(sum(r["score"] or 0.0 for r in have), 2)}
+    return {"table": rows, "total_levels": sum(r["levels"] for r in rows),
+            "hard_15": sub(HARD_15), "easy_10": sub(EASY_10),
+            "watch": {g: by[g]["levels"] if g in by else None for g in WATCH_GAMES}}
+
+
 def digest(out: Path, markers: list[str]) -> dict:
     """Concise summary of a downloaded kernel output directory."""
     d: dict = {"files": len([p for p in out.rglob("*") if p.is_file()])}
@@ -790,6 +841,7 @@ def digest(out: Path, markers: list[str]) -> dict:
             d["game_states"] = dict(Counter(str(r.get("state")) for r in runs))
         except (json.JSONDecodeError, AttributeError):
             d["game_states"] = "unreadable"
+    d["per_game"] = per_game_digest(out)
     d["counters"] = {}
     for f in sorted(out.glob("*_summary.json")):
         try:
@@ -826,6 +878,15 @@ def digest(out: Path, markers: list[str]) -> dict:
         print("  sys_ram: no '[sys] RAM' census lines")
     print(f"  mem problems: {d['mem_problems']}")
     print(f"  game states: {d.get('game_states')}")
+    pg = d["per_game"]
+    if pg:
+        print("  per_game (game levels score):")
+        for r in pg["table"]:
+            print(f"    {r['game']:<6} {r['levels']:>3} {r['score'] if r['score'] is not None else '-':>8}")
+        print(f"  per_game total levels {pg['total_levels']}; hard_15 {pg['hard_15']}; easy_10 {pg['easy_10']}; "
+              f"watch {pg['watch']}")
+    else:
+        print("  per_game: no benchmark.json game_runs or summary.txt levels lines")
     for name, c in d["counters"].items():
         print(f"  {name}: {json.dumps(c)[:800]}")
     if "speed" in d:

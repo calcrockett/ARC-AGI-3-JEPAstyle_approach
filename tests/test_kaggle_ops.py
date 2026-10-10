@@ -736,3 +736,57 @@ def test_kernel_output_digest_includes_sys_ram(tmp_path, capsys):
     assert r["mem_problems"]["not_enough_host_memory"] == 1
     out = capsys.readouterr().out
     assert "sys_ram: 3 census lines" in out and "mem problems" in out
+
+
+def _game_runs(levels: dict[str, int]):
+    return {"game_runs": [{"game_id": f"{g}-0abc1234", "levels_completed": n, "final_score": n * 1.5,
+                           "state": "gave_up"} for g, n in levels.items()]}
+
+
+def test_split_is_hard15_easy10_disjoint():
+    assert len(ko.HARD_15) == 15 and len(ko.EASY_10) == 10
+    assert not set(ko.HARD_15) & set(ko.EASY_10)
+
+
+def test_per_game_digest_from_benchmark(tmp_path):
+    lv = {g: 1 for g in ko.HARD_15}
+    lv.update({g: 2 for g in ko.EASY_10})
+    lv["tn36"] = 6
+    lv["vc33"] = 0
+    (tmp_path / "benchmark.json").write_text(json.dumps(_game_runs(lv)))
+    pg = ko.per_game_digest(tmp_path)
+    assert pg["hard_15"] == {"games": 15, "missing": [], "levels": 20, "score": 30.0}
+    assert pg["easy_10"]["levels"] == 18 and pg["easy_10"]["games"] == 10
+    assert pg["total_levels"] == 38
+    assert pg["watch"] == {"vc33": 0, "tn36": 6, "tr87": 2}
+    assert pg["table"][0]["game"] == "ar25" and {"game", "levels", "score"} == set(pg["table"][0])
+
+
+def test_per_game_missing_games_reported(tmp_path):
+    (tmp_path / "benchmark.json").write_text(json.dumps(_game_runs({"ka59": 3, "zz99": 1})))
+    pg = ko.per_game_digest(tmp_path)
+    assert pg["hard_15"]["levels"] == 3 and len(pg["hard_15"]["missing"]) == 14
+    assert pg["watch"]["vc33"] is None and pg["total_levels"] == 4
+
+
+def test_per_game_fallback_to_summary_txt(tmp_path):
+    (tmp_path / "summary.txt").write_text("generated tokens/sec: 1\nka59-xyz levels=3/9 score=4.5\n"
+                                          "tr87-xyz levels=1/6 score: 2.0\n")
+    pg = ko.per_game_digest(tmp_path)
+    assert [r["game"] for r in pg["table"]] == ["ka59", "tr87"]
+    assert pg["hard_15"]["levels"] == 3 and pg["watch"]["tr87"] == 1
+
+
+def test_per_game_none_without_data_or_bad_json(tmp_path):
+    assert ko.per_game_digest(tmp_path) is None
+    (tmp_path / "benchmark.json").write_text("{not json")
+    assert ko.per_game_digest(tmp_path) is None
+
+
+def test_digest_prints_and_returns_per_game(tmp_path, capsys):
+    write_output(tmp_path)
+    (tmp_path / "benchmark.json").write_text(json.dumps(_game_runs({"ka59": 5, "vc33": 2})))
+    d = ko.digest(tmp_path, MARKERS)
+    assert d["per_game"]["hard_15"]["levels"] == 5 and d["per_game"]["easy_10"]["levels"] == 2
+    out = capsys.readouterr().out
+    assert "per_game" in out and "ka59" in out and "watch" in out
