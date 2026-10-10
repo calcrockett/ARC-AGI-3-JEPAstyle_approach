@@ -325,6 +325,19 @@ model's (`https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound/resolv
 - If both pass: the gated submitter takes `--marker "VLLM_SERVING active"` in addition to the usual three. Even then,
   ranking needs hidden-set draws (n >= 3, interleaved with the incumbent), because the weights changed.
 
+**Result, vllm-s14 check run (2026-10-10, kaggle-ops `vllm-trem-read-1`, run 38027035237): KILL on one item.**
+`PREFIX_CACHE_PROBE identical=False prompt_tokens=8010 cached_tokens=[0, 7808, 7808] under_load=False`: the cache hits
+(7808 of 8010 tokens) but cold and warm outputs differ in wording at temperature 0 (the 4 probe lines show two
+differently worded completions), so the registered kill applies; whether this is benign batch/kernel nondeterminism or
+Mamba/GDN prefix-cache corruption is not decidable from one probe. Everything else passes: overlay hash OK, setup done,
+ready_after 668 s, 0 watchdog restarts, 0 preemptions, 0 tracebacks (2 advisory OOM lines), 25/25 gave_up,
+IMAGE_TOKENS 402, MULTI_IMAGE ok (2412 tokens), REASONING_ECHO rendered (`reasoning` key), TEMPLATE_PROBE chat template
+sha `c3cf9e34...` (as SGLang) but tokenizer sha `0997f410...` does not match the m2 pin. Speed: **812.8 gen tok/s**
+(+40.7% vs base 577.8, **+5.2% vs turbo-tail 772.4**, so a thin gain over what SGLang already gives), prefix hit 92.7%,
+KV pool 1,415,595 peak 0.986, 1494 completion tok/request, 12-14 running. level_memory errors 0. Public-25: **42 levels,
+mean_score 10.62, hard-15 16, easy-10 26**. Not scheduled for slots; to revive, re-probe prefix cache determinism
+(e.g. repeat the cold request twice with caching off) before spending anything.
+
 ## Turbo kernel: JustAdev742's measured serving config on our stack (2026-10-09, built, not yet run)
 
 Kernel **`calamitychasm/arc3-m2-turbo`** (`kaggle_submission_m2_turbo/notebook/`), built by

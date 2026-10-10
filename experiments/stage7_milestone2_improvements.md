@@ -223,7 +223,7 @@ Kill: any of `errors` > 0, `audits_confirmed` == 0 with a level past 56K tokens,
 a level-memory or histcache regression, or any guard above tripping. Kill date for a slot decision: the audit only
 competes for slots after arm B (`arc3-m2-turbo-lossless-tail`) has n >= 3; until then it is check-run only.
 
-## 6. Static reasoning effort "medium" [READ + BUILT, 2026-10-10; never run]
+## 6. Static reasoning effort "medium" [READ + BUILT, 2026-10-10; check run done, KILL]
 
 **Variant built: `--reasoning-effort medium` (token `re-medium`)** on `--turbo-lossless --prio-tail` (arm B) ->
 `calamitychasm/arc3-m2-turbo-lossless-tail-re-medium` (`kaggle_submission_m2_turbo_lossless_tail_re_medium/`).
@@ -306,3 +306,20 @@ julian's effect, not at "any gain"):
 Slots: not in the 10-10..10-17 explore schedule (A/B only). If it advances and exp-082 is not a drop, it competes in
 the exploit phase as a third arm against B (it is B plus one change), alternating with B until n >= 3; the drop rule
 of the schedule (mean more than 2.2 below the incumbent after 4 draws) applies.
+
+### 6.4 Check-run result (2026-10-10, kaggle-ops `vllm-trem-read-1`, run 38027035237): KILL
+
+| | arm B (control) | re-medium |
+|---|---|---|
+| gen tok/s | 657.4 | **624.49** (bar 624.5: missed by 0.01) |
+| completion tokens/request | 1579 | **1469** (-7%; bar <= 1500; expected -25%) |
+| p90 completion / share >= 6k | not recorded | 3500 / 0.112 |
+| total levels | 36 | **34** (advance >= 42; kill <= 33) |
+| hard-15 / easy-10 levels | 15 / 21 | **14 / 20** |
+| mean_score | 8.17 | **7.23** (kill < 5.7) |
+
+Mechanism was real, not a no-op: all three markers, template sha `c3cf9e34...`, server prompt delta 38 tokens,
+`set`==`calls`==2356, `errors` 0, every logged request `medium`, 0 tracebacks, 25/25 gave_up, 2 retractions, 0 repeated
+turns. Outcome by the registered rule: **KILL (hard-15 14 not above B's 15)**, and advance is far out of reach (34 < 42).
+The expected token cut did not appear (-7% not -25%), consistent with the 25-min short regime and one-run SE ~2.5; this
+is not evidence against medium at full length (exp-082 pending), but no slots. Watch games: vc33 3, tn36 2, tr87 0.
