@@ -1,1 +1,4 @@
-{"id": "jadd-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_draft/notebook"}]}
+{"id": "scout-1012-a", "ops": [
+ {"op": "list_kernels", "sort_by": "dateCreated", "page_size": 50, "pages": 2},
+ {"op": "list_kernels", "sort_by": "voteCount", "page_size": 50, "pages": 2}
+]}
