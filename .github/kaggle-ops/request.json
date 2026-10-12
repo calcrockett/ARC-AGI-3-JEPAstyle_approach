@@ -1,1 +1,7 @@
-{"id": "rules-1012", "ops": [{"op": "competition_pages"}]}
+{"id": "rules-1012b", "ops": [
+  {"op": "competition_pages", "page": "Evaluation", "grep": ["."], "context": 0, "max_lines": 60},
+  {"op": "competition_pages", "page": "data-description", "grep": ["."], "context": 0, "max_lines": 120},
+  {"op": "competition_pages", "page": "Code Requirements", "grep": ["."], "context": 0, "max_lines": 40},
+  {"op": "competition_pages", "page": "Description", "grep": ["."], "context": 0, "max_lines": 40},
+  {"op": "competition_pages", "page": "rules", "grep": ["average", "\\bmean\\b", "highest", "lowest", "both", "two \\(2\\)", "once", "same (run|execution)", "re-?run", "leaderboard", "scored"], "context": 1, "max_lines": 80}
+]}
