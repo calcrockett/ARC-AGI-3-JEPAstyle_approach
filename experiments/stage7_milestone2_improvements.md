@@ -1451,3 +1451,294 @@ A pass makes C+U eligible; it does not earn slots by itself.
   counted as a line shown.
 - **Score effects are not separable by draws** (§11.4). Adoption rides on the mechanism counts, the key levels and
   the no-harm lines.
+
+## 13. Arm C's token split between cleared and final levels, and per-level levers [MEASURED + SIM, 2026-10-12; nothing built]
+
+Brief: arm C v2's transcripts (§11.7) showed that the largest visible loss is model-building on the last level a game
+reaches, which then ends unsolved. How are tokens split between cleared levels and that final level, and is there a
+harness-side lever (no model change) that would turn more of that budget into levels? The candidates were:
+- a per-level token cap followed by a fresh-context restart of the level;
+- earlier D′ demotion of a game stuck on one level;
+- a forced "abandon this hypothesis, re-probe" prompt after N tokens without progress;
+- anything else the data suggests.
+
+**Short answer: close the line.**
+- About a third of arm C's tokens (32.1%) go to the final, uncleared levels.
+- Nothing separates those levels from the expensive levels that do get cleared. Eleven cleared levels cost more than
+  the p90 (83k tokens), and those games went on to clear 7 more levels after them.
+- In the rerun-shaped model, every cap, park and earlier-demotion variant loses or ties against D′. That includes a cap
+  at the p90 with a fresh restart, unless one assumes that a restart is a free re-roll. Lesson 0037 measured the
+  opposite for a real mid-level reset.
+- This agrees with JustAdev742's two studies, which reached the same conclusion on eight runs and a separate simulator.
+
+### 13.0 Data
+
+- **Source.** kaggle-ops request `jad81-tx-alloc-1` (run 38193211301): `kernel_output` on `calamitychasm/arc3-jad-exp081`
+  v2 (status COMPLETE, version 2) with `transcripts {"games": "all", "first_turns": 0, "last_turns": 1, "turn_chars": 300}`.
+  All 25 `*_requests.jsonl` files were read: 2,952 responses and **5,871,402 completion tokens**. That matches the
+  request-log digest (2,952 × 1,989).
+  - A 26th file holds a single stray response and is ignored.
+- **Unit.** The unit is completion tokens per level. Prompt tokens are ~94% prefix-cached, and the run is decode-bound,
+  so completion tokens are the resource that D′ allocates.
+- **How a request is assigned to a level.** Each request goes to the last `Current state: step N, level L` marker in
+  its messages. A request that straddles a level-up can shift by one level, which is a small effect.
+- **No wall clock.** The records carry no time (§11.7), so everything here is in tokens.
+- **Converting tokens to time.** At 790 tok/s over 14 slots (56.4 per held slot), 100k tokens is about 30 active
+  slot-minutes.
+- **Level counts per game** were read from the public game sources (`sonpham-org_arc-3/docs/static/games/src`). They
+  match §11.1.
+- **Six games won every level**: ar25, cd82, cn04, lp85, sb26, tr87. Their last level counts as cleared.
+  - **Correction to §11.7:** cn04's level 6 was **cleared**, because the game was won (6/6, score 100). It was not a
+    level the game "ended" on.
+  - So 19 games ended on an uncleared level, and the run cleared 111 levels.
+- **One run.** v2 is one public-25 run at the full 25 × 121 min shape. Per-game outcomes swing by whole levels between
+  identical runs (§11.1).
+
+### 13.1 Split
+
+- **Final uncleared levels: 1,883,902 tokens = 32.1%** of the run, on 19 levels.
+- **Cleared levels: 67.9%**, on 111 levels.
+- JustAdev742 measured 36.4% in their three plain D′ runs (range 25.8-43.4%, `time-allocation.md` §3.4). Arm C sits
+  inside that range, so the bundle did not visibly change the split.
+
+| final level (L / N) | tokens | requests | `action()` calls | tokens per call |
+|---|---:|---:|---:|---:|
+| vc33 4/7 | 205,223 | 63 | 24 | 8.6k |
+| bp35 2/9 | 174,393 | 58 | 10 | 17.4k |
+| su15 4/9 | 168,521 | 45 | 14 | 12.0k |
+| tn36 2/7 | 163,135 | 58 | 29 | 5.6k |
+| r11l 5/6 | 159,523 | 67 | 21 | 7.6k |
+| ft09 5/6 | 133,758 | 55 | 13 | 10.3k |
+| sc25 5/6 | 128,312 | 46 | 29 | 4.4k |
+| ka59 3/7 | 121,693 | 57 | 32 | 3.8k |
+| wa30 2/9 | 119,639 | 37 | 25 | 4.8k |
+| dc22 5/6 | 103,741 | 84 | 34 | 3.1k |
+| ls20 5/7 | 87,624 | 73 | 23 | 3.8k |
+| m0r0 6/6 | 66,090 | 38 | 31 | 2.1k |
+| g50t 4/7 | 62,873 | 37 | 6 | 10.5k |
+| tu93 9/9 | 55,128 | 33 | 2 | 27.6k |
+| sp80 5/6 | 50,835 | 19 | 4 | 12.7k |
+| s5i5 6/8 | 35,946 | 17 | 8 | 4.5k |
+| sk48 4/8 | 21,593 | 13 | 1 | 21.6k |
+| lf52 5/10 | 15,782 | 9 | 2 | 7.9k |
+| re86 7/8 | 10,093 | 5 | 3 | 3.4k |
+
+- Most final levels are deep: 11 of the 19 sit at level 5 or later, and 8 are the last or second-to-last level of
+  their game.
+- Per game, total spend has a median of 251k tokens (range 74-365k).
+
+### 13.2 Tokens to clear a level (111 cleared levels)
+
+| level | n | median | p75 | p90 | max |
+|---|---:|---:|---:|---:|---:|
+| all | 111 | 26.4k | 45.1k | **83.3k** | 175.1k |
+| 1 | 25 | 21.2k | 35.6k | 56.8k | 152.1k |
+| 2 | 22 | 26.9k | 52.5k | 120.0k | 175.1k |
+| 3 | 21 | 30.0k | 46.8k | 69.0k | 156.1k |
+| 4-5 | 27 | 26.4k | 47.1k | 93.8k | 108.2k |
+| 6+ | 16 | 23.4k | 31.4k | 54.8k | 83.3k |
+| 2+ | 86 | 26.4k | 46.5k | 84.8k | 175.1k |
+
+- **Cost does not grow with depth.** The median is 21-30k at every level index, so the level index carries no cost
+  signal. JustAdev742 found the same for hopelessness (AUC 0.49 on level index alone).
+- **The JustAdev742 equivalent.** Their solved levels had a median of 21.8k and a p90 of 71.1k in the plain runs.
+  Arm C's levels cost slightly more. That is consistent with more deliberation per level under the bundle, but one run
+  cannot separate it from noise.
+
+### 13.3 Spend on final levels when the game ended, and what lies past the p90
+
+- **Final levels.** At the end of the run they had spent a median of 104k tokens (p25 53k, p75 147k, range 10-205k).
+  - **11 of 19 were past the cleared-level p90 (83k).** Their spend beyond 83k is 0.65M tokens, **11.1% of the run**.
+    That 11.1% is the most a p90 cap could take from final levels.
+  - The other 8 were levels started late that were still short: re86 L7 10k, lf52 L5 16k, sk48 L4 22k, s5i5 L6 36k,
+    sp80 L5 51k, tu93 L9 55k, g50t L4 63k, m0r0 L6 66k. A cap cannot touch them. They are the "started too late"
+    share of the loss.
+- **Past the p90 the solve rate falls but stays well above zero.** Solves per 100k tokens at risk (all 130 level
+  attempts, final levels censored):
+
+  | tokens on the level | 0-25k | 25-50k | 50-83k | 83-120k | 120-180k |
+  |---|---:|---:|---:|---:|---:|
+  | solves / exposure | 52 / 2.52M | 35 / 1.30M | 12 / 0.93M | 6 / 0.65M | 6 / 0.45M |
+  | per 100k | 2.1 | 2.7 | 1.3 | 0.9 | 1.3 |
+
+  - A level past 83k is solved at about half the rate of a fresh one. That is the same shape as JustAdev742's 0.027
+    against 0.08 per active minute.
+  - 12 of the 23 levels still open at 83k were solved later. Lesson 0039's arithmetic applies directly: a flag must be
+    right about two times in three.
+- **Expensive solved levels look like stuck ones.** These 11 cleared levels cost more than 83k:
+  - sp80 L2 175k, ka59 L2 169k, lf52 L3 156k, sk48 L1 152k, cn04 L2 126k, g50t L3 121k, dc22 L4 108k, lf52 L4 105k,
+    s5i5 L5 105k, sp80 L4 86k and bp35 L1 84k (plus re86 L6 at exactly the p90).
+  - The same games then cleared 7 more levels after them.
+  - **Deliberation per action does not separate them either.** Tokens per `action()` call have a median of 3.7k on
+    cleared levels and 7.6k on final levels. But the expensive cleared levels run at 3.0-8.0k per call, and the
+    expensive final levels at 3.1-17.4k.
+  - Only bp35 L2 (17.4k), su15 L4 (12.0k) and ft09 L5 (10.3k) exceed every expensive cleared level. That is 3 of 11,
+    in-sample, in one run, and measured over the whole level rather than at the moment the level crosses 83k.
+- **Cap and end, applied to this run with no reallocation.** At K = 83k, 17 games are capped (8 of them on their
+  final level).
+  - The run loses 18 cleared levels: the capped levels plus every later level of the same games. That is 211 game
+    points, **8.45 mean-score points**.
+  - It frees 1.97M tokens (33.6%).
+  - At K = 120k / 150k / 175k: 15 / 9 / 3 levels lost (7.15 / 2.92 / 1.71 points), and 20.1% / 12.0% / 3.5% of tokens
+    freed.
+
+### 13.4 Simulation: caps, demotion and restarts under D′ (rerun-shaped)
+
+**Model.** This is the gate replay in `scripts/sim_m2_priority_gate.py` (§4.2, §8.3), extended by a scratch script that
+adds cap events. The script is not committed; its logic is below.
+- **Rerun shape**: 110 games, 532 min, 14 slots at 56.4 tok/s per held slot (790 tok/s, 25.2M tokens per rerun).
+- **Handover**: only at context trims, the first after N(62k, 6k) generated tokens and then every N(37k, 7.5k), or
+  when a game wins.
+- **Priority**: D′ executed from the vendored module, including the 0.4 fade and never-started games priced by the
+  formula.
+- **Level costs**: lognormal with median 22k × the world's hardness, level σ 0.8, game σ 0.6, and level 1 at × 0.5.
+  Some levels are unsolvable, as set by the world. Scoring is RHAE with the public games' human baselines.
+- **Worlds**: `public_like` plus five hidden-like worlds that score 32-35. In the check-run shape (25 × 121 min),
+  `public_like` gives 124 levels / 58.1 and `tok2.5` 79 / 30.7. Arm C v2's 111 / 48.0 lies between them.
+- **Draws**: 60 paired draws per world (common random numbers); intervals are 90% bootstrap.
+- **Policies.** Each acts on t, the tokens on the current level. The harness already counts it as
+  `_session_generated_tokens − _tokens_at_level_start`.
+  - **T0.5 / T0.67**: D′'s `token_scale` cut from 225k to 112k / 150k. This is "earlier demotion of a stuck game".
+  - **end K**: end the game at t = K.
+  - **park K**: re-queue the game at priority 1 at t = K, so it runs only when nobody else waits.
+  - **rr K**: a fresh-context restart at t = K, at most 2 per level. The remaining cost is re-drawn from the level's
+    own distribution. This is the optimistic case, where "stuck" was the run's bad luck; an unsolvable level stays
+    unsolvable. D′'s t keeps counting.
+  - **rr2 K**: the same, with the re-drawn cost doubled. This is lesson 0037: ours-07's real mid-level reset left 14 of
+    44 touched levels solved against ~61% expected.
+  - K is 83k (arm C's p90), 120k or 150k.
+
+**Result** (Δ mean score against D′; the base row is D′'s own score):
+
+| policy | public_like | tok2.5 | tok2_u.12 | unsolv.20 | siggame0.3 | finalU3x |
+|---|---:|---:|---:|---:|---:|---:|
+| D′ (score) | 63.5 | 34.1 | 34.2 | 31.7 | 34.9 | 35.2 |
+| T0.5 | −1.05 | −0.78 | −0.68 | −0.45 | −1.02 | −0.67 |
+| T0.67 | −0.43 | +0.01 | −0.02 | −0.23 | −0.47 | −0.43 |
+| end 83k | −14.1 | −11.3 | −11.0 | −7.0 | −13.0 | −10.9 |
+| end 120k | −6.5 | −1.7 | −2.6 | −3.4 | −1.8 | −2.5 |
+| end 150k | −3.2 | −0.3 | −0.1 | −2.0 | −0.4 | −0.4 |
+| park 83k | −5.2 | −4.0 | −4.3 | −3.2 | −4.8 | −4.7 |
+| park 120k | −3.7 | −1.1 | −1.6 | −2.2 | −1.4 | −1.8 |
+| park 150k | −2.4 | −0.3 | −0.1 | −1.6 | −0.4 | −0.4 |
+| rr 83k (optimistic) | −0.45 | −0.81 | −1.09 | −0.27 | **+1.84** | −0.75 |
+| rr 120k (optimistic) | −0.06 | −0.36 | −0.10 | −0.02 | **+1.60** | −0.38 |
+| rr 150k (optimistic) | +0.03 | +0.05 | +0.04 | −0.00 | **+1.09** | −0.11 |
+| rr2 83k (lesson 0037) | −3.96 | −5.56 | −5.07 | −1.89 | −4.18 | −4.96 |
+| rr2 120k | −1.70 | −2.68 | −2.08 | −0.81 | −1.65 | −2.39 |
+| rr2 150k | −0.90 | −1.31 | −1.02 | −0.54 | −0.83 | −1.26 |
+
+Intervals on these differences are ±0.1-0.5. Signs outside ±0.3 are stable across draws.
+
+- **Answer to "how many extra levels would a p90 cap buy".**
+  - Cap and end at 83k changes the level count by −54 to −101 per 110 games (≈ −12 to −23 per 25 games).
+  - Cap and park at 83k: −1 to −33.
+  - Cap and restart at 83k: −2 to −8 on the optimistic re-roll (+8 only in `siggame0.3`), and −14 to −36 under
+    lesson 0037.
+  - At 120-150k, end and park *raise* the level count in several hard worlds (+5 to +12) but lower the score. The freed
+    time buys shallow levels on games that start late, and the capped levels were deep (w_l = l).
+- **Why.**
+  - **D′ already rations stuck games.** Its patience factor C is ≈0.65 at 83k tokens on the level and reaches its floor
+    near 200k. A game on its last level (B = 0) also waits behind every game with levels left until the fade.
+  - **The tokens a stuck game still gets are worth at least as much as the receivers would make of them.** In arm C
+    v2 the p90 cap costs 8.45 points for 1.97M tokens. At equal tokens per game, that is ≈1.0 mean-score point per
+    1M tokens on the 110-game scale. Extra capacity is worth 0.16-1.15 points per 1M (+5% tokens = +0.21 / +0.56 /
+    +1.45 in `unsolv.20` / `public_like` / `tok2.5`).
+- **The one positive cell is an assumption, not a finding.** Restart pays only if level cost is mostly per-run luck
+  (`siggame0.3`, level σ 0.95) *and* a fresh context loses nothing. The only measurement of a real restart (ours-07,
+  lesson 0037) halved the solve rate, and that is the rr2 row.
+- **A check run would mislead.** In the check-run shape (25 games × 121 min, 100 draws), park 150k is +0.38 / +0.28
+  and park 120k is −0.03 / +0.84 in `public_like` / `tok2.5`, against −2.4 / −0.3 and −3.7 / −1.1 in the rerun.
+  This is lesson 0036 again: freed time goes to parked last levels in the check run, and to early levels of late
+  games in the rerun.
+- **What a flag at 83k would have to achieve.** "Hopeless" means the level needs more than 250k more tokens, or is
+  unsolvable. The flagged game is parked, and fp is the share of other levels flagged.
+
+  | detector at 83k | public_like | tok2.5 | unsolv.20 | finalU3x |
+  |---|---:|---:|---:|---:|
+  | oracle (recall 1, fp 0) | +1.68 | +2.46 | +0.62 | +3.05 |
+  | recall 0.7, fp 0.05 | +0.02 | +1.39 | −0.04 | +1.60 |
+  | recall 0.5, fp 0.05 | −0.11 | +0.92 | −0.07 | +0.93 |
+  | recall 0.3, fp 0.05 | −0.48 | +0.39 | −0.17 | +0.36 |
+  | recall 0.5, fp 0.15 | −1.95 | +0.54 | −0.97 | +0.38 |
+  | recall 0.5, fp 0.30 | −4.41 | −0.48 | −2.42 | −0.74 |
+
+  - Even a perfect flag is worth +0.6 to +3.1. A useful one needs recall ≥ 0.5 at ≤ 5% false positives, and even then
+    it is ~0 in two worlds.
+  - The only candidate in this run (tokens per `action()` call above ~9k) is 3 of 11 final levels against 0 of 11
+    expensive cleared levels. That is in-sample, in one run, and measured over the whole level, not at the 83k
+    crossing.
+  - JustAdev742's on-level features (actions, rate, tokens per action, stretches without an action) carried no
+    signal at 5-15 minutes over six runs.
+
+### 13.5 The "abandon this hypothesis, re-probe" prompt
+
+A token-clock model cannot price it, because it changes what the model does, not who gets the GPU. The evidence
+against it:
+- **Our strategy audit (§5).** The check run fired once in 25 games at a 56K-token threshold, and the audited level
+  was not cleared.
+- **Similar public variants.** sujanmajhisuzan's "strategy audit after 12 prompts, telling the model to UNDO/RESET" has
+  no draw outside copy noise (JustAdev742 `intel-oct10.md`).
+- **Lesson 0037.** Discarding the working hypotheses at 20 minutes halved the solve rate.
+- **It would fire as often on levels about to be solved as on stuck ones.** At 83k the open levels split 12 solved
+  later against 11 not. The levels it would hit are the expensive-but-solving ones (sp80 L2, ka59 L2, lf52 L3, sk48 L1
+  ...) as often as the stuck ones.
+- **What the end-of-game excerpts show.** In §11.7 (sk48 L4, sp80 L5, g50t L4), the model was still building a model
+  or searching when the clock ran out. Its hypotheses were not spent.
+
+The one prompt-side change with a measured mechanism is a *fact* notice (I1, click-within-3 21.5% vs 10.1%). That is
+already in arm C+U (§12). An "abandon" instruction carries no fact.
+
+### 13.6 What else the data says
+
+- **The loss is depth, not waste on the stuck level.** Per-level cost is flat in depth (§13.2), and final levels sit at
+  level 4-6 of 6-10.
+  - The time that would buy those levels is spread over everything the game did before it reached them.
+  - The lever that is positive in every world is more tokens per game: +5% capacity is worth +0.2 to +1.5 points.
+  - That is a serving lever (throughput, §9.5's drafter, which is private), not a harness one.
+- **About 8 of the 19 final levels lost to lateness, not to being stuck.** These are the levels started late (§13.3,
+  10-66k tokens when the run ended).
+  - In the rerun, D′'s fade already decides these trade-offs.
+  - JustAdev742's one positive scheduler tweak, last-level B = 10, was +0.26 [−0.35, +1.09] in their main model and ≈0
+    in the hard worlds. That is not worth a slot.
+
+### 13.7 Recommendation: close the line (pre-registered)
+
+- **Do not build** any of the following:
+  - a per-level token cap, with or without a fresh restart;
+  - a park or end rule;
+  - a smaller D′ `token_scale`;
+  - an "abandon / re-probe" prompt.
+- **Each is negative or a tie in the rerun model** under every world except one optimistic restart assumption, which
+  lesson 0037 contradicts.
+  - A public-25 check run would show the park variants as small gains (lesson 0036), so a check run cannot rescue them.
+- **No GPU, no kernel, no slots.**
+- **Reopen only if both of these hold:**
+  1. A per-level signal, computed at the moment a level crosses 83k tokens, reaches recall ≥ 0.5 for "not cleared by
+     the end of the run" at ≤ 5% false positives among levels that were cleared. It must be measured out of sample on
+     at least three full-length arm-C-family runs (v2 plus the C+U and C+LM check runs, §10, §12) and on more than one
+     game.
+  2. The rerun model then shows ≥ +1 point in at least four of the six worlds.
+- **What reopening would cost.** Testing condition 1 needs a per-request token series per level (the `transcripts`
+  digest currently gives only level totals): a ~30-line `kaggle_ops.py` change and no GPU. It is worth doing only if
+  those check runs land anyway.
+
+### 13.8 Reconciliation with JustAdev742 (lessons 0036, 0037, 0039; `time-allocation.md`, `hopeless-signal.md`)
+
+Their two studies used eight D′ runs and a simulator validated on three of them. They found:
+- no give-up or cap that beats D′ (cut-offs ≤ 40 active minutes lose 1.7-29 points; 50-60 minutes fall between −0.9
+  and +0.3);
+- an entry signal of AUC 0.68-0.70, too weak to use, and no on-level signal;
+- every one of 48 end / park / demote policies losing.
+
+This section reaches the same answer on arm C's own run with an independent replay, and adds three things:
+1. **The split holds with the bundle.** 32.1% of arm C's tokens are on final levels, against 25.8-43.4% for their plain
+   runs. The bundle did not visibly change where tokens go.
+2. **Restart and earlier demotion lose too.** A fresh-context restart at the p90 loses under the measured reset penalty
+   and ties under a free re-roll. Earlier D′ demotion (T0.5, T0.67) is between +0.01 and −1.05 in every world. Their study did
+   not test either directly; it tested the C floor (0 vs 0.1, ≈0).
+3. **The p90 cap would cut solves.** Arm C's p90 (83k ≈ 25 active minutes) sits where their hazard is still
+   0.046-0.027 per minute. In arm C v2, 12 of the 23 levels open at that point were solved later.
+
+The two results differ in one respect only: their tokens-per-action feature was measured at 5-15 minutes, while the
+in-sample hint in §13.3 is at the end of a level. That leaves the narrow reopen condition in §13.7, not a build.
