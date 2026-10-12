@@ -1,10 +1,75 @@
-{"id": "scout-1012-b", "ops": [
- {"op": "pull_kernel", "kernel": "sujanmajhisuzan/arc-agi-3-m2-top-submission", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "jingshuifu/arc3-m2-solution", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "heliosli/try-merging-it-you-might-get-lucky-and-win-gold", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "skarin/arc-agi-3-27-80-lb-100-trajectory-audit", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "zhangyues0000/arc-agi-3-m2-franzen-fork", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "bang1850/arc-prize-2026-sovereign-agent", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "superstringdev/arc-agi-3-nvfp4-sglang-public", "max_lines": 200},
- {"op": "pull_kernel", "kernel": "kunaldesale2408/duck-harness-fast-eval", "max_lines": 200}
-]}
+{
+ "id": "read-1012-ulm-d",
+ "ops": [
+  {
+   "op": "status"
+  },
+  {
+   "op": "kernel_output",
+   "kernel": "calamitychasm/arc3-jad-exp081-ulm",
+   "grep": [
+    "harness patch applied successfully",
+    "our harness patches applied successfully: 8",
+    "#OURS_FORM ok version=d_prime",
+    "#OURS_FRESH replaced=",
+    "priority gate active: 14 concurrent streams",
+    "48 layers x 448 experts, router sha256 for every layer",
+    "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+    "STALE_LATCH_FIX installed",
+    "UNTRIED_NOTICE installed mode=i1",
+    "LEVEL_MEMORY installed",
+    "UNTRIED_NOTICE summary",
+    "STALE_LATCH_FIX summary",
+    "LEVEL_MEMORY summary",
+    "C+U summary failed",
+    "ours (--fail-fast): server watchdog on",
+    "ours (--fail-fast): the",
+    "ours: inputs mounted after",
+    "[view] scrolled",
+    "DEADLINE at",
+    "READY after",
+    "analyzer failed"
+   ],
+   "transcripts": {
+    "games": [
+     "sp80",
+     "tn36",
+     "vc33",
+     "cn04"
+    ],
+    "grep_text": {
+     "Not yet tried on this level": 8,
+     "Rule for level": 8
+    },
+    "samples": {
+     "StaleStateActionError": 5
+    }
+   }
+  },
+  {
+   "op": "kernel_output",
+   "kernel": "calamitychasm/arc3-jad-exp081-draft",
+   "grep": [
+    "harness patch applied successfully",
+    "our harness patches applied successfully: 6",
+    "#OURS_FORM ok version=d_prime",
+    "#OURS_FRESH replaced=",
+    "priority gate active: 14 concurrent streams",
+    "48 layers x 448 experts, router sha256 for every layer",
+    "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+    "ours: MTP draft",
+    "(manifest 6f408d58fd81, dense b677e0c4234c)",
+    "MTP draft not mounted",
+    "MTP draft /kaggle",
+    "stuck in a loop",
+    "ours (--fail-fast): server watchdog on",
+    "ours (--fail-fast): the",
+    "ours: inputs mounted after",
+    "DEADLINE at",
+    "READY after",
+    "analyzer failed"
+   ],
+   "show_lines": 3
+  }
+ ]
+}
