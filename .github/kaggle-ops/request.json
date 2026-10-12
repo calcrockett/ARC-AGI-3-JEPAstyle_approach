@@ -1,1 +1,4 @@
-{"id": "jadh16-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_hic16/notebook"}]}
+{"id": "read-1012-lmu-ready", "ops": [
+  {"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-lm", "grep": ["READY after", "DEADLINE at", "ours: inputs mounted after"], "show_lines": 3},
+  {"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-u", "grep": ["READY after", "DEADLINE at", "ours: inputs mounted after"], "show_lines": 3}
+]}
