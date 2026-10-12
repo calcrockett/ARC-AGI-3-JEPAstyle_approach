@@ -1,6 +1,6 @@
-{"id": "daily-1012-s", "ops": [{"op": "status"}, {"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
-    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
-             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
-             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
-             "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
-             "DEADLINE at", "READY after", "analyzer failed"]}]}
+{"id": "jad81-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081", "version": 2,
+    "message": "m2 jad exp081 draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written"],
+    "counters": []}]}
