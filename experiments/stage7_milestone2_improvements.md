@@ -1891,7 +1891,7 @@ A pass makes C+hic16 eligible; it does not by itself earn slots.
 - **Score.** The score effect of +7% tokens is +0.2 to +1.5 points in the §13 model. That cannot be measured by hidden
   draws. Adoption rides on the throughput line and the no-harm lines.
 
-## 15. Reproducing JustAdev742's MTP drafter fine-tune for arm C [READ, 2026-10-12; nothing built, no GPU]
+## 15. Reproducing JustAdev742's MTP drafter fine-tune for arm C [READ + BUILT (L0), 2026-10-12; never pushed, no GPU]
 
 **Question.** JustAdev742 fine-tuned the dense weights of the MTP draft head; the experts stayed frozen. Their output
 weights are private (the output of kernel `scottmahony/arc3-mtp-session-a`). Can we rerun their published pipeline to
@@ -2110,3 +2110,119 @@ tokens/request, 0 repeated turns, 2 retractions, 111 levels, 48.03.
 - arm C's own draws by 10-17 make another family the exploit arm.
 
 The no-GPU alternative is to ask JustAdev742 to publish their draft as a public Kaggle model.
+
+### 15.7 L0 built (2026-10-12) [BUILT, CPU only; never pushed]
+
+**What exists.**
+
+| Piece | Where | What it does |
+|---|---|---|
+| Their code, unmodified | `kaggle_submission_mtp_session/vendor/` | `build_mtp_session.py`, `mtp_session_a.py`, `sglang_hc_dump_patch.py`, `hc_dump_driver.py` (+ `fidelity_probe.py`, `fidelity_sample.py`, which it imports), `mtp_probe_dump.py`, `mtp_replica.py` (imported by the trainer), `mtp_train.py`, `mtp_write_draft.py`, their builder deps (`build_franzen_nb.py`, byte-identical to arm C's c7a462b copy; `franzen_tree.py`; `sglang_reap_patch.py`), `kaggle/` data their builder reads, and their CPU tests. `LICENSE` (Apache-2.0), `NOTICE`, `SHA256SUMS` (64 files, all equal to `ccb7214`) |
+| Session kernel | `calamitychasm/arc3-mtp-session-a`, `kaggle_submission_mtp_session/notebook/` (882 KB, pinned) | Built by `scripts/_build_mtp_session_kernel.py` |
+| Training-log manifest | `kaggle_submission_mtp_session/arc3-jad-exp081-v2-request-logs.json` | Arm C v2's 25 log names (the public set's game ids, identical to exp-073's listing and our own recorded runs); sizes `null` (not listed yet); response count 2,952 |
+| C+D builder | `scripts/_build_jad_exp081_draft_kernel.py` -> `calamitychasm/arc3-jad-exp081-draft` | Arm C rebuilt through their vendored builder with `--draft calamitychasm/arc3-mtp-session-a --draft-manifest FILE`. **Refuses to build without a real session manifest; no notebook is committed** |
+| kaggle-ops | `scripts/kaggle_ops.py` | `arc3-mtp-` added to `GPU_KERNEL_PREFIXES`; `kernel_output` gains read-only `list_files` (name, bytes, sha256 of a glob; one `LIST_FILES {json}` line) and `print_files` (small text files in full, with sha256; JSON also as one `PRINT_FILE_JSON` line) |
+| Tests | `tests/test_mtp_session_lean.py` (20), `tests/test_jad_exp081_draft.py` (11), `tests/test_kaggle_ops_output_files.py` (2) | Below |
+
+**How the wrapper overrides their builder without editing it.** `_build_mtp_session_kernel.py` imports their
+`build_mtp_session` in a fresh interpreter and replaces five module attributes for that run only:
+- `LOGS_MANIFEST`: our manifest, so the logs input is the kernel source `calamitychasm/arc3-jad-exp081` (mounts its
+  latest version, v2) and the build record says so.
+- `STEP_CELLS`: A2, A3, A4, A5 and A10 dropped; A1, A6, A7, A8, A9, A11 and the summary kept.
+- `_setup_cell`: the session's inputs are the logs only (their private probe-prompts dataset and replica reference
+  are not inputs and not in the metadata); the build record names the wrapper and the dropped steps.
+- `worst_case_minutes`: the lean steps (one boot): 265 min, accepted by `session_hours` 4.5.
+- `_steps_markdown`: the step list's header.
+
+With their own `--set`: `session_hours=4.5`, `train.reserve_minutes=20` (only A11 follows A9), `storage.probe_gb=0.0`
+(no probe dump). Unchanged from their v1 recipe: REAP-448 on the dump server, the 11 hold-out games (ar25 ft09 lp85
+r11l re86 sb26 sc25 tn36 tr87 tu93 vc33; 14 train games), the repeat / "stuck in a loop" / covered-turn hygiene of
+`hc_dump_driver.py`, the 34 GB dump cap (held-out part 6 GB), 30 + 20 min dump budgets, the 75-min training cap with
+their restart watch, the ARC FR-Spec map A9 trains with, the exporter and its check. Metadata: ours, private, GPU,
+no internet, `NvidiaRtxPro6000`, their pinned image, datasets/models/competition as arm C, kernel source arm C.
+
+**Our four cells** (marked `# >>> calamitychasm (lean path)`):
+1. After their setup cell (inputs + A0): the data check. Waits up to `wait_inputs_s` for the 25 names, counts
+   responses with completion tokens over all `*_requests.jsonl` (the digest's rule) and **stops the session unless the
+   count is 2,952** (arm C v2's; another version of the kernel output would differ). Prints
+   `ours (lean): data loaded N responses (T completion tokens) from F request logs, X GB` and one line per split
+   (train 14 games, holdout 11 games). While the sizes are unlisted this is the version pin.
+2. Before A6: the A5 stand-in. Records `replica_check: skipped` in `session-a.json` and replaces the session's
+   `require_go` (which reads A5's verdict) so A6-A11 run; `go()` still stops after a failed step.
+3. After A9: the drafter gate of 15.6 from `mtp-train/train-report.json`: `ours (lean): held-out accept_realized
+   before X after Y delta Z` (also greedy, expected), per-step KL / top-1 lines, and `ours (lean): drafter gate
+   PASS|BETWEEN|KILL|UNREADABLE`. A11 runs either way.
+4. After A11: `ours (lean): MTP draft manifest sha256 <64 hex> (<n> bytes); mtp-dense.safetensors sha256 <..>;
+   <k> dense tensors replaced; frozen files byte-identical to the stock draft a/b` (each frozen file's draft sha256 =
+   its manifest entry = the stock draft's; the dense shard's frozen tensors are their exporter's own check), then
+   `MTP_DRAFT_MANIFEST_JSON {...}`; a frozen-file mismatch stops the notebook.
+
+**Tests (all CPU).** The session notebook and metadata are pinned and the rebuild is byte-identical; every vendored
+file matches `SHA256SUMS` and the upstream clone at `ccb7214`; their own 68 CPU tests pass unmodified inside
+`vendor/`; the overrides are checked (inputs, dropped steps, deadline vs worst case, recipe, no private input or
+`scottmahony` id, machine shape); the shipped scripts round-trip byte for byte; and **the notebook's own lean cells
+run in order against their real session module with their stub scripts and stub server** (their `Bed`): one server
+(the REAP training dump), no probe dump or replica call, every command line uses only options the real scripts
+have, the data/gate/export markers print, and the manifest rebuilt from the `MTP_DRAFT_MANIFEST_JSON` line has the
+file's sha256. Failure paths: a wrong response count or a missing log stops before the server; a frozen file that
+differs from the stock draft stops at the export; the gate's PASS / BETWEEN / KILL boundaries. The C+D builder
+refuses no manifest, a missing file, a wrong `--expect-sha`, a placeholder (`not_for_push` / `placeholder`), a foreign
+format, an empty `replaced`, a missing dense sha256; with a fake manifest (temp dir) its notebook differs from arm C
+v2 in exactly two cells: markdown cell 0 and cell 4, where the stock-draft `DRAFT_MODEL_DIR` line becomes their
+600 s sha-checked draft wait; metadata differs only in the slug, the dropped stock-draft model source and the session
+kernel source. Full suite: 750 passed.
+
+**What L0 found (no blocker).** A9 does not depend on the dropped steps: the trainer reads the training dump, the
+snapshot files and the ARC map only; the replica checks feed nothing downstream (their module only gates on A5's
+verdict, which our stand-in replaces). No private input remains. One gap: **the 25 log byte sizes are not listed**
+(the GitHub artifact of `jad81-tx-1` is on blob storage this box cannot reach), so the session pins names + the
+response count instead; `mtps-ls-1` below lists them, and a rebuild with sizes then uses their own size pins.
+
+**Estimated cost of L1 (session A).** Notebook start to A0 ~5 min, data check ~1-3, install + precache ~5-10, one
+boot 10-27 (cap 50), A7 dump ~25-50 (held-out 20 + train 30 budgets), A8 ~3, A9 ~30 (their v2: 356 steps in 30 min;
+cap 75 + 10), A11 + export check ~7: **~1.5 GPU-h nominal (1.3-1.9), <= 2.5 on slow storage, hard cap 4.5 h** (the
+session's own deadline).
+
+**kaggle-ops requests** (one per commit; change `id` every time; push only into a free GPU slot, not late Friday or
+early Saturday UTC, and never ahead of a scheduled arm's check run):
+
+1. (Optional, recommended) list arm C v2's logs, then fill the sizes in the manifest and rebuild + repin:
+   ```json
+   {"id": "mtps-ls-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
+     "list_files": "*_requests.jsonl", "artifact": false}]}
+   ```
+2. Push session A (first push of this slug; only into a free slot, so its kernel source mounts):
+   ```json
+   {"id": "mtps-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_mtp_session/notebook"}]}
+   ```
+3. Read it (the output holds the 4.2 GB draft, so no artifact; the manifest, the session record and the training
+   report are printed in full):
+   ```json
+   {"id": "mtps-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-mtp-session-a",
+     "grep": ["ours: inputs mounted after", "[session A inputs] logs:", "ours (lean): data loaded",
+              "ours (lean): train split", "ours (lean): holdout split", "[session A A0]",
+              "ours: FR-Spec map hot_tokens_64k_arc.pt written", "layers x 448 experts",
+              "ours (session A): the launcher arguments and environment are ready", "arc3 HC dump:",
+              "ours (lean): A2-A5 and A10 dropped", "server healthy after", "[session A A7] dump:",
+              "comparison:", "ours (lean): A9 steps", "ours (lean): held-out accept_realized",
+              "ours (lean): held-out accept_greedy", "ours (lean): held-out step1", "ours (lean): drafter gate",
+              "frozen files byte-identical", "ours (lean): MTP draft manifest sha256", "MTP_DRAFT_MANIFEST_JSON",
+              "[session A] complete", "STOP at", "WARNING"],
+     "show_lines": 3,
+     "print_files": ["mtp-draft/arc3-draft-manifest.json", "session-a.json", "mtp-train/train-report.json"],
+     "artifact": false}]}
+   ```
+
+**Next steps.**
+1. `mtps-ls-1`, fill the sizes, rebuild (`python scripts/_build_mtp_session_kernel.py`), repin, commit; then
+   `mtps-push-1` into a free GPU slot when spare quota allows (15.6: never ahead of a scheduled arm's check run).
+   **Do not push a v3 of `calamitychasm/arc3-jad-exp081` before the session has run.**
+2. `mtps-out-1`. Apply the drafter gate (`ours (lean): drafter gate`): PASS -> step 3; BETWEEN -> no C+D run, the full
+   path's probes decide; KILL -> close the line.
+3. On PASS: save the printed manifest as a file (the `print_files` text, or `json.dumps(obj, indent=1) + "\n"` from
+   `PRINT_FILE_JSON` / `MTP_DRAFT_MANIFEST_JSON`), then
+   `python scripts/_build_jad_exp081_draft_kernel.py --draft-manifest <file> --expect-sha <printed sha256>`, pin the
+   notebook in `tests/test_jad_exp081_draft.py`, commit notebook + `kaggle_submission_jad_exp081_draft/arc3-draft-manifest.json`,
+   push `calamitychasm/arc3-jad-exp081-draft` (ids `jadd-*`) and read it against the C+D gate of 15.6 (markers: arm
+   C's six plus `ours: MTP draft`). **Never push a second version of `arc3-mtp-session-a` once C+D pins it**; a
+   retrain goes under a new slug.
