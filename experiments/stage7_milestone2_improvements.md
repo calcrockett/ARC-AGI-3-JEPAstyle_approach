@@ -2906,3 +2906,55 @@ world model** (JustAdev742's unbuilt M5 `check()` and M6 goal predicates, on top
 - **Bearing on arm C's 20.70 (57089293).** Arm C v2's public-25 check was 48.03, so its ratio is 0.43, below the lowest ratio in their tree (0.51). Their per-draw spread (~4) and our incumbent's (sd 3.0) make 20.70 about 2.5 sd under their 34.04 and 1.7 sd under their base-family mean 27.0. They report no case of a low draw traced to a fault. Their only documented cause of a depressed draw is slow `/kaggle/input` storage (lesson `docs/lessons/0038-kaggle-input-storage-can-be-several-times-slower.md`): a server ready later than ~31 min after start costs the first 14 gate-slot games unless `ARC3_HTTP_RETRY_INITIAL_SECONDS` is raised (arm C already sets 2400). The hidden run's boot time cannot be read (no log), so this is not checkable for 57089293; the check run printed `READY after`, which is the only boot evidence we hold.
 - Lessons on Kaggle infrastructure in the tree are unchanged and already folded into CLAUDE.md: 0030 (two mount layouts), 0031 (RTX pool saturates after the daily reset), 0035 (GPU sessions reserve 12 h), 0038 (slow input storage). Nothing in their tree mentions `kernel_sources` mounting.
 - Effect on the plan: none. Their exp-081 evidence stays n=1 (34.04); the standing rule keeps counting it at half weight (sigma 4.2). Re-fetch before the 10-18 checkpoint: their 10-12 exp-085 and 10-13 exp-083 draws would be the first new family data.
+
+## 20. Public-notebook scout, 2026-10-12 (kaggle-ops `scout-1012-a`, run 38247043095; `scout-1012-b`, run 38247120809)
+
+Read-only: `list_kernels` (dateCreated and voteCount, 2 pages x 50 each) and `pull_kernel` (max_lines 200) on 8 notebooks. The
+list API gives no scores (`score` is null for all rows), so claimed scores come only from titles and notebook text. `pull_kernel`
+prints only the first ~40 lines of each cell that matches its keyword filter, and the run artifact could not be downloaded from
+this box (blob store returns 403), so everything below is from those excerpts. Licenses are not shown by the op; Duck/Franzen
+lineage notebooks carry the Tufa/Franzen attribution and are Apache-2.0 upstream.
+
+### 20.1 What the new listings are
+
+- Of about 100 notebooks created since 10-04, roughly 20 are byte-level copies or light forks of Franzen's milestone-2 notebook
+  (`jingshuifu/arc3-m2-solution` and `-v2`, `zhangyues0000/arc-agi-3-m2-franzen-fork`, `kunaldesale2408/duck-harness-fast-eval`,
+  `sigeward/...`, `ouyangruize/...`, `felixwang1m/...`, and others). Their pulled cells (harness patch with EXPOSE_RESET /
+  EXPOSE_UNDO, CFG with CTX 136K, MAXREQ 10, MAMBA_CACHE 60, SPEC_ACCEPT 1.0, 900 s retry) are identical to Franzen's. Vote counts
+  (34, 28, 11, 10) reflect copying, not a better method. Nothing to graft.
+- No notebook states a hidden score above 33. The only score claim found is `skarin/arc-agi-3-27-80-lb-100-trajectory-audit`
+  (27.80 for an immutable Franzen copy, rerun 21.01, 4 x 25 public-game trajectories): an analysis notebook of Franzen's own
+  artifact, no method change. Its 27.80 / 21.01 pair for one version is another sign that per-draw sd is large.
+- JustAdev742 / scottmahony (D' exp-081), affectify D' 31.54 (`shiiin9/...`), `shiiin9/duck-plus-ours`, lordhansolo, sirikilohit
+  `duck-18-1gc-submit` are known and were not re-pulled. D' forks from others (`lwq255/arc3-dprime-guarded`,
+  `daydreamerthinks/dfranzen-fork-d-prime`) are copies of the affectify module; not pulled.
+
+### 20.2 Candidates read
+
+| notebook | claim | stack and differences from Franzen / exp-081 | graft by 10-24? |
+|---|---|---|---|
+| `sujanmajhisuzan/arc-agi-3-m2-top-submission` (84 votes, last run 10-11 20:30) and `bang1850/arc-prize-2026-sovereign-agent` (61 votes, 10-11 14:21) | none in the excerpts besides a "Sovereign Dual-Core, Champion D' Priority" banner and a "target 65%+" comment; no score | Franzen's notebook with a cell-16 hook that sets harness env flags: ARC3_ACTION_ECHO, PERSISTENT_FUNCTIONS (scope game), BATCH_NOOP_BLOCK, STALE_STATE_BLOCK, LEVEL_TRANSFER_GUIDANCE, PRIORITY_TAIL_LOOKUP=remaining, BOARD_DUMP_GUARD, STEP_VERIFICATION_HINT, FRAME_DIFF_HINT, NOOP_REPEAT_GUARD, DEATH_LEDGER / DEATH_REPEAT_GUARD / DEATH_GUARD_LOOKAHEAD, PREFER_TOOL_CALLS, AUTO_FRAME_DIFF, plus `LOCAL_ANALYZER_CONTEXT_WINDOW=65536` (Franzen: 128K), `LOCAL_ANALYZER_YIELD_TOKENS=0` (Franzen: 2048), `ARC3_YIELD_ON_TIMEOUT=0`, `ARC3_MIN_READ_TIMEOUT=180`. Same CFG as Franzen (MAXREQ 10, SPEC_ACCEPT 1.0). All flag names except `ARC3_MIN_READ_TIMEOUT` already exist in Franzen's patch (they are defaults he leaves off or sets himself; grep of his vendored notebook in this repo). | No. Switching on every optional guard at once with no ablation and halving the context window runs against our "context is load-bearing" finding; no score. The individual guards are already in the patch our arm C inherits and we can set any of them in an install cell, but there is no evidence for any one. Ignore. |
+| `heliosli/try-merging-it-you-might-get-lucky-and-win-gold` (52 votes, 10-12 09:16) | Own text: "A paired GPU comparison has not completed; no score improvement is claimed" | Franzen notebook plus an opt-in "scoped Python data memory" (`ARC3_SCOPED_MEMORY=1`, a `patch_scoped_memory.py` applied to the harness source, six CPU sandbox tests), input resolver for both mount layouts, check-run shortcut when not a rerun. Shape: persistent Python state across turns scoped per game/level. MAXREQ 10, 48 min per game in the non-rerun branch, otherwise Franzen's. Source of the patch itself was not visible in the excerpt. | Weak. Our arm C already has ours-05 (per-level scratch memory) and persistent functions; this overlaps. Re-pull the full notebook only if a hidden score appears. Ignore for now. |
+| `superstringdev/arc-agi-3-nvfp4-sglang-public` (0 votes, 10-09 00:34) | none | Different quantization: ModelOpt NVFP4 W4A16 block16, SM120 Marlin MoE profile, external BF16 PLE, prebuilt SGLang runtime archive, harness pulled from a private repo pin (`kIshizaki-sci/ki-harness`, "reviewed" source plus fatal-error propagation and a startup RESET every 600 s). Context 128K, history 150 turns, drain 58K, same as Franzen. Needs private datasets we cannot mount. | No. Model swap with unknown quality and unavailable inputs. |
+| `jingshuifu/arc3-m2-solution` (34 votes), `zhangyues0000/...franzen-fork` (10), `kunaldesale2408/duck-harness-fast-eval` (28) | none | Franzen copies, identical cells to ours in the pulled excerpts. | No. |
+| `skarin/arc-agi-3-27-80-lb-100-trajectory-audit` (54 votes) | 27.80 (public, Franzen copy v1; 21.01 on its rerun) | Analysis of Franzen's 4 x 25 trajectories: mean 46.49 public-25, 417 levels, 33/100 wins, 10 of 25 games span >= 40 points between replicates (m0r0 0..100, tn36 3.6..). Useful as variance evidence only. | No code to graft. |
+
+### 20.3 Reading
+
+- **Nothing new in the public list beats or even differs materially from arm C.** The visible frontier is still Franzen (789 votes),
+  JustAdev742's exp-081 family and the affectify D' module; every new high-vote notebook is a copy or a flag-toggling variant.
+- Franzen's own replicate data (skarin, quoting his v3 artifact): public-25 means 45.6 to 47.5 across four replicates, with single
+  games swinging 40+ points. This matches our observation that arm C's one hidden draw (20.70) against a 48.03 check run is within
+  a plausible spread, and that a single draw tells us little.
+- The leaders (45-67) are unpublished, as before. No notebook or title in either listing hints at trained weights or a different
+  model being served in public.
+
+### 20.4 Recommendation
+
+- **Ignore all 8.** None offers a measured hidden-set gain; the two most-voted new notebooks (sujan, bang) toggle existing
+  flags without evidence and cut the context window.
+- Optional low-cost follow-up, not scheduled: the "death ledger / death repeat guard" and "noop repeat guard" flags exist in the
+  inherited patch; whether arm C already enables them can be read from the arm C notebook. If not, they would be a candidate for a
+  C+U-style install cell, but only with a check run and no slot before the bundle (section 16).
+- Re-scout before 10-18 (the standing-rule checkpoint): list `dateCreated` again and look for titles claiming > 33, plus
+  JustAdev742's repo (section 19).
