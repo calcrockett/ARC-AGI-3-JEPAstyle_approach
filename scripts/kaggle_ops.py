@@ -15,7 +15,10 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
                        transcripts prints, per game, a per-level timeline from that game's *_requests.jsonl, counts of
                        StaleStateActionError / NameError / Traceback / [view] scrolled / GAME_OVER / RESET in the tool
                        results and the first 2 / last 3 assistant turns of the level the game ended on; bounded, scrubbed;
-                       extras: excerpt_levels {game|"*": level}, samples {text: n}, grep_text {regex: n})
+                       extras: excerpt_levels {game|"*": level}, samples {text: n}, grep_text {regex: n};
+                       list_files "<glob>" prints name, bytes and sha256 of matching output files plus one
+                       LIST_FILES {json} line; print_files ["rel/path", ...] (<= 10) prints small text files in full
+                       with bytes and sha256, a JSON file also as one PRINT_FILE_JSON line)
   {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
    "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
   {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
@@ -70,7 +73,7 @@ BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
 GPU_LIMIT = 2
 # Only the milestone-2 family can hold a GPU session; the old graph-explorer / hypothesis / serving
 # benchmark kernels are skipped (their status calls only fed Kaggle's rate limiter, run 37994686371).
-GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2", "arc3-jad-")
+GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2", "arc3-jad-", "arc3-mtp-")
 STATUS_SPACING_S = 0.5
 LIST_SORTS = ("hotness", "commentCount", "dateCreated", "dateRun", "relevance", "scoreAscending",
               "scoreDescending", "viewCount", "voteCount")
@@ -144,6 +147,8 @@ def parse_request(raw: str) -> dict:
             raise RequestError(f"ops[{i}]: 'grep' must be a list")
         if kind == "kernel_output" and op.get("transcripts") is not None:
             _check_transcripts(op["transcripts"], i)
+        if kind == "kernel_output":
+            _check_output_files(op, i)
     return req
 
 
@@ -183,6 +188,21 @@ def _check_transcripts(t: Any, i: int) -> None:
     c = t.get("count", [])
     if not isinstance(c, list) or len(c) > 10 or not all(isinstance(x, str) and 1 <= len(x) <= 60 for x in c):
         raise RequestError(f"ops[{i}]: transcripts.count must be a list of up to 10 short strings")
+
+
+def _safe_rel(x: Any) -> bool:
+    return (isinstance(x, str) and 1 <= len(x) <= 200 and not x.startswith(("/", "\\")) and ".." not in Path(x).parts
+            and ":" not in x)
+
+
+def _check_output_files(op: dict, i: int) -> None:
+    """kernel_output's read-only file options: list_files (a glob in the output) and print_files (paths in it)."""
+    lf = op.get("list_files")
+    if lf is not None and not _safe_rel(lf):
+        raise RequestError(f"ops[{i}]: 'list_files' must be a relative glob such as \"*_requests.jsonl\"")
+    pf = op.get("print_files")
+    if pf is not None and not (isinstance(pf, list) and 1 <= len(pf) <= 10 and all(_safe_rel(x) for x in pf)):
+        raise RequestError(f"ops[{i}]: 'print_files' must be a list of up to 10 relative paths in the output")
 
 
 def _check_dir(d: Any, i: int) -> None:
@@ -614,6 +634,10 @@ class Runner:
                 res["transcripts"] = f"error {type(exc).__name__}: {exc}"[:200]
         if op.get("show_lines"):
             show_matches(dest, op.get("grep") or [], int(op["show_lines"]))
+        if op.get("list_files"):
+            res["list_files"] = list_output_files(dest, op["list_files"])
+        if op.get("print_files"):
+            res["print_files"] = print_output_files(dest, op["print_files"])
         res["artifact_dir"] = str(dest)
         if op.get("artifact", True) is False:
             res["artifact_dir"] = None
@@ -802,6 +826,59 @@ def sys_ram(lines: list[tuple[str, float | None]]) -> dict | None:
 
 def mem_problems(text: str) -> dict:
     return {k: len(rx.findall(text)) for k, rx in MEM_PROBLEM_RES.items()}
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 24), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def list_output_files(out: Path, pattern: str) -> dict:
+    """Name, byte size and sha256 of every output file matching PATTERN (a glob relative to the output), printed one
+    per line and as one ``LIST_FILES {json}`` line (e.g. the request logs a later kernel pins by size)."""
+    root = out.resolve()
+    files = {}
+    for p in sorted(out.glob(pattern)):
+        if p.is_file() and p.resolve().is_relative_to(root):
+            files[str(p.relative_to(out))] = {"bytes": p.stat().st_size, "sha256": _file_sha256(p)}
+    print(f"  == list_files {pattern!r}: {len(files)} files, {sum(f['bytes'] for f in files.values()):,} bytes")
+    for name, f in files.items():
+        print(f"    {name} {f['bytes']} {f['sha256']}")
+    print("LIST_FILES " + json.dumps(files, separators=(",", ":")))
+    return {"pattern": pattern, "count": len(files), "bytes": sum(f["bytes"] for f in files.values())}
+
+
+PRINT_FILE_MAX_BYTES = 256_000
+
+
+def print_output_files(out: Path, paths: list[str]) -> dict:
+    """Print small text files of the output in full (size and sha256 first; a JSON file also as one
+    ``PRINT_FILE_JSON <path> {json}`` line), e.g. a manifest a later build pins by sha256."""
+    root = out.resolve()
+    result = {}
+    for rel in paths:
+        p = out / rel
+        if not p.is_file() or not p.resolve().is_relative_to(root):
+            print(f"  == print_files {rel}: not in the output")
+            result[rel] = None
+            continue
+        data = p.read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        result[rel] = {"bytes": len(data), "sha256": sha, "printed": len(data) <= PRINT_FILE_MAX_BYTES}
+        print(f"  == print_files {rel}: {len(data)} bytes, sha256 {sha}")
+        if len(data) > PRINT_FILE_MAX_BYTES:
+            print(f"  (not printed: over {PRINT_FILE_MAX_BYTES:,} bytes)")
+            continue
+        text = data.decode("utf-8", errors="replace")
+        print(text if text.endswith("\n") else text + "\n(no final newline)")
+        try:
+            print(f"PRINT_FILE_JSON {rel} " + json.dumps(json.loads(text), separators=(",", ":")))
+        except ValueError:
+            pass
+    return result
 
 
 def show_matches(out: Path, markers: list[str], limit: int) -> None:

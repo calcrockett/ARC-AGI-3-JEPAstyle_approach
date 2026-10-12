@@ -1,0 +1,30 @@
+calamitychasm/arc3-mtp-session-a (lean MTP-draft session A)
+
+This directory contains, under vendor/, files copied unmodified from
+JustAdev742/Arc-Agi-3-Kaggle-comp (https://github.com/JustAdev742/Arc-Agi-3-Kaggle-comp),
+commit ccb7214862bbe7fab3a24a7e7e2ba6653d931cac, licensed under the Apache License 2.0
+(vendor/LICENSE, their file). vendor/SHA256SUMS lists every vendored file; all match that commit.
+
+Copied, unmodified:
+- scripts/build_mtp_session.py (session-A notebook builder), scripts/mtp_session_a.py (steps A0-A11),
+  scripts/sglang_hc_dump_patch.py (hidden-state dump patch), scripts/hc_dump_driver.py (dump driver),
+  scripts/fidelity_probe.py and scripts/fidelity_sample.py (imported by the driver),
+  scripts/mtp_probe_dump.py, scripts/mtp_replica.py (imported by the trainer), scripts/mtp_train.py (trainer),
+  scripts/mtp_write_draft.py (exporter), scripts/build_franzen_nb.py, scripts/franzen_tree.py and
+  scripts/sglang_reap_patch.py (imported by the session builder);
+- kaggle/dprime/, kaggle/franzen/ (the base notebooks, REAP-448 list, ARC FR-Spec map and their NOTICE files),
+  kaggle/fidelity/ (dataset-metadata.json, manifest.json: read by their builder), kaggle/mtp/ (their exp-073 logs
+  manifest, the default their builder reads; our build replaces it);
+- tests/: their CPU tests for the session, the builder, the dump driver and the exporter, with their fakes and
+  fixtures.
+
+Third-party material inside vendor/kaggle/ keeps its own licence and notices (Franzen's Milestone 2 notebook,
+Apache-2.0; the public D' notebook by shiiin9 / AFF AI CLUB, Apache-2.0; Tufa Labs' source bundle, MIT; see the
+NOTICE.md files there).
+
+Changes made by calamitychasm: none to the vendored files. Our wrapper scripts/_build_mtp_session_kernel.py
+replaces five module attributes of their builder at build time (in a separate interpreter), adds four cells of
+its own to the notebook and rewrites the kernel metadata; see README.md.
+
+Any draft weights a session of this kernel writes are derived from the public stock draft checkpoint mounted as a
+model source and keep its licence status.
