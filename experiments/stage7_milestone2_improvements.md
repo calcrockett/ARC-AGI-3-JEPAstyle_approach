@@ -1742,3 +1742,223 @@ This section reaches the same answer on arm C's own run with an independent repl
 
 The two results differ in one respect only: their tokens-per-action feature was measured at 5-15 minutes, while the
 in-sample hint in §13.3 is at the end of a level. That leaves the narrow reopen condition in §13.7, not a build.
+
+## 15. Reproducing JustAdev742's MTP drafter fine-tune for arm C [READ, 2026-10-12; nothing built, no GPU]
+
+**Question.** JustAdev742 fine-tuned the dense weights of the MTP draft head; the experts stayed frozen. Their output
+weights are private (the output of kernel `scottmahony/arc3-mtp-session-a`). Can we rerun their published pipeline to
+make our own private draft and mount it in an arm-C-plus-drafter kernel ("C+D")?
+
+**Source.** Their repo at HEAD `ccb7214` (fetched 2026-10-12; no newer commit). The repo is Apache-2.0.
+- Design doc: `docs/research/beat-tufa/mtp-drafter-finetune.md` (sections 0-12).
+- Run records: `docs/research_log.md` 2026-10-10 00:50 to 13:28, and `docs/SUBMITTING.md`.
+
+**Answer.** Yes. The code is complete and has already produced a working draft on our exact serving stack. But it
+cannot run unchanged for us, because three of its inputs are their private Kaggle artifacts. The measured gain on an
+arm identical to ours is about **+3% run-level output tok/s**. That is roughly +0.1 to +0.9 LB points: real but
+unmeasurable by draws. The recommendation is a **conditional GO on a lean path** of about 3.5-4 GPU-h (15.6).
+
+### 15.1 Code
+
+Everything below is in `scripts/` and is Apache-2.0 (their `LICENSE`).
+
+| Part | File | Lines |
+|---|---|---|
+| Session-A notebook builder | `build_mtp_session.py` | 436 |
+| Session orchestration, steps A0-A11 | `mtp_session_a.py` | 1,388 |
+| Hidden-state dump patch | `sglang_hc_dump_patch.py` | 1,006 |
+| Snapshot replay driver (dump) | `hc_dump_driver.py` | 548 |
+| Probe-request dump | `mtp_probe_dump.py` | 245 |
+| Replica of the draft block | `mtp_replica.py` | 1,069 |
+| Trainer | `mtp_train.py` | 812 |
+| Exporter | `mtp_write_draft.py` | 389 |
+| Probe notebooks (`--probe`) and the gate | `fidelity_sample.py`, `fidelity_probe.py`, `probe_accept_gate.py` | – |
+
+Details:
+- **Patch file.** The dump patch is an anchored, sha-checked edit to the wheel's model file, in the style of their
+  REAP patch.
+- **Notebook base.** The notebook is D′ up to its launcher, plus the nine scripts written as compact cells, plus REAP-448
+  and the ARC FR-Spec map.
+- **Builder version.** Their `build_franzen_nb.py` at `ccb7214` is byte-identical to the copy vendored for arm C at
+  `c7a462b`. It already has `--draft` and `--probe`.
+- **Tests.** The repo has about 30 tests for the session, including whole GO / NO-GO sessions against stub servers.
+  It also has torch tests for the replica, the trainer and the exporter.
+
+**What stops it running as-is.** These are build-time constants:
+- The kernel id is hard-coded as `scottmahony/<slug>`.
+- **Training logs** are the kernel output of their exp-073, `scottmahony/arc3-dprime-reap448-r14-full`, which is
+  private. The 25 file names and byte sizes are pinned in `kaggle/mtp/exp073-request-logs.json`.
+- **Probe prompts** come from `scottmahony/arc3-fidelity-prompts`, a private dataset. It holds 154 requests from
+  11 held-out games, sampled from Franzen's public run.
+- **Replica-check reference.** This is `fidelity.json` from `scottmahony/arc3-fidelity-base`, a private kernel, pinned by
+  sha256. That probe run used D′ with no REAP, the generic map, the stock draft, greedy decoding and lossless acceptance.
+
+Our own build can replace all of these from a wrapper that monkeypatches the constants, as
+`scripts/_build_jad_exp081_kernel.py` already does for arm C. Their files would be vendored unmodified.
+
+**Known gap.** The research log at 13:28 asks for a pre-read of the model shards before a *second* server start. It was
+never built (15.3).
+
+### 15.2 Training data
+
+**What it trains on:**
+- Franzen-harness request logs (`<game>-<hash>_p0_requests.jsonl`: exact messages, inline images, template kwargs).
+- These are replayed as maximal snapshots through a dump server: no speculation, no CUDA graph, radix cache off,
+  REAP-448 on.
+- The server writes the target's final hyper-connection hidden states for assistant spans, plus 256 context rows
+  before each span, in FP8.
+- The loss is forward KL to the target's own logits. Sampled tokens therefore choose only the contexts, never the
+  labels.
+
+**Hygiene.** The pipeline drops assistant turns that exactly repeat an earlier turn, and turns that contain "stuck in a
+loop". It holds out 11 games (ar25 ft09 lp85 r11l re86 sb26 sc25 tn36 tr87 tu93 vc33).
+
+**Their run:**
+- 53 of 75 planned snapshots, stopped at the 33.5 GB dump cap.
+- 2.75M training rows, from 10 games. The data source was not the binding limit.
+- The source run, exp-073, used lossless acceptance.
+
+**Our equivalent: arm C v2's own output.** It is the best fit available, because it is exactly the traffic C+D will
+serve: the bundle harness, REAP-448, the ARC map and 14 streams.
+- 25 per-game logs, plus one stray file with a single response, to be ignored.
+- 2,952 responses and 5.87M completion tokens.
+- 34-123 MB per file, flat layout (§11.7, §13.0).
+- 0 repeated assistant turns.
+
+How to use it:
+- Mount it as a kernel source: `calamitychasm/arc3-jad-exp081` mounts its latest version, which is v2. **Do not push
+  a v3 before session A has run.**
+- Pin the file names and sizes from a kaggle-ops listing.
+
+Two caveats:
+- **Relaxed acceptance.** Arm C ran 0.5/0.5, so its contexts are slightly draft-biased. Their doc §12.5 option 3
+  judges this acceptable, because the KL target is the target's logits.
+- **Probe prompts would need our own dataset.** Sampling 154 prompts from the same logs with `fidelity_sample.py`
+  needs a dataset upload: about 40 MB, and kaggle-ops has no dataset-create op.
+
+The C+LM and C+U logs (today's runs) could be added for variety. But the dump cap, not supply, binds the v1 recipe.
+
+### 15.3 Compute and quota
+
+| Run | Wall / GPU-h | Notes |
+|---|---|---|
+| Session A v1 | 0.4 | Stopped at A2: storage 4-5x slow; the fixed 20-min boot wait was hit. Fixed (boot wait up to 50 min while the log grows) |
+| **Session A v2** | **88 min, ~1.5** | GO. 2 server boots (709 s and 1,601 s), dump about 25 min, A9 training 356 steps in 30 min |
+| Probe B0 (stock draft) / B1 (new draft) | ~0.5 / ~0.6 | B1 − B0 = +0.26 seq, +0.31 conc |
+| Session A2 (v2 recipe: 50 GB, 3 epochs) | 79 min run, after **~5 h held in the queue** | **FAILED** (infra). The second server load (A6) hit a cold page cache, read ~8-9 MB/s, and had 22 of 38 shards after the 50-min boot cap. Whether the 5 h queue hold counted against quota is unknown |
+| A full-length production check (exp-083/084) | ~2.4-2.5 each | |
+
+**Quota.** We have used about 11-13 of 30 h this week (resets Sat 2026-10-17 00:00 UTC), so about 17-19 h are left
+before any other queued run. The session's own deadline must be capped to bound the burn. The builder refuses a value
+under its steps' worst case (325 min with all steps), so the lean path below must drop steps for a cap of about 3-4 h
+to be accepted.
+
+**Failure modes and mitigations:**
+1. **Slow storage** (their lesson 0038), mostly near the quota reset. Do not push late Friday or early Saturday.
+2. **The cold-cache second boot.** The lean path below has *one* server start, the training-dump server, which loads
+   while the precache warms the page cache, as production boots do. That removes this failure mode outright.
+   - The full path needs the pre-read (about 4 min sequential) or `--set budgets_min.boot_max=100`.
+3. **The 2-GPU-session limit** and the first-push-rejected mount bug: push only into a free slot.
+
+### 15.4 Plumbing
+
+**How the draft is mounted.** Session A's A11 writes `/kaggle/working/mtp-draft/`: the stock draft's 12 files with the
+26 dense tensors replaced (4.16 GB), plus `arc3-draft-manifest.json`. The frozen tensors are checked byte-identical by
+sha256. Their submission notebooks mount it as a **kernel source**.
+- **Proven in a scored run.** exp-083 drew 26.04 on the hidden set while mounting `scottmahony/arc3-mtp-session-a`,
+  so the competition rerun does mount another private kernel's output.
+- **The one hazard: a kernel source mounts the latest version.** Their rule is: never push a new version of the session
+  kernel, and train later drafts under a new slug.
+- **Private model (optional).** They advise converting the draft to a private Kaggle model before a final selection
+  depends on it. That means downloading 4.16 GB (a GitHub Actions runner has room) and running
+  `kaggle models instances create`. Neither op exists in kaggle-ops.
+- **Our recommendation.** Keep the kernel source and freeze the slug.
+
+**Rules.**
+- `rules.md` limits *external* data and pretrained models to publicly available ones. Weights we train ourselves, from
+  our own runs of the public games, are our own solution's artifact, like its code.
+- `docs/SUBMITTING.md` and the scored exp-083 show the mechanism works.
+- One condition is prize-only: a winning entry would have to publish the training code and the weights (the CC-BY /
+  OSI clause). Their code is Apache-2.0, so this is unproblematic.
+- The weights are a derivative of the stock draft head and carry its licence status.
+- Neither `rules.md` nor their docs forbid mounting a private kernel output. Nothing found says otherwise.
+
+**Arm C's notebook change.** Rebuild with the vendored builder plus
+`--draft calamitychasm/<session-slug> --draft-manifest <pulled arc3-draft-manifest.json>`, under a **new kernel
+slug**, so arm C v2 stays as submitted. The builder then:
+- drops the stock-draft model source and adds the kernel source;
+- replaces cell 4's `DRAFT_MODEL_DIR` with a wait of up to 600 s in either mount layout;
+- checks the sha256 of the manifest and of the dense shard, and prints
+  `ours: MTP draft <path> after N s (manifest <sha12>, dense <sha12>)`. Add that line as a submit marker.
+
+Everything else is byte-identical to arm C v2: the six patches, D′, REAP-448, acceptance 0.5/0.5, the ARC map,
+14 streams and the 2400 s grace. This is exactly their exp-084 recipe with our weights.
+
+### 15.5 Risks to output quality
+
+1. **Sharpening under 0.5/0.5** (their §6.4). A better draft proposes the target's mode more often, so more tokens are
+   snapped or boosted, and output moves toward greedy decoding. Measured on the bundle arm, exp-084 against exp-081:
+   - exact repeated turns 0 / 3,022;
+   - output tokens per request 1,995 against 2,015;
+   - NameErrors 66 against 35-60, and tracebacks 305 against 224-252 per ~3,000 tool results: the high end of the
+     spread;
+   - score 48.83 / 114 against 50.00 / 113.
+
+   On the base arm (exp-083), tokens per request fell 12%: shorter, more frequent turns, with no repeats.
+2. **Hidden-set evidence is null at n = 1.** exp-083 (base + draft) drew 26.04, against 27.97 for the same base
+   without it.
+3. **Run-level gain is smaller than the accept gain.**
+   - Acceptance length rose 3.14 → 3.33 (+6%).
+   - Decode tok/s at equal batch rose +3.5% to +8%.
+   - Output tok/s over the whole run rose only 803 → 827 (+3.0%) on exp-084, and was flat (804) on exp-083. With the
+     draft, the run spends less time at a full batch.
+4. **Self-reinforcing data.** Training on relaxed traffic can teach copy continuations. Mitigations: the hygiene filter
+   (0 repeats in arm C v2) and KL to the target's logits.
+5. **Replica drift.** Their replica check passed twice on this exact wheel and model (mean diff −0.039, Pearson
+   0.95). The lean path skips it, so a mismatch would surface only in the C+D check run.
+
+### 15.6 Recommendation (pre-registered)
+
+**Conditional GO, lean path (L).** Run it this week only on spare quota, and never ahead of a scheduled arm's check
+run. Adoption rides on throughput alone, because draws cannot measure +3%. This follows CLAUDE.md's rule that a variant
+may take over an arm's slots if it is the same mechanism with better measured throughput.
+
+| Step | Work | GPU-h |
+|---|---|---|
+| L0 (CPU, ~1 agent-day) | Vendor their 9 session scripts, `build_mtp_session.py` and tests at `ccb7214`, unmodified. Write a wrapper that sets the owner and pins arm C v2's 25 log names and sizes. For the lean shape, the wrapper drops A2, A3, A5 and A10 and the prompts and reference inputs. Settings: `session_hours` about 4; `train.minutes` 75 (their v1 recipe: 34 GB, 2 epochs); hold-out games as theirs. Run their CPU stub-session tests against the trimmed notebook | 0 |
+| L1 | Session A (lean): cell 12 (5 min), one boot (10-27 min), A7 dump (25-45 min), A9 training (30 min), A11 export (5 min) | **~1.2** (≤ 2.5 on slow storage) |
+| L2 | C+D check run, full length (25 × 121 min) | **~2.3** |
+| Contingency | One retrain, or the full path's probes: R + B0 run in parallel (~1.0) and B1 (~0.6), which needs the prompts dataset | ≤ 2.5 |
+| **Total** | | **~3.5 nominal, ≤ 6.5 worst** |
+
+The full path (their exact pipeline) adds the prompts dataset and the R, B0 and B1 probes, about +1.6 GPU-h. It is
+worth taking only if L1's offline gain is borderline.
+
+**Drafter gate.** Read from session A's A9 held-out evaluation on the 11 held-out games.
+- **Pass:** realized accept gain ≥ **+0.20**, about +7% over about 2.75 (theirs +0.24); greedy gain ≥ +0.20; step-1 KL
+  down by at least 40%; top-1 agreement up at all three steps; A11 manifest written with the frozen tensors
+  byte-identical.
+- **Kill:** gain < +0.10.
+- **Between +0.10 and +0.20:** no C+D run. Run the full path's B0/B1 probe instead (pass mark +0.08, with the CI
+  above 0 in both passes).
+
+**C+D check run gate.** Baselines are arm C v2's: accept 3.12, 789.9 gen tok/s, decode median 920, 1,989
+tokens/request, 0 repeated turns, 2 retractions, 111 levels, 48.03.
+
+| Outcome | Criteria |
+|---|---|
+| **Pass** | All of the following: (1) all six of arm C's submit markers plus the `ours: MTP draft` line with the expected sha prefixes; (2) accept median ≥ **3.27**; (3) gen tok/s ≥ **805** (+2%) or decode median ≥ **948** (+3%); (4) exact repeated assistant turns ≤ 1, and "stuck in a loop" loop reports ≤ 2; (5) tokens/request 1,790-2,190; (6) tracebacks and NameErrors per tool result ≤ 1.3× arm C v2's; (7) retractions ≤ 4, 0 tracebacks outside teardown, 25/25 terminal; (8) levels ≥ 100 and score ≥ 42 (catastrophe check only) |
+| **Kill** | Any one of: draft mount or sha failure; accept < 3.17; both gen tok/s < 790 and decode median < 920; repeated turns > 2; levels < 95 or score < 40 |
+| **Otherwise** | Rerun once |
+
+**What a pass buys.**
+- C+D takes arm C's remaining slots.
+- If C+LM or C+U is adopted instead, rebuild it with `--draft` (about 2.3 GPU-h check each).
+- The weights stay valid only for this exact target and REAP list (their safeguard S6).
+
+**No-GO triggers:**
+- the week's quota is needed for a scheduled check run;
+- L0 shows A9 depends on the dropped steps;
+- arm C's own draws by 10-17 make another family the exploit arm.
+
+The no-GPU alternative is to ask JustAdev742 to publish their draft as a public Kaggle model.
