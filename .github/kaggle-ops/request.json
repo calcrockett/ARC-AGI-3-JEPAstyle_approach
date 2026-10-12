@@ -1,2 +1,1 @@
-{"id": "mtps-push-1", "ops": [{"op": "status"},
-  {"op": "push_kernel", "dir": "kaggle_submission_mtp_session/notebook"}]}
+{"id": "rules-1012", "ops": [{"op": "competition_pages"}]}
