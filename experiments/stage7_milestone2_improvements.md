@@ -2278,6 +2278,44 @@ only `arc3-jad-exp081-ulm` RUNNING, so the push went into the free slot and its 
 `jadd-out-1` (CLAUDE.md examples) against the C+D gate of 15.6; markers are arm C's six plus `ours: MTP draft` with
 `(manifest 6f408d58fd81, dense b677e0c4234c)`.
 
+### 15.9 The serving swap pre-built: bundle + draft, `calamitychasm/arc3-jad-exp081-ulm-draft` [CODE + BUILT, 2026-10-12; never pushed]
+
+**Why now.** Rule 3 of 16.6 allows one serving swap of the bundle, by 10-24, and the swapped kernel must be the bundle rebuilt
+with the swap and pass its own check run (16.5). Both inputs are in flight (the bundle v1, C+D v1). Building the C+draft swap now
+means it can be pushed the moment both runs pass, losing no day.
+
+**Build.** `python scripts/_build_jad_exp081_ulm_draft_kernel.py --draft-manifest kaggle_submission_jad_exp081_draft/arc3-draft-manifest.json
+--expect-sha 6f408d58...1d45`. Composed, not copied:
+- the bundle from `_build_jad_exp081_ulm_kernel.build_notebook()` (itself C+U + C+LM on the sha-pinned arm C v2);
+- C+D from `_build_jad_exp081_draft_kernel.build()` into a temp dir (their vendored builder + `--draft`, same manifest guard:
+  no default, no placeholder, `--expect-sha` checked);
+- the builder checks that C+D differs from arm C v2 in exactly markdown cell 0 and the one stock `DRAFT_MODEL_DIR` line of the
+  setup cell (replaced by the `# >>> ours (--draft)` block), and in metadata only in identity, `model_sources` and `kernel_sources`;
+  then applies exactly that edit to the bundle.
+
+**Diff vs the bundle** (40 cells each, notebook metadata identical):
+- cell 0 := C+D's cell 0 (byte-identical; its fork note describes C+D, not the bundle);
+- setup cell (index 13 in the bundle): the bundle's, with the stock drafter line replaced by C+D's block. It is the one cell in
+  neither input notebook; line-wise its changes vs arm C v2 are exactly the bundle's (`OURS_UNTRIED` env line, the 8-patch loop)
+  plus C+D's (the block);
+- metadata: the albucino drafter model source dropped, `kernel_sources` `["calamitychasm/arc3-mtp-session-a"]`, new identity;
+- the other 38 cells byte-identical to the bundle's (patch cells, D', C+U and LM install cells, the run cell with its three dumps).
+
+Notebook 857,931 bytes, sha256 `e2814c700ce302bd32b6ddb815a7d77cb24d9bed20028679835e2e9d4493a55e`; metadata
+`1342c86cac608faf714487524fed079d16230db0c48d336614b3480d748decae`; manifest copied next to it (`6f408d58...`).
+`tests/test_jad_exp081_ulm_draft.py` pins them, rebuilds byte-identically, checks the guard and the composition, and runs
+`tests/jad_ulm_probe.py` on both the bundle and this notebook: identical findings (the draft is a cell-4 path change only).
+
+**Swap check run** (25 x 121 min, ~2.3 GPU-h; push `jadulmd-push-1` only after both the bundle and C+D pass):
+- **Pass**: the bundle's 16.8 pass lines (markers, LM / untried / latch counters, clean run, key levels, levels >= 103,
+  score >= 44, tokens/request <= 2,190) plus C+D's 15.6 serving lines: `ours: MTP draft` with the sha prefixes, accept median
+  >= 3.27, gen tok/s >= 805 or decode median >= 948, loop reports <= 2, tracebacks/NameErrors per tool result <= 1.3x the bundle's.
+- **Kill**: the bundle's kill lines, or draft mount/sha failure, accept < 3.17, both tok/s < 790 and decode < 920, repeated
+  turns > 2.
+- Otherwise rerun once. The bundle keeps its slots until a swap run passes; then the swap takes the bundle's remaining slots and
+  needs n >= 2 of its own before selection (16.6 rule 3).
+- If C+D fails its own gate, this kernel is not pushed. If the bundle fails, the draft would ride on C+U instead (not built).
+
 ## 16. Slot plan 10-13..11-02 for P(top 1%) on the private ranking [ANALYSIS + MC, 2026-10-12; nothing built]
 
 Written 2026-10-12 ~07:30 UTC, before arm C draw 1 (57089293) scored. This section proposes a schedule. CLAUDE.md's schedule
