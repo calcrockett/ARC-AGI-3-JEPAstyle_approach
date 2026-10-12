@@ -857,3 +857,66 @@ def test_competition_pages_error_is_reported_not_raised(tmp_path):
         raise RuntimeError("403")
     api.competition_list_pages = boom
     assert runner(api, tmp_path).run({"id": "x", "ops": [{"op": "competition_pages"}]})[0]["result"] == "ERROR"
+
+
+# ---------------------------------------------------------------- GPU quota in the status op
+
+class QuotaApi(FakeApi):
+    """FakeApi plus build_kaggle_client() -> client.kernels.kernels_api_client.get_accelerator_quota_statistics."""
+
+    def __init__(self, stats=None, exc=None, **kw):
+        super().__init__(**kw)
+        self.stats, self.exc, self.quota_calls = stats, exc, 0
+        api = self
+
+        class Client:
+            def __enter__(self):
+                return NS(kernels=NS(kernels_api_client=NS(get_accelerator_quota_statistics=api._quota)))
+
+            def __exit__(self, *a):
+                return False
+        self._client = Client
+
+    def build_kaggle_client(self):
+        return self._client()
+
+    def _quota(self, req):
+        self.quota_calls += 1
+        if self.exc:
+            raise self.exc
+        return self.stats
+
+
+def quota_stats(used_h=19.75, reserved_h=0.5, allowed_h=30, refresh=dt.datetime(2026, 10, 17, tzinfo=dt.timezone.utc)):
+    h = lambda x: dt.timedelta(hours=x)  # noqa: E731
+    return NS(quota_refresh_time=refresh, tpu_quota=None,
+              gpu_quota=NS(time_used=h(used_h), time_reserved=h(reserved_h), total_time_allowed=h(allowed_h)))
+
+
+def test_status_prints_gpu_quota(tmp_path, capsys):
+    api = QuotaApi(stats=quota_stats())
+    r = runner(api, tmp_path).op_status({"op": "status"})
+    assert r["gpu_quota"] == {"used_h": 19.75, "reserved_h": 0.5, "allowed_h": 30.0, "left_h": 10.25,
+                              "refresh_time": "2026-10-17 00:00Z"}
+    assert "GPU_QUOTA used=19.75h reserved=0.5h allowed=30.0h left=10.25h refresh=2026-10-17 00:00Z" in capsys.readouterr().out
+    assert api.quota_calls == 1
+
+
+def test_status_quota_failure_is_logged_and_status_still_succeeds(tmp_path, capsys):
+    api = QuotaApi(exc=RuntimeError("403 forbidden"))
+    r = runner(api, tmp_path).op_status({"op": "status"})
+    assert "gpu_quota" not in r and r["result"] != "ERROR"
+    assert "GPU_QUOTA unavailable: RuntimeError: 403 forbidden" in capsys.readouterr().out
+
+
+def test_status_quota_unavailable_without_client_or_gpu_quota(tmp_path, capsys):
+    r = runner(FakeApi(), tmp_path).op_status({"op": "status"})  # FakeApi has no build_kaggle_client
+    assert "gpu_quota" not in r and "GPU_QUOTA unavailable" in capsys.readouterr().out
+    api = QuotaApi(stats=NS(quota_refresh_time=None, gpu_quota=None))
+    runner(api, tmp_path).op_status({"op": "status"})
+    assert "GPU_QUOTA unavailable: RuntimeError: response has no gpu_quota" in capsys.readouterr().out
+
+
+def test_gpu_quota_tolerates_missing_refresh_time(tmp_path):
+    q = runner(QuotaApi(stats=quota_stats(refresh=None)), tmp_path).gpu_quota()
+    assert q["refresh_time"] is None and q["left_h"] == 10.25

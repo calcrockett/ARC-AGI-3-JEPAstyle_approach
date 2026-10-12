@@ -7,6 +7,8 @@ Results go to the job log (each op prints a block; the last line is
 
 Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "status", "kernels": [...optional extra owner/slug]}
+                      (also prints the weekly GPU quota: GPU_QUOTA used=..h reserved=..h allowed=..h left=..h
+                       refresh=..., or GPU_QUOTA unavailable: <err>; a quota failure never fails the op)
   {"op": "push_kernel", "dir": "kaggle_submission_.../notebook"}
   {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true,
    "show_lines": N,
@@ -597,6 +599,30 @@ class Runner:
             print(f"  busy-check: status still UNKNOWN after retries for {len(unknown)} kernel(s): {unknown}")
         return busy
 
+    def gpu_quota(self) -> dict:
+        """Weekly GPU accelerator quota from the kernels API (kagglesdk
+        ``get_accelerator_quota_statistics``; the durations are ``timedelta``s). Returns hours:
+        {used_h, reserved_h, allowed_h, left_h, refresh_time}, left_h = allowed - used (as JustAdev742's
+        kaggle_quota.py). Raises on any failure; callers decide what that means."""
+        build = getattr(self.api, "build_kaggle_client", None)
+        if build is None:
+            raise RuntimeError("API object has no build_kaggle_client")
+        from kagglesdk.kernels.types.kernels_api_service import ApiGetAcceleratorQuotaStatisticsRequest
+        with build() as kaggle:
+            stats = kaggle.kernels.kernels_api_client.get_accelerator_quota_statistics(
+                ApiGetAcceleratorQuotaStatisticsRequest())
+        quota = getattr(stats, "gpu_quota", None)
+        if quota is None:
+            raise RuntimeError("response has no gpu_quota")
+
+        def hours(td) -> float:
+            return round((td.total_seconds() if hasattr(td, "total_seconds") else float(td or 0)) / 3600, 2)
+        used, allowed = hours(quota.time_used), hours(quota.total_time_allowed)
+        refresh = as_utc(getattr(stats, "quota_refresh_time", None))
+        return {"used_h": used, "reserved_h": hours(quota.time_reserved), "allowed_h": allowed,
+                "left_h": round(allowed - used, 2),
+                "refresh_time": f"{refresh:%Y-%m-%d %H:%M}Z" if refresh else None}
+
     # -- ops
     def op_status(self, op: dict) -> dict:
         res: dict = {"op": "status", "result": "OK"}
@@ -652,6 +678,13 @@ class Runner:
             vs = f"v{v}" if v is not None else "v?"
             print(f"  {k:55s} {vs:4s}  {status}" + (f"  ({fail[:120]})" if fail else ""))
             res["kernels"][k] = f"{vs} {status}"
+        try:
+            q = self.gpu_quota()
+            res["gpu_quota"] = q
+            print(f"GPU_QUOTA used={q['used_h']}h reserved={q['reserved_h']}h allowed={q['allowed_h']}h "
+                  f"left={q['left_h']}h refresh={q['refresh_time']}")
+        except Exception as exc:  # noqa: BLE001  (informational; never fail the status op)
+            print(f"GPU_QUOTA unavailable: {type(exc).__name__}: {exc}"[:300])
         return res
 
     def op_push_kernel(self, op: dict) -> dict:

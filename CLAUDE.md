@@ -380,15 +380,15 @@ deadline, so **quota does not bind before 10-24; the order and the one-at-a-time
 2. **Any required rerun** of the bundle or C+D (a near-pass gets one rerun; a kill gets none). Run them serially.
 3. **hic16 rerun last**, only if quota is left after 1-2 (keep >= 2 h in hand) or in the 10-17 window. **C+D is preferred over hic16 for the single serving
    swap** (rule 3): C+D has a +0.23 accept gain and a throughput bar it can meet; hic16 is +1.8% on C and +1.6% on B.
-Re-tally when the bundle and C+D results are read; replace the estimates above with a real `quota` read once the status op prints it.
+Re-tally when the bundle and C+D results are read; replace the estimates above with the real `GPU_QUOTA` line (the status op now prints it; first live read pending, untested against the real API).
 
-**Does the SDK expose the quota? Yes.** `kagglesdk` 0.1.37 (installed, with `kaggle` 2.2.4):
+**The SDK exposes the quota, and the status op now prints it (implemented, not yet run against the real API).** `kagglesdk` 0.1.37:
 `kaggle.kernels.kernels_api_client.get_accelerator_quota_statistics(ApiGetAcceleratorQuotaStatisticsRequest())` returns `quota_refresh_time`
-(the window reset, a datetime) and `gpu_quota` / `tpu_quota`, each with `time_used`, `time_reserved` (running sessions' reservation),
-`total_time_allowed`, `minimum_time_allowed`, `is_pay_to_scale_enabled`, `has_ever_run` (timedeltas). A `status` op could print it by taking
-`api.build_kaggle_client()` the way `scripts/kaggle_submit_when_ready.py` (line ~128) does, calling the method above inside `Runner.op_status`
-(`scripts/kaggle_ops.py`, ~line 601), and adding `res["gpu_quota"] = {used_h, reserved_h, allowed_h, left_h, refresh_utc}` plus one log line; or a
-separate `quota` op. JustAdev742's `scripts/kaggle_quota.py` is a 25-line example. Not implemented; untested from here (no kaggle.com access).
+(a datetime) and `gpu_quota` / `tpu_quota` with `time_used`, `time_reserved`, `total_time_allowed` (timedeltas). `Runner.gpu_quota()` in
+`scripts/kaggle_ops.py` reads it through `api.build_kaggle_client()`; `op_status` logs `GPU_QUOTA used=..h reserved=..h allowed=..h left=..h refresh=...`
+(left = allowed - used) and sets `res["gpu_quota"]`; any failure logs `GPU_QUOTA unavailable: <err>` and the op still succeeds. `push_kernel` does NOT
+gate on it (a `left - 12 x (running + 1) < 0` skip was left out: the tally above says one session is accepted at ~19.8 h used, which that rule would
+refuse, and whether `time_reserved` is already inside `time_used` is unread; a wrong skip costs more than a Kaggle-side refusal). Decide after the first live read.
 
 **Dev-box action queue (in order):**
 
@@ -483,7 +483,8 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   printing `NO_CREDENTIALS`.
 - **Request**: `{"id": "<new unique id>", "ops": [...]}`, executed in order. Ops: `status`
   (last 25 submissions, leaderboard bars at top 1/5/10%, our row, top 40, status of every kernel in
-  the tables above); read-only `list_kernels` `{"sort_by": "scoreDescending|dateCreated|voteCount",
+  the tables above, and the weekly GPU quota as one `GPU_QUOTA used=..h reserved=..h allowed=..h left=..h refresh=...` line
+  plus `res["gpu_quota"]`, or `GPU_QUOTA unavailable: <err>` if the call fails -- the op still succeeds); read-only `list_kernels` `{"sort_by": "scoreDescending|dateCreated|voteCount",
   "page_size": 50, "pages": 2, "search": optional}` (public kernels of the competition; kagglesdk's
   metadata has no score field, so scores are mostly `-`) and `pull_kernel` `{"kernel": "owner/slug",
   "max_lines": 200}` (prints notebook cells mentioning score/prompt/context/stream/audit/memory); read-only `competition_pages` `{"grep": [regex...], "context": 2, "max_lines": 400, "page": optional name}` (the competition's rules/overview/evaluation/data pages via kagglesdk `list_competition_pages`, tags stripped; prints page names and the lines matching the case-insensitive greps, default `select|final submission|private|public leaderboard|rerun|re-run|best`; full text in the artifact); `push_kernel` `{"dir": "kaggle_submission_x/notebook"}` (skipped as
