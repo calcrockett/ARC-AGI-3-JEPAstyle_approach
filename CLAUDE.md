@@ -536,6 +536,10 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   `kernel_output` prints the speed digest (gen tok/s, retractions, accept length, KV pool/peak) used by the
   turbo pass criteria, plus the `request_log` line (mean completion tokens per request, repeated assistant
   turns; needs the check run's `*_requests.jsonl`); read both before arming `submit`.
+- **Per-game transcripts (opt-in, read-only)**: `"transcripts": {"games": ["sp80", "lf52"] | "all", "max_lines_per_game": 60}` on a
+  `kernel_output` op (also `turn_chars`, `first_turns`, `last_turns`, `list_actions`, `count`). Per game's `<game>*requests.jsonl` it
+  prints a per-level timeline (requests, tokens, `action(` count, steps, cleared/ended), tool-result counts (StaleStateActionError,
+  NameError, Traceback, `[view] scrolled`, GAME_OVER, RESET) and the first 2 / last 3 assistant turns of the last level. <= 3,000 lines, scrubbed.
 
 ### Branches merged into this one (2026-10-09)
 

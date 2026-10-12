@@ -9,7 +9,12 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "status", "kernels": [...optional extra owner/slug]}
   {"op": "push_kernel", "dir": "kaggle_submission_.../notebook"}
   {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true,
-   "show_lines": N}   (grep only reports present/absent; show_lines prints up to N matching lines per marker from all *.log)
+   "show_lines": N,
+   "transcripts": {"games": ["sp80", ...] | "all", "max_lines_per_game": 60}}
+                      (grep only reports present/absent; show_lines prints up to N matching lines per marker from all *.log;
+                       transcripts prints, per game, a per-level timeline from that game's *_requests.jsonl, counts of
+                       StaleStateActionError / NameError / Traceback / [view] scrolled / GAME_OVER / RESET in the tool
+                       results and the first 2 / last 3 assistant turns of the level the game ended on; bounded, scrubbed)
   {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
    "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
   {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
@@ -35,6 +40,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import io
 import json
 import math
@@ -135,6 +141,8 @@ def parse_request(raw: str) -> dict:
                 raise RequestError(f"ops[{i}]: 'cells' must be a list of cell indexes")
         if kind == "kernel_output" and not isinstance(op.get("grep", []), list):
             raise RequestError(f"ops[{i}]: 'grep' must be a list")
+        if kind == "kernel_output" and op.get("transcripts") is not None:
+            _check_transcripts(op["transcripts"], i)
     return req
 
 
@@ -147,6 +155,23 @@ def _check_list_kernels(op: dict, i: int) -> None:
             raise RequestError(f"ops[{i}]: '{key}' must be an integer in 1..{hi}")
     if op.get("search") is not None and not isinstance(op["search"], str):
         raise RequestError(f"ops[{i}]: 'search' must be a string")
+
+
+def _check_transcripts(t: Any, i: int) -> None:
+    if not isinstance(t, dict):
+        raise RequestError(f"ops[{i}]: 'transcripts' must be an object")
+    g = t.get("games", "all")
+    if g != "all" and not (isinstance(g, list) and g and len(g) <= 60
+                           and all(isinstance(x, str) and re.fullmatch(r"[\w.-]{1,40}", x) for x in g)):
+        raise RequestError(f"ops[{i}]: transcripts.games must be \"all\" or a non-empty list of game ids")
+    for key, lo, hi in (("max_lines_per_game", 10, 500), ("turn_chars", 100, 2000), ("first_turns", 0, 10),
+                        ("last_turns", 0, 10), ("list_actions", 0, 100)):
+        v = t.get(key)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+            raise RequestError(f"ops[{i}]: transcripts.{key} must be an integer in {lo}..{hi}")
+    c = t.get("count", [])
+    if not isinstance(c, list) or len(c) > 10 or not all(isinstance(x, str) and 1 <= len(x) <= 60 for x in c):
+        raise RequestError(f"ops[{i}]: transcripts.count must be a list of up to 10 short strings")
 
 
 def _check_dir(d: Any, i: int) -> None:
@@ -570,6 +595,12 @@ class Runner:
         dest.mkdir(parents=True, exist_ok=True)
         self.api.kernels_output(k, path=str(dest), force=True)
         res.update(digest(dest, op.get("grep") or []))
+        if op.get("transcripts") is not None:
+            try:
+                res["transcripts"] = transcripts_report(dest, op["transcripts"])
+            except Exception as exc:  # noqa: BLE001  (an excerpt failure must not lose the digest)
+                print(f"  transcripts FAILED: {type(exc).__name__}: {exc}"[:300])
+                res["transcripts"] = f"error {type(exc).__name__}: {exc}"[:200]
         if op.get("show_lines"):
             show_matches(dest, op.get("grep") or [], int(op["show_lines"]))
         res["artifact_dir"] = str(dest)
@@ -822,6 +853,412 @@ def per_game_digest(out: Path) -> dict | None:
     return {"table": rows, "total_levels": sum(r["levels"] for r in rows),
             "hard_15": sub(HARD_15), "easy_10": sub(EASY_10),
             "watch": {g: by[g]["levels"] if g in by else None for g in WATCH_GAMES}}
+
+
+# ---------------------------------------------------------------- transcripts (opt-in kernel_output option)
+# Reads a game's `<game>...requests.jsonl` (event "response": the request `messages`, usually ending with the
+# model's reply, plus usage / action / analysis_step) and prints a bounded, scrubbed digest to the job log.
+# Layouts handled: flat `<game>_p0_requests.jsonl` (our m2 kernels), `<game>-<hash>_p0_requests.jsonl` and nested
+# directories (matched by any path part that starts with the game id). The record layout is probed, not assumed:
+# the header lines list the record keys and message roles, and a log with no `step N, level L` markers falls back
+# to one pooled "L?" bucket plus a sample of the first prompt, so a layout surprise is visible in one run.
+TX_TOTAL_LINES = 3000
+TX_LINE_CHARS = 700
+TX_COUNTS = (("StaleStateActionError", r"StaleStateActionError"), ("NameError", r"NameError"),
+             ("Traceback", r"Traceback"), ("[view] scrolled", r"\[view\] scrolled"),
+             ("GAME_OVER", r"GAME[_ ]OVER"), ("RESET", r"RESET"))
+TX_STATE_RE = re.compile(r"\bstep\s+(\d+)\s*[,;|]\s*level\s+(\d+)\b", re.I)
+TX_ACTION_RE = re.compile(r"\baction\(((?:[^()]|\([^()]*\))*)\)")
+TX_WIN_RE = re.compile(r"\bWIN\b")
+TX_TIME_KEYS = ("timestamp", "ts", "time", "created_at", "elapsed_s", "elapsed", "wall_time", "t")
+TX_REQUESTS_SUFFIX = re.compile(r"(_p\d+)?_?requests\.jsonl$")
+_TX_SCRUB = [
+    (re.compile(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=]+"), "[b64]"),
+    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "[uuid]"),
+    (re.compile(r"(?i)\b(?:sk|pk|rk|ghp|gho|ghs|ghu|github_pat|hf|xox[abp]|AKIA|AIza|KGAT)[-_][A-Za-z0-9_\-]{10,}"),
+     "[REDACTED]"),
+    (re.compile(r"(?i)\b(bearer)\s+\S+"), r"\1 [REDACTED]"),
+    (re.compile(r"(?i)\b(authorization)\b([:=\s]+)(?!bearer\b)\S+"), r"\1\2[REDACTED]"),
+    (re.compile(r"(?i)\b([a-z_]*(?:api[_-]?key|secret|token|passw(?:or)?d|credential)[a-z_]*|kaggle_key)(\"?\s*[:=]\s*)"
+                r"(\"[^\"]*\"|'[^']*'|\S+)"), r"\1\2[REDACTED]"),
+    (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "[REDACTED]"),
+    (re.compile(r"\b(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[A-Za-z])[A-Za-z0-9_\-]{32,}\b"), "[REDACTED]"),
+]
+
+
+def tx_scrub(text: Any) -> str:
+    """Remove base64 payloads and anything that looks like a credential (long tokens, key=value secrets, uuids)."""
+    s = text if isinstance(text, str) else str(text)
+    for pat, rep in _TX_SCRUB:
+        s = pat.sub(rep, s)
+    return s
+
+
+def _tx_flat(text: str, n: int, tail: bool = False) -> str:
+    s = re.sub(r"\s+", " ", tx_scrub(text)).strip()
+    if len(s) <= n:
+        return s
+    return ("..." + s[-max(n - 3, 0):]) if tail else (s[:max(n - 3, 0)] + "...")
+
+
+def _tx_blocks_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, str):
+                parts.append(b)
+            elif isinstance(b, dict):
+                if b.get("type") in ("image_url", "image", "input_image"):
+                    parts.append("[image]")
+                elif isinstance(b.get("text"), str):
+                    parts.append(b["text"])
+                elif "content" in b and b.get("type") != "tool_use":
+                    parts.append(_tx_blocks_text(b["content"]))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _tx_args_text(args: Any) -> str:
+    v = args
+    if isinstance(args, str):
+        try:
+            v = json.loads(args)
+        except ValueError:
+            return args
+    if isinstance(v, dict):
+        return "\n".join(x if isinstance(x, str) else json.dumps(x, default=str) for x in v.values())
+    return "" if v is None else str(v)
+
+
+def _tx_calls(m: dict) -> list[str]:
+    out = []
+    for tc in m.get("tool_calls") or []:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc["function"] if isinstance(tc.get("function"), dict) else tc
+        out.append(_tx_args_text(fn.get("arguments", fn.get("input"))))
+    if isinstance(m.get("content"), list):
+        out += [_tx_args_text(b.get("input")) for b in m["content"]
+                if isinstance(b, dict) and b.get("type") == "tool_use"]
+    return out
+
+
+def _tx_info(m: dict) -> dict:
+    """One message -> {kind: opener|tool|assistant|other, text, calls, reasoning, key}. Images are never read."""
+    role = str(m.get("role"))
+    text = _tx_blocks_text(m.get("content"))
+    calls = _tx_calls(m) if role == "assistant" else []
+    reasoning = ""
+    if role == "assistant":
+        r = m.get("reasoning_content") or m.get("reasoning")
+        reasoning = r if isinstance(r, str) else _tx_blocks_text(r)
+    blocks = m.get("content") if isinstance(m.get("content"), list) else []
+    is_tool = role in ("tool", "function") or (role == "user" and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks))
+    kind = "tool" if is_tool else "assistant" if role == "assistant" else "opener" if role == "user" else "other"
+    h = hashlib.sha1()
+    for part in (role, text, "\x00".join(calls), reasoning, str(m.get("tool_call_id") or "")):
+        h.update(part.encode("utf-8", "replace"))
+        h.update(b"\x01")
+    return {"kind": kind, "text": text, "calls": calls, "reasoning": reasoning, "key": h.digest()}
+
+
+def _tx_state(text: str) -> tuple[int, int, str] | None:
+    """The last `step N, level L` marker of a message: (step, level, the line it sits on)."""
+    last = None
+    for last in TX_STATE_RE.finditer(text):
+        pass
+    if last is None:
+        return None
+    a = text.rfind("\n", 0, last.start()) + 1
+    b = text.find("\n", last.end())
+    return int(last.group(1)), int(last.group(2)), text[a:(b if b >= 0 else len(text))]
+
+
+def _tx_new_start(seq: list, keys: list) -> int | None:
+    """Index in `keys` where the messages not yet in `seq` begin. Every request repeats the (trimmed) history, so
+    the last known message is looked up in `keys` and the run of equal messages before it is measured backwards
+    (the best-matching occurrence wins, so repeated identical tool results do not confuse it).
+    None when the last known message is not in `keys` at all."""
+    if not seq:
+        return 0
+    best, best_len = None, 0
+    for p in range(len(keys) - 1, -1, -1):
+        if keys[p] != seq[-1]:
+            continue
+        n = 1
+        while p - n >= 0 and n < len(seq) and keys[p - n] == seq[-1 - n]:
+            n += 1
+        if n > best_len:
+            best, best_len = p + 1, n
+        if best_len >= len(seq):
+            break
+    return best
+
+
+def _tx_fit(parts: list[tuple[str, str, bool]], total: int) -> str:
+    """Join labelled parts (label, text, keep_tail) into about `total` characters: the budget is shared evenly and
+    what short parts do not use goes to the longer ones."""
+    parts = [(lab, re.sub(r"\s+", " ", tx_scrub(t)).strip(), tail) for lab, t, tail in parts if t and t.strip()]
+    order = sorted(range(len(parts)), key=lambda i: len(parts[i][1]))
+    left, share = total, {}
+    for n, i in enumerate(order):
+        share[i] = min(len(parts[i][1]), max(left // (len(order) - n), 20))
+        left -= share[i]
+    out = []
+    for i, (lab, t, tail) in enumerate(parts):
+        n = share[i]
+        if len(t) > n:
+            t = ("..." + t[-max(n - 3, 0):]) if tail else (t[:max(n - 3, 0)] + "...")
+        out.append(f"{lab}: {t}")
+    return " | ".join(out)
+
+
+def tx_scan_file(path: Path, cfg: dict) -> dict:
+    """Stream one requests.jsonl: per-level stats, tool-result counts, assistant turns. Memory is bounded: only
+    short clips of assistant turns are kept; tool results are counted and dropped."""
+    counters = [(lab, re.compile(pat)) for lab, pat in TX_COUNTS] + \
+               [(x, re.compile(re.escape(x))) for x in cfg.get("count", [])]
+    n_act = int(cfg.get("list_actions", 20))
+    levels: dict[Any, dict] = {}
+
+    def lv(level):
+        return levels.setdefault(level, {"reqs": 0, "comp": 0, "calls": 0, "acts": 0, "a_min": None, "a_max": None,
+                                         "steps": [None, None], "first": None, "last": None, "t": [None, None],
+                                         "counts": Counter(), "win": 0, "act_args": []})
+    tot = {lab: [0, 0, 0] for lab, _ in counters}      # per label: total, tool results containing it, max in one
+    seq: list = []
+    turns: list[dict] = []
+    cur: dict = {"level": None}
+    info: dict = {"records": 0, "bytes": path.stat().st_size, "keys": None, "roles": None, "dups": 0,
+                  "markers": 0, "sample_first": None, "bad_lines": 0}
+    prev_level = None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        if '"event": "response"' not in line and '"event":"response"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            info["bad_lines"] += 1
+            continue
+        if not isinstance(rec, dict):
+            continue
+        msgs = [m for m in (rec.get("messages") or []) if isinstance(m, dict)]
+        extra = rec.get("message") or rec.get("response")
+        if not extra and isinstance(rec.get("choices"), list) and rec["choices"] and isinstance(rec["choices"][0], dict):
+            extra = rec["choices"][0].get("message")
+        if isinstance(extra, dict) and extra.get("role") == "assistant" and (
+                not msgs or _tx_info(extra)["key"] != _tx_info(msgs[-1])["key"]):
+            msgs = msgs + [extra]          # layouts that log the reply beside the request, not inside it
+        infos = [_tx_info(m) for m in msgs if m.get("role") != "system"]
+        info["records"] += 1
+        if info["keys"] is None:
+            info["keys"] = sorted(rec)
+            info["roles"] = dict(Counter(str(m.get("role")) for m in msgs))
+            first_user = next((i for i in infos if i["kind"] == "opener"), None)
+            info["sample_first"] = _tx_flat(first_user["text"], 300) if first_user else None
+        keys = [i["key"] for i in infos]
+        start = _tx_new_start(seq, keys)
+        if start is None:               # no overlap with what was seen: take only messages never seen before
+            seen = set(seq)
+            new = [i for i in infos if i["key"] not in seen]
+            info["dups"] += 1
+        else:
+            new = infos[start:]
+        seq.extend(i["key"] for i in new)
+        if len(seq) > 4000:
+            del seq[:len(seq) - 2000]
+        for it in new:
+            st = _tx_state(it["text"]) if it["kind"] in ("opener", "tool") else None
+            if it["kind"] == "tool":        # counted against the level the call was made in, before any new marker
+                for lab, pat in counters:
+                    n = len(pat.findall(it["text"]))
+                    if n:
+                        lv(cur["level"])["counts"][lab] += n
+                        tot[lab][0] += n
+                        tot[lab][1] += 1
+                        tot[lab][2] = max(tot[lab][2], n)
+                lv(cur["level"])["win"] += len(TX_WIN_RE.findall(it["text"]))
+            if st:
+                info["markers"] += 1
+                cur["level"] = st[1]
+                L = lv(st[1])
+                L["steps"] = [st[0] if L["steps"][0] is None else min(L["steps"][0], st[0]),
+                              st[0] if L["steps"][1] is None else max(L["steps"][1], st[0])]
+                L["first"] = L["first"] or st[2]
+                L["last"] = st[2]
+            if it["kind"] == "assistant":
+                L = lv(cur["level"])
+                L["calls"] += len(it["calls"])
+                for code in it["calls"]:
+                    for mm in TX_ACTION_RE.finditer(code):
+                        L["acts"] += 1
+                        if len(L["act_args"]) < n_act:
+                            L["act_args"].append(_tx_flat(mm.group(1), 40))
+                turns.append({"level": cur["level"], "rec": info["records"], "reasoning": it["reasoning"][-900:],
+                              "text": it["text"][:900], "code": "\n".join(it["calls"])[:900],
+                              "step": L["steps"][1]})
+        # the request's own level: the last marker anywhere in its messages
+        level = prev_level
+        for it in reversed(infos):
+            st = _tx_state(it["text"]) if it["kind"] in ("opener", "tool") else None
+            if st:
+                level = st[1]
+                break
+        prev_level = level
+        L = lv(level)
+        L["reqs"] += 1
+        L["comp"] += int((rec.get("usage") or {}).get("completion_tokens") or 0)
+        a = rec.get("action")
+        if isinstance(a, int) and not isinstance(a, bool):
+            L["a_min"] = a if L["a_min"] is None else min(L["a_min"], a)
+            L["a_max"] = a if L["a_max"] is None else max(L["a_max"], a)
+        for k in TX_TIME_KEYS:
+            if rec.get(k) is not None:
+                tv = str(rec[k])[:26]
+                L["t"] = [L["t"][0] or tv, tv]
+                break
+    info.update(levels=levels, totals=tot, turns=turns, ended=prev_level)
+    return info
+
+
+def _tx_level_key(level) -> tuple:
+    return (1, 0) if level is None else (0, level)
+
+
+def tx_game_lines(game: str, path: Path, root: Path, cfg: dict) -> tuple[list[str], list[str], list[str], dict]:
+    """(header, timeline, excerpt, summary) for one requests file. Unbounded; the caller applies the line budget."""
+    n_first, n_last = int(cfg.get("first_turns", 2)), int(cfg.get("last_turns", 3))
+    chars = int(cfg.get("turn_chars", 400))
+    inf = tx_scan_file(path, cfg)
+    lv = inf["levels"]
+    rel = path.relative_to(root) if path.is_relative_to(root) else path
+    head = [f"==== {game}: {rel} ({inf['bytes'] / 1e6:.1f} MB, {inf['records']} response records"
+            + (f", {inf['bad_lines']} unreadable lines" if inf["bad_lines"] else "") + ")",
+            f"  record keys {inf['keys']}; message roles in the first record {inf['roles']}",
+            "  tool-result counts: " + "  ".join(
+                f"{lab}={t[0]}" + (f" (in {t[1]} results, max {t[2]}/result)" if t[0] else "")
+                for lab, t in inf["totals"].items())]
+    if not inf["markers"]:
+        head.append("  NO 'step N, level L' state markers found: every request is pooled as level '?'. "
+                    f"First user message: {inf['sample_first']}")
+    elif inf["dups"]:
+        head.append(f"  note: {inf['dups']} records shared no message with the previous one "
+                    "(only unseen messages were counted)")
+    top = max((k for k in lv if k is not None), default=None)
+    timeline = ["  per level: requests, completion tokens | tool calls, action() occurrences, action counter | "
+                "steps | flagged tool results | outcome | first/last state line"]
+    for level in sorted(lv, key=_tx_level_key):
+        s = lv[level]
+        name = "?" if level is None else str(level)
+        if level is None:
+            outcome = "unattributed"
+        elif level != top:
+            outcome = "cleared (a later level was reached)"
+        else:
+            outcome = "ENDED HERE, not cleared" + (f" (WIN seen x{s['win']})" if s["win"] else "")
+        bits = [f"L{name}: {s['reqs']} req, {s['comp']:,} tok",
+                f"{s['calls']} calls, {s['acts']} action()"
+                + (f", counter {s['a_min']}-{s['a_max']}" if s["a_min"] is not None else ""),
+                f"steps {s['steps'][0]}-{s['steps'][1]}" if s["steps"][0] is not None else "steps ?",
+                ", ".join(f"{k} {v}" for k, v in s["counts"].items()) or "none flagged",
+                outcome]
+        if s["t"][0] is not None:
+            bits.append(f"t {s['t'][0]} .. {s['t'][1]}")
+        if s["first"]:
+            bits.append(f"first [{_tx_flat(s['first'], 110)}] last [{_tx_flat(s['last'], 110)}]")
+        timeline.append("  " + " | ".join(bits))
+        if s["act_args"]:
+            timeline.append(f"      action() args (first {len(s['act_args'])}): " + "; ".join(s["act_args"]))
+    tail: list[str] = []
+    ended = inf["ended"] if inf["ended"] is not None else top
+    mine = [t for t in inf["turns"] if t["level"] == ended]
+    if not inf["turns"]:
+        tail.append("  no assistant turns found in the request messages")
+    else:
+        pick = mine if len(mine) <= n_first + n_last else mine[:n_first] + (mine[-n_last:] if n_last else [])
+        tail.append(f"  game ended on level {'?' if ended is None else ended}: {len(mine)} assistant turns there, "
+                    f"showing the first {n_first} and last {n_last}")
+        for t in pick:
+            body = _tx_fit([("R", t["reasoning"], True), ("T", t["text"], False), ("CALL", t["code"], False)], chars)
+            tail.append(f"   [rec {t['rec']}, step {t['step']}] {body or '(empty turn)'}")
+    summary = {"records": inf["records"], "markers": inf["markers"], "ended_level": ended,
+               "levels": {("?" if k is None else str(k)): {"reqs": v["reqs"], "tok": v["comp"], "calls": v["calls"],
+                                                          "action_calls": v["acts"], "counts": dict(v["counts"])}
+                          for k, v in lv.items()},
+               "counts": {lab: t[0] for lab, t in inf["totals"].items()}}
+    return head, timeline, tail, summary
+
+
+def _tx_fit_budget(head: list[str], timeline: list[str], tail: list[str], budget: int) -> list[str]:
+    """Keep the header, counts and the ended-level excerpt; spend what is left on the timeline (newest levels
+    last, since the game ended on the last one)."""
+    room = max(budget - len(head) - len(tail), 3)
+    if len(timeline) > room:
+        keep = room - 2
+        timeline = [timeline[0], f"  ... {len(timeline) - 1 - keep} earlier timeline lines omitted (max_lines_per_game)"] \
+            + timeline[len(timeline) - keep:]
+    out = head + timeline + tail
+    if len(out) > budget:
+        out = out[:budget - 1] + [f"  ... truncated at {budget} lines"]
+    return out
+
+
+def tx_find_files(root: Path, game: str) -> list[Path]:
+    """requests files of `game`: any path part equal to the id or starting with it followed by a non-alphanumeric."""
+    g = game.lower()
+    hits = []
+    for p in sorted(root.rglob("*requests.jsonl")):
+        if not p.is_file():
+            continue
+        parts = [x.lower() for x in p.relative_to(root).parts]
+        parts[-1] = TX_REQUESTS_SUFFIX.sub("", parts[-1])
+        if any(x == g or (x.startswith(g) and not x[len(g)].isalnum()) for x in parts):
+            hits.append(p)
+    return hits
+
+
+def transcripts_report(out: Path, cfg: dict) -> dict:
+    """Print the transcript digest for the requested games; returns a compact summary for the result JSON."""
+    files = sorted(p for p in out.rglob("*requests.jsonl") if p.is_file())
+    games = cfg.get("games", "all")
+    per_game = int(cfg.get("max_lines_per_game", 60))
+    print(f"  == transcripts: {len(files)} requests.jsonl files in the output; games {games}; "
+          f"<= {per_game} lines per game, <= {TX_TOTAL_LINES} lines in all")
+    if not files:
+        print("  no *requests.jsonl in this kernel output (was save_request_logs on?)")
+        return {"files": 0}
+    if games == "all":
+        plan = [(TX_REQUESTS_SUFFIX.sub("", p.name), [p]) for p in files]
+    else:
+        plan = [(g, tx_find_files(out, g)) for g in games]
+    printed, summary = 0, {"files": len(files), "games": {}}
+    for game, paths in plan:
+        if printed >= TX_TOTAL_LINES:
+            print(f"  ... line cap {TX_TOTAL_LINES} reached; games not shown: "
+                  f"{[g for g, _ in plan if g not in summary['games']]}")
+            break
+        if not paths:
+            print(f"  == {game}: no matching requests file. Files: "
+                  + ", ".join(str(p.relative_to(out)) for p in files[:30]) + (" ..." if len(files) > 30 else ""))
+            summary["games"][game] = None
+            printed += 1
+            continue
+        for path in paths:
+            head, timeline, tail, small = tx_game_lines(game, path, out, cfg)
+            lines = _tx_fit_budget(head, timeline, tail, min(per_game, TX_TOTAL_LINES - printed))
+            for ln in lines:
+                print("  " + ln[:TX_LINE_CHARS])
+            printed += len(lines)
+            summary["games"][game if len(paths) == 1 else f"{game}:{path.name}"] = small
+            if printed >= TX_TOTAL_LINES:
+                break
+    summary["lines_printed"] = printed
+    return summary
 
 
 def digest(out: Path, markers: list[str]) -> dict:
