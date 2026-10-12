@@ -1,1 +1,1 @@
-{"id": "jadlm-push-1", "ops": [{"op": "status"}, {"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_lm/notebook"}]}
+{"id": "jad81-tx-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081", "grep": ["[view] scrolled", "StaleStateActionError"], "transcripts": {"games": ["sp80", "lf52", "g50t", "bp35", "sk48", "wa30", "tn36", "vc33", "cn04"], "max_lines_per_game": 80}}]}
