@@ -24,6 +24,11 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
   {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
    "cells": [16], "cell_lines": 40}   (read-only: downloads the notebook source, prints cells that
    mention score/prompt/context/stream/audit/memory, or only the listed cell indexes)
+  {"op": "competition_pages", "grep": ["select", ...], "context": 2, "max_lines": 400, "page": "optional name"}
+                      (read-only: the competition's rules / overview / evaluation / data pages via kagglesdk
+                       list_competition_pages, tags stripped; prints each page name and size, then the lines matching
+                       the case-insensitive grep regexes with `context` lines around them, bounded by max_lines;
+                       full page text goes to the artifact dir)
   {"op": "submit", "kernel": "owner/slug", "version": N, "message": "...",
    "markers": [...], "counters": ["level_memory_summary.json", ...],
    "require_zero": {"history_cache_summary.json": ["write_fallbacks", ...]},
@@ -67,7 +72,7 @@ COMPETITION = ksr.COMPETITION
 OWNER = "calamitychasm"
 TEAM_PATTERNS = ("how bad can it go", "calamitychasm")
 REQUEST = ROOT / ".github" / "kaggle-ops" / "request.json"
-OPS = ("status", "push_kernel", "kernel_output", "submit", "list_kernels", "pull_kernel")
+OPS = ("status", "push_kernel", "kernel_output", "submit", "list_kernels", "pull_kernel", "competition_pages")
 MUTATING = ("push_kernel", "submit")
 BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
 GPU_LIMIT = 2
@@ -80,6 +85,10 @@ LIST_SORTS = ("hotness", "commentCount", "dateCreated", "dateRun", "relevance", 
 PULL_KEYWORDS = ("score", "prompt", "context", "stream", "audit", "memory")
 PULL_MAX_LINES = 200
 PULL_CELL_LINES = 40
+PAGES_MAX_LINES = 400
+PAGES_CONTEXT = 2
+PAGES_LINE_CHARS = 400
+PAGES_GREP = ("select", "final submission", "private", "public leaderboard", "rerun", "re-run", "best")
 RATE_LIMIT_BACKOFF_S = (5, 10, 20)
 _RATE_LIMITED = ("429", "too many requests", "rate limit", "rate-limit", "quota exceeded")
 
@@ -143,6 +152,8 @@ def parse_request(raw: str) -> dict:
             if not isinstance(cells, list) or not all(isinstance(c, int) and not isinstance(c, bool) and c >= 0
                                                       for c in cells):
                 raise RequestError(f"ops[{i}]: 'cells' must be a list of cell indexes")
+        if kind == "competition_pages":
+            _check_competition_pages(op, i)
         if kind == "kernel_output" and not isinstance(op.get("grep", []), list):
             raise RequestError(f"ops[{i}]: 'grep' must be a list")
         if kind == "kernel_output" and op.get("transcripts") is not None:
@@ -150,6 +161,23 @@ def parse_request(raw: str) -> dict:
         if kind == "kernel_output":
             _check_output_files(op, i)
     return req
+
+
+def _check_competition_pages(op: dict, i: int) -> None:
+    g = op.get("grep", [])
+    if not isinstance(g, list) or not all(isinstance(x, str) and x for x in g):
+        raise RequestError(f"ops[{i}]: 'grep' must be a list of non-empty regex strings")
+    for x in g:
+        try:
+            re.compile(x)
+        except re.error as exc:
+            raise RequestError(f"ops[{i}]: bad grep regex {x!r}: {exc}") from exc
+    for key, lo, hi in (("context", 0, 20), ("max_lines", 1, 2000)):
+        v = op.get(key, lo if key == "context" else hi)
+        if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+            raise RequestError(f"ops[{i}]: '{key}' must be an integer in {lo}..{hi}")
+    if op.get("page") is not None and not isinstance(op["page"], str):
+        raise RequestError(f"ops[{i}]: 'page' must be a page name string")
 
 
 def _check_list_kernels(op: dict, i: int) -> None:
@@ -419,6 +447,39 @@ def matching_cells(cells: list[tuple[str, str]], keywords=PULL_KEYWORDS,
             out.append((idx, kind, src, hit))
     return out
 
+
+
+_BLOCK_TAG_RE = re.compile(r"</?(?:p|div|br|li|ul|ol|h[1-6]|tr|table|section|pre|blockquote)\b[^>]*>", re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def page_lines(content: str) -> list[str]:
+    """A page's text as short lines: block tags become newlines, other tags are dropped, entities
+    unescaped, blank runs collapsed, and lines over PAGES_LINE_CHARS split at sentence ends."""
+    import html
+    text = _TAG_RE.sub("", _BLOCK_TAG_RE.sub("\n", content or ""))
+    out: list[str] = []
+    for raw in html.unescape(text).replace("\r", "").split("\n"):
+        ln = re.sub(r"[ \t]+", " ", raw).strip()
+        if not ln:
+            if out and out[-1]:
+                out.append("")
+            continue
+        while len(ln) > PAGES_LINE_CHARS:
+            cut = max(ln.rfind(". ", 0, PAGES_LINE_CHARS), ln.rfind("; ", 0, PAGES_LINE_CHARS))
+            cut = cut + 1 if cut > 80 else PAGES_LINE_CHARS
+            out.append(ln[:cut].strip())
+            ln = ln[cut:].strip()
+        out.append(ln)
+    return out
+
+
+def grep_context(lines: list[str], patterns: list[str], context: int) -> list[tuple[int, str, bool]]:
+    """(line index, line, is_match) for every line within `context` of a match, in order."""
+    res = [re.compile(p, re.I) for p in patterns]
+    hit = {n for n, ln in enumerate(lines) if any(r.search(ln) for r in res)}
+    keep = sorted({m for n in hit for m in range(max(0, n - context), min(len(lines), n + context + 1))})
+    return [(n, lines[n], n in hit) for n in keep]
 
 
 def default_cli(args: list[str], cwd: Path = ROOT) -> tuple[int, str]:
@@ -696,6 +757,44 @@ class Runner:
         res.update(matched_cells=matched, printed_lines=shown, result="OK")
         return res
 
+    def op_competition_pages(self, op: dict) -> dict:
+        patterns = list(op.get("grep") or PAGES_GREP)
+        context = op.get("context", PAGES_CONTEXT)
+        budget = op.get("max_lines", PAGES_MAX_LINES)
+        res: dict = {"op": "competition_pages", "competition": COMPETITION, "grep": patterns}
+        pages = list(self.api.competition_list_pages(COMPETITION, page_name=op.get("page")) or [])
+        dest = self.out_dir / "competition_pages"
+        dest.mkdir(parents=True, exist_ok=True)
+        texts = [(str(getattr(p, "name", "") or f"page{n}"), page_lines(getattr(p, "content", "") or ""))
+                 for n, p in enumerate(pages)]
+        for name, lines in texts:
+            (dest / (re.sub(r"[^\w.-]+", "_", name) + ".txt")).write_text("\n".join(lines), encoding="utf-8")
+        print(f"  {len(texts)} pages: " + ", ".join(f"{n} ({len(ls)} lines)" for n, ls in texts))
+        print(f"  grep {patterns} context {context}, budget {budget} lines; full text in artifact competition_pages/")
+        used, found = 0, {}
+        for name, lines in texts:
+            rows = grep_context(lines, patterns, context)
+            found[name] = sum(1 for r in rows if r[2])
+            if not rows:
+                continue
+            if used >= budget:
+                continue
+            print(f"  ==== page {name!r}: {found[name]} matching lines")
+            used += 1
+            last = None
+            for n, ln, is_match in rows:
+                if used >= budget:
+                    print("  ... output budget reached")
+                    break
+                if last is not None and n != last + 1:
+                    print("    --")
+                    used += 1
+                print(f"    {n + 1:>4}{'>' if is_match else ' '} {ln}")
+                used += 1
+                last = n
+        res.update(pages=[n for n, _ in texts], matches=found, printed_lines=used, result="OK")
+        return res
+
     def op_submit(self, op: dict, submitted_this_run: bool) -> dict:
         k, v = op["kernel"], op["version"]
         res: dict = {"op": "submit", "kernel": k, "version": v}
@@ -776,6 +875,8 @@ class Runner:
                         r = self.op_list_kernels(op)
                     elif kind == "pull_kernel":
                         r = self.op_pull_kernel(op)
+                    elif kind == "competition_pages":
+                        r = self.op_competition_pages(op)
                     else:
                         r = self.op_submit(op, submitted)
                         submitted = submitted or r.get("result") == "SUBMITTED"

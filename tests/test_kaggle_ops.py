@@ -790,3 +790,70 @@ def test_digest_prints_and_returns_per_game(tmp_path, capsys):
     assert d["per_game"]["hard_15"]["levels"] == 5 and d["per_game"]["easy_10"]["levels"] == 2
     out = capsys.readouterr().out
     assert "per_game" in out and "ka59" in out and "watch" in out
+
+
+# ---------------------------------------------------------------- competition_pages
+
+def _pages_api(pages):
+    api = FakeApi()
+    api.page_calls = []
+
+    def competition_list_pages(comp, page_name=None):
+        api.page_calls.append((comp, page_name))
+        return [p for p in pages if page_name in (None, p.name)]
+    api.competition_list_pages = competition_list_pages
+    return api
+
+
+RULES = NS(name="rules", content=("<h2>Final Submission</h2><p>You may select up to <b>2</b> final submissions "
+                                  "for judging.</p><p>Unrelated text.</p><p>The Private Leaderboard uses the "
+                                  "best of your selected submissions.&amp; more</p>"))
+EVAL = NS(name="evaluation", content="Score is RHAE.\nNothing else here.")
+
+
+def test_competition_pages_default_grep_prints_matches_with_context(tmp_path, capsys):
+    api = _pages_api([RULES, EVAL])
+    r = runner(api, tmp_path, changed=False).run({"id": "x", "ops": [{"op": "competition_pages"}]})[0]
+    out = capsys.readouterr().out
+    assert r["result"] == "OK" and r["pages"] == ["rules", "evaluation"]
+    assert api.page_calls == [(ko.COMPETITION, None)]
+    assert "select up to 2 final submissions" in out and "<b>" not in out
+    assert "best of your selected submissions.& more" in out
+    assert r["matches"]["rules"] == 3 and r["matches"]["evaluation"] == 0
+    assert "Score is RHAE" not in out
+    assert (tmp_path / "out" / "competition_pages" / "rules.txt").exists()
+
+
+def test_competition_pages_custom_grep_context_and_page(tmp_path, capsys):
+    api = _pages_api([RULES, EVAL])
+    r = runner(api, tmp_path).run({"id": "x", "ops": [
+        {"op": "competition_pages", "grep": ["rhae"], "context": 1, "page": "evaluation"}]})[0]
+    out = capsys.readouterr().out
+    assert api.page_calls == [(ko.COMPETITION, "evaluation")]
+    assert r["pages"] == ["evaluation"] and "Score is RHAE" in out and "Nothing else here" in out
+
+
+def test_competition_pages_is_bounded_and_splits_long_lines(tmp_path, capsys):
+    long = NS(name="big", content="<p>" + " ".join(f"Select sentence {i}." for i in range(3000)) + "</p>")
+    r = runner(_pages_api([long]), tmp_path).run({"id": "x", "ops": [
+        {"op": "competition_pages", "max_lines": 40}]})[0]
+    out = capsys.readouterr().out
+    assert r["printed_lines"] <= 41 and "output budget reached" in out
+    assert max(len(ln) for ln in out.splitlines()) < ko.PAGES_LINE_CHARS + 40
+
+
+def test_competition_pages_is_read_only_and_validated(tmp_path):
+    assert "competition_pages" in ko.OPS and "competition_pages" not in ko.MUTATING
+    for bad in ({"grep": "select"}, {"grep": ["("]}, {"context": -1}, {"max_lines": 0}, {"page": 3}):
+        with pytest.raises(ko.RequestError):
+            ko.parse_request(json.dumps({"id": "x", "ops": [{"op": "competition_pages", **bad}]}))
+    ko.parse_request(json.dumps({"id": "x", "ops": [{"op": "competition_pages"}]}))
+
+
+def test_competition_pages_error_is_reported_not_raised(tmp_path):
+    api = FakeApi()
+
+    def boom(comp, page_name=None):
+        raise RuntimeError("403")
+    api.competition_list_pages = boom
+    assert runner(api, tmp_path).run({"id": "x", "ops": [{"op": "competition_pages"}]})[0]["result"] == "ERROR"
