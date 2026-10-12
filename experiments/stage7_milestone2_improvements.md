@@ -1195,3 +1195,205 @@ re-downloads from Kaggle in any case) to check the per-game claims of §11.2 on 
   levels (critical levels 9 of 12 against 9 of 16) is suggestive, not established.
 - **The weak public games stand for a hidden-set population that is about 60% "hard"** (G15). Fixing sk48- or
   wa30-type stalls would need faster rule induction or planning by the model, which no harness line here supplies.
+
+## 12. Arm C+U: the I1 notice and the stale-latch fix on exp-081 [CODE + BUILT, 2026-10-12; never pushed]
+
+Kernel `calamitychasm/arc3-jad-exp081-u`, `kaggle_submission_jad_exp081_u/notebook/`, built by
+`scripts/_build_jad_exp081_u_kernel.py`; tests `tests/test_jad_exp081_u.py` (+ probe `tests/jad_u_probe.py`). This is
+§11.4's recommendation **C+U = arm C + C1 (i1) + C2**, built as one kernel.
+
+### 12.1 What changes against arm C v2
+
+Arm C v2's committed notebook (sha256 `d108fa76…`; read, never rewritten, because the scheduled C submits pin version
+2) plus exactly these edits; the diff is pinned by a test:
+
+1. **Two patch cells** after arm C's last patch cell:
+   - `/kaggle/ours-07-ours-10-untried.patch`: JustAdev742's `ours-10-untried.patch`, vendored verbatim in
+     `kaggle_submission_jad_exp081_u/vendor/` with their `LICENSE` (Apache-2.0) and the Franzen `NOTICE.md`.
+     - sha256 `a3a7d89fbb2cb253afcfc8eb9b4d43f763c45ea8b8624139db54949e7bc6a52e`.
+     - Source commit `c7a462b` (added in their `85bc492`), byte-identical at `ccb7214`.
+     - The cell is made by their own builder's `_file_cell` in `--compact` form. A test runs their builder with
+       exp-081's flags + `--env-add OURS_UNTRIED=i1` + `--patch ours-10-untried.patch`: it produces the same cell
+       and the same setup cell, except for our 8th patch.
+     - Nothing from their newer builder is needed: the patch adds one stdlib module and two 3-line call sites,
+       and it applies on top of the six exp-081 patches with line offsets only.
+   - `/kaggle/ours-08-calamitychasm-stale-latch-fix.patch`: our C2 patch, in a plain `%%writefile` cell so it reads
+     in the notebook (a 3-line preamble names it; `git apply` skips the preamble).
+2. **Setup cell, three lines**:
+   - `'OURS_UNTRIED': 'i1',  # ours (--env-add)`;
+   - the notebook's own apply loop now runs over all eight patches (their `_apply_code`: the same `git apply`, the
+     same check that every named file applied);
+   - its success line becomes `our harness patches applied successfully: 8`.
+3. **One install cell** before the run cell (after D′'s install cell). It embeds
+   `kaggle_submission_jad_exp081_u/cu_counters.py` and does three things:
+   - it checks that the fix is in all four sandbox bootstraps and that `OURS_UNTRIED` resolves to `{i1}`, and raises
+     otherwise;
+   - it prints `STALE_LATCH_FIX installed bootstraps=4 releases_per_snippet=3` and
+     `UNTRIED_NOTICE installed mode=i1 ours_untried.py sha256=… counters=on`;
+   - it wraps `ours_untried.prompt_lines`, `ours_untried.stamp` and `ToolAgent._run_python_tool` to count only.
+4. **The run cell** writes `untried_summary.json`, `stale_latch_summary.json` and `untried_firings.json` after
+   `bm.run` and prints `UNTRIED_NOTICE summary` / `STALE_LATCH_FIX summary`.
+
+Unchanged and byte-identical: cell 0, D′, REAP-448, acceptance 0.5, 14 streams / Mamba 84, the ARC map, the six
+patches, the 2400 s first-request grace and the 25 × 121 min Save & Run. `kernel-metadata.json` differs only in
+`id`, `title` and `code_file`. The notebook is 831,697 bytes.
+
+### 12.2 C1 configuration: `OURS_UNTRIED=i1` (the I1 line only)
+
+- exp-085 ran `OURS_UNTRIED=1`, which is I1 + I2. Their own reads after exp-085 / exp-085r ("a later build should
+  drop I2 (`OURS_UNTRIED=i1`) since it draws no clicks"; I2 drew 2 clicks in 24 lines) and §11.4 both say to keep
+  I1 only.
+- `i1` is a native mode of the verbatim patch, so no code changes. The measured mechanism (I1 click-within-3 21.5%
+  vs 10.1%) belongs to the I1 line alone, so dropping I2 does not touch it. I2 cost ~12 lines × ~40 tokens per run.
+- Their "notice v2" (cap 3 kinds, first line at 5 min when MOUSE is unused, level-1 clock from the first answered
+  request) exists only as a recommendation in their `docs/status.md`; no code at `ccb7214`. Not used.
+- **Caveat**: the i1-only mode has never run on a GPU anywhere. It differs from exp-085 only by the I2 lines.
+
+### 12.3 C2: the latch fix and its semantics
+
+**The bug** (§11.3, confirmed again on the built tree). `action()` in the sandbox arms `_stale_state` after a no-op.
+While the latch is set, every later `action()` call sends `stale_after`, and the solver refuses it with
+`stop_reason: stale_state`, which the sandbox raises as the catchable `StaleStateActionError`. Only a later executed
+result with `gameplay_changed is True` clears the latch, and a refused action never executes. So once the latch is
+armed, every later action in the snippet is refused, caught or not. The probe reproduces this on the unfixed tree:
+`SECOND refused / THIRD refused`, and a caught 10-call loop executes 1 action and is refused 9 times.
+
+**The fix** (`patches/calamitychasm-stale-latch-fix.patch`, 4 code lines in `python_tool_sandbox.py`'s bootstrap
+source, so all four bootstrap variants inherit it):
+
+```python
+_stale_releases = [3]          # per snippet (the closure is rebuilt per execution)
+...
+if action_result.get("stop_reason") == "stale_state":
+    if _stale_releases[0] > 0:
+        _stale_releases[0] -= 1
+        del _stale_state[:]
+    raise StaleStateActionError(...)
+```
+
+**Semantics: a one-shot refusal per no-op, released at the raise, at most 3 releases per snippet.**
+- **Uncaught** (the common case): the snippet ends at the refusal, exactly as before.
+- **Caught**: the next `action()` executes, as the error message has always promised ("can be caught if a snippet has
+  good reason to keep acting through no-ops"). If that action is again a no-op, the latch re-arms and the following
+  call is refused once more.
+- Releasing at the raise is the same thing as releasing "when caught": a refusal is always raised, and when the
+  error is not caught, the snippet ends anyway.
+- **Why the cap.** §11.3 assumed that `RepeatedActionInStateError` would still block blind repeats. **In arm C it does
+  not.** `ARC3_NOOP_REPEAT_GUARD` and `ARC3_REPEAT_STATE_GUARD` default to off and arm C's `setup_env` does not set
+  them; only the stale latch, the batch no-op stop and the terminal latch are active. Without a cap, a caught loop
+  such as `while ...: try: action(UP) except StaleStateActionError: pass` through no-ops would execute every other
+  call until the sandbox timeout. On a budget-bar game that could spend hundreds of actions, or end the attempt.
+  With the cap, such a loop gets at most 3 extra executed actions per snippet, and after that the original
+  behaviour holds (every later call is refused).
+- **Unchanged**: `run_plan` (ours-04) still stops at the first stale refusal; the terminal, known-death and
+  known-no-op paths are untouched; the solver is untouched.
+
+**Checked on the real tree** (probe, real `ToolAgent._run_python_tool` + sandbox, with a fake game that applies the
+solver's stale rule):
+- no-op → refused-and-caught → a state-changing action: `FIRST True False / SECOND refused / THIRD True True`, 2
+  actions executed (unfixed tree: 1);
+- caught loop of 10 no-ops: `LOOP 4 6` (executed 4, refused 6: 3 releases, then the latch holds; unfixed tree:
+  `LOOP 1 9`);
+- the install cell refuses to install on the unfixed tree (`STALE_LATCH_FIX missing from the plain sandbox
+  bootstrap`).
+
+### 12.4 Instruments
+
+All of these are counted in-process; the counters never raise into a game.
+
+- **`untried_summary.json`** counts the I1 lines the model was shown:
+  - `i1_lines`, `i1_lines_naming_objects`, `i1_named_kinds`;
+  - `i1_clicked_named_within_3` and `i1_clicked_named_within_3_share`;
+  - `i1_used_named_action_within_3`;
+  - `i2_lines` (must be 0);
+  - `tracker_errors` (games where ours_untried turned itself off);
+  - `errors`, and a per-game count `[lines, hits]`.
+
+  The click-within-3 definition is JustAdev742's `scripts/untried_read.py`, so the share compares with their 21.5%
+  and 10.1% baseline:
+  - the board is the last history entry the prompt saw;
+  - the named kinds are the ≤ 6 listed in the line, in `i1_block`'s order;
+  - a hit is a click among the next 3 history entries whose `click_target` is of a named kind;
+  - the denominator is every I1 line shown.
+
+  `untried_firings.json` holds one record per line: game, level, step, reason, hit, used, window.
+- **`stale_latch_summary.json`** records:
+  - `snippets`, `action_calls`, `stale_refusals`;
+  - **`stale_refused_after_released`**: a refusal that directly follows a refusal in the same snippet while the
+    snippet still had releases. It is 0 by construction with the fix, and > 0 is the bug;
+  - `stale_refused_after_cap`;
+  - `executed_after_stale_refusal`: the fix doing work, which happens only if the model catches the error;
+  - `snippets_with_stale_refusal`, `max_stale_refusals_in_snippet`, `errors`.
+
+  It is counted host-side from the payload of every `action()` call that reaches the solver, with snippet
+  boundaries taken from `_run_python_tool`.
+- **Fallback if a counter file is missing**: `kernel_output` with `transcripts`. Use
+  `grep_text {"Not yet tried on this level": 8}` and `samples {"StaleStateActionError": 5}` on the four critical
+  games. For each I1 line, read the next three `action(` arguments in the following turns and match the clicked
+  cell to a named box (grown by one cell). For the latch, check that no tool result shows two consecutive stale
+  refusals from one snippet before its 4th refusal.
+
+### 12.5 Check run (pre-registered; full-length shape, 25 games × 121 min, ~2.0-2.3 GPU-h)
+
+Baseline: arm C v1 / v2 (728.7 / 789.9 gen tok/s, 107 / 111 levels, 49.21 / 48.03). Push only into a free GPU slot
+with `jadu-push-1` (CLAUDE.md).
+
+**Pass, mechanism**:
+- markers present:
+  - `harness patch applied successfully`;
+  - `our harness patches applied successfully: 8`;
+  - `#OURS_FORM ok version=d_prime`;
+  - `priority gate active: 14 concurrent streams`;
+  - `48 layers x 448 experts, router sha256 for every layer`;
+  - `ours: FR-Spec map hot_tokens_64k_arc.pt written`;
+  - `STALE_LATCH_FIX installed`;
+  - `UNTRIED_NOTICE installed mode=i1`;
+- `untried_summary.json`: `errors` 0, `tracker_errors` 0, `i2_lines` 0, `i1_lines` ≥ 20;
+- **I1 click-within-3 ≥ 15%** (`i1_clicked_named_within_3_share`; their bar for the base stack in exp-086, 1.5× the
+  10.1% baseline);
+- `stale_latch_summary.json`: `errors` 0 and **`stale_refused_after_released` = 0**;
+- **0 tracebacks** outside serving teardown; 25/25 games terminal.
+
+**Pass, outcome**:
+- **≥ 3 of the 4 key levels won**: sp80 L2, tn36 L2, vc33 L4, cn04 L2, i.e. levels ≥ 2 / 2 / 4 / 2 in the per-game
+  digest. Arm C by the same reading: v1 won tn36 (6) and vc33 (4) but not sp80 (1); v2 won sp80 (4) but not tn36
+  (1) or vc33 (3); cn04 is not in the §11.1 digests, so read it from the artifact for v2 as the comparison;
+- **levels ≥ 103 and score ≥ 44**.
+
+**Pass, serving**: gen tok/s ≥ 750; accept 3.0-3.3; repeated assistant turns ≤ 1; retractions ≤ 4.
+
+**Kill** (any one):
+- gen tok/s < 723;
+- levels < 95 or score < 40;
+- a traceback raised from the new code (`ours_untried`, `cu_counters`, the install cell, or the patched
+  stale-refusal lines);
+- also, as mechanism kills: a missing install marker, `stale_refused_after_released` > 0, or `i1_lines` = 0 (the
+  notice never fired, so the run tests nothing).
+
+**Near-pass** (tok/s 723-750, levels 95-103, score 40-44, click share 10-15%, or 2 of 4 key levels): rerun once
+before any slot.
+
+**Also read**: tokens/request against C v2's 1,989 (each I1 line adds ~100 prompt tokens, at ~100 lines per run);
+`executed_after_stale_refusal`; `untried_firings.json` on the four key games.
+
+### 12.6 Slots
+
+A pass makes C+U eligible; it does not earn slots by itself.
+- Per §11.4 it is drawn only if C's mean holds up and JustAdev742's exp-085 hidden draws (from Oct 12) are not
+  below exp-081's.
+- It is then interleaved with C, as for C+LM (§10.4), and the drop rule and the n ≥ 3 final-selection rule apply.
+- C+U and C+LM are separate arms on C. A combined C+U+LM is not built.
+
+### 12.7 Risks
+
+- **Level-1 clock on slow boots.** The I1 clock for level 1 starts at the game's first prompt. In exp-085r a slow
+  boot made 13 lines fire at steps 1-2; our 2400 s grace allows the same. Those lines name objects nobody could have
+  clicked yet. They lower the click share and add tokens. This is the reason the share bar is 15% and not 20%.
+- **The latch fix changes behaviour only when the model catches the error.** Its effect is bounded by how often
+  snippets catch, which arm C's own transcripts have not shown. `executed_after_stale_refusal` measures it. Expect a
+  small effect (§11.4: 0 to +1 level per run).
+- **The counters' hit rule needs the solver's history to be append-only.** That is ours_untried's own assumption. A
+  shrinking history is counted as `i1_unmatched`, not as a miss. A prompt that is built and then discarded would be
+  counted as a line shown.
+- **Score effects are not separable by draws** (§11.4). Adoption rides on the mechanism counts, the key levels and
+  the no-harm lines.
