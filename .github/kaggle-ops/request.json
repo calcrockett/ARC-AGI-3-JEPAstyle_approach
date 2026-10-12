@@ -1,6 +1,4 @@
-{"id": "jad81-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081", "version": 2,
-    "message": "m2 jad exp081 draw 1",
-    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
-                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
-                "ours: FR-Spec map hot_tokens_64k_arc.pt written"],
-    "counters": []}]}
+{"id": "scan-1012a", "ops": [
+ {"op": "list_kernels", "sort_by": "dateCreated", "page_size": 50, "pages": 2},
+ {"op": "list_kernels", "sort_by": "voteCount", "page_size": 50, "pages": 1}
+]}
