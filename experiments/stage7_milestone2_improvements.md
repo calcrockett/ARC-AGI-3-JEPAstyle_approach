@@ -1743,6 +1743,154 @@ This section reaches the same answer on arm C's own run with an independent repl
 The two results differ in one respect only: their tokens-per-action feature was measured at 5-15 minutes, while the
 in-sample hint in §13.3 is at the end of a level. That leaves the narrow reopen condition in §13.7, not a build.
 
+## 14. Arm C+hic16: the system-RAM KV tier and 16 streams on exp-081 [CODE + BUILT, 2026-10-12; never pushed]
+
+Kernel `calamitychasm/arc3-jad-exp081-hic16`, `kaggle_submission_jad_exp081_hic16/notebook/`, built by
+`scripts/_build_jad_exp081_hic16_kernel.py`; tests `tests/test_jad_exp081_hic16.py`. Motivation: §13.6 found that the
+only lever positive in every simulated world is more tokens per game (+5% capacity = +0.2 to +1.5 points), and that it
+is a serving lever. On arm A the host tier + 16 streams measured +7.7% gen tok/s (`stage7_m2_speed.md`,
+"Turbo-tail-hic16"); arm C has arm A's serving (below), so this is the cheapest throughput test available on C.
+
+### 14.1 What changes against arm C v2
+
+Arm C v2's committed notebook (sha256 `d108fa76…`; read, never rewritten, because the scheduled C submits pin version
+2) plus exactly these edits; a test pins the diff line by line:
+
+| cell | arm C v2 | C+hic16 |
+|---|---|---|
+| setup (`setup_env`) | `'ARC3_MAX_ACTIVE_STREAMS': 14` | **16**. The only stream knob of the harness: Franzen's patch builds `_PriorityGate(slots)` from it and logs `priority gate active: 16 concurrent streams`. D′ (`install_d`) replaces the priority value, the pace tracker and the fresh-game queueing; it never reads or sets the slot count. |
+| launcher `CFG` | `MAXREQ=14`, `CUDAGRAPH_MAXBS=14`, `MAMBA_CACHE=84` | **16 / 16 / 96**. Arm C's own Mamba formula is 6 per stream (84 = 6 × 14, the same rule as our builder's `mamba_cache`), so 96; 96 // 5 = 19 ≥ 16 (SGLang caps running requests at `max_mamba_cache_size // 5`). The graph-batch list is the launcher's own formula, `{1, 2, 4, 7, 8, 9, 10, 16}`, as in turbo-tail-hic16. |
+| launcher args | — | `--enable-hierarchical-cache --hicache-size 32 --hicache-write-policy write_through --hicache-io-backend kernel`, after the prefetch flag: the hic16 kernels' line (`_build_m2_speed_kernels.hicache_line`), reused. |
+| launcher, before the launch | — | `STREAMS max_running_requests=16 cuda_graph_bs=[…] mamba_cache=96` and `HICACHE requested --hicache-size 32 GB (write_through, kernel io)` (with an assert that the flags are in `args`): the hic16 kernels' print lines. |
+| launcher, after the health loop | — | the hic16 kernels' serve.log check (`_build_m2_level_memory_kernel.HICACHE_CHECK`): `HICACHE_TIER attached hicache_attached=True | …` only if SGLang logged `hicache_attached=True`; `HICACHE_TIER NOT ATTACHED` / `NOT CONFIRMED` otherwise. Never raises. |
+| run cell, after `bm.run` | — | the same check again (`HIC_DUMP`, `… (post-run)`), because the launcher's check runs before a slow boot finishes (it did on arm B's hic16 run). |
+
+Unchanged and byte-identical: cell 0 (its fork note still lists arm C's `MAXREQ=14` etc.; it is description only, left
+as is like the other arm-C derivatives), D′, REAP-448, acceptance 0.5, the ARC map, the six patches, `MEMFRAC` 0.96,
+`SERVER_STARTUP_TIMEOUT` 12 min, the 2400 s first-request grace and the 25 × 121 min Save & Run. The `[sys] RAM
+used/total` census (every 2 min outside a rerun) is arm C's own cell, the same census our hic16 kernels print and
+`kaggle_ops.sys_ram` parses, so it is reused unchanged. `kernel-metadata.json` differs from arm C only in `id`, `title`
+and `code_file`. The notebook is 800,239 bytes. Flags SGLang rejects with the tier (`--disable-radix-cache`,
+`--enable-int8-mamba-checkpoint`) are absent (tested). The launcher is otherwise identical to turbo-tail-hic16's (the
+two launcher cells differ only in marker prints and comments), so the tier's flag set has run on this exact serving
+config once.
+
+### 14.2 Why the tier helped A (+7.7%) and not B (+1.6%), and which one C resembles
+
+The data (one check run each, 25 games × 25 min):
+
+| | A, 14 streams | A + tier, 16 | B, 14 streams | B + tier, 16 |
+|---|---:|---:|---:|---:|
+| gen tok/s | 772.4 | 831.6 (+7.7%) | 657.4 | 667.97 (+1.6%) |
+| accept median | 3.02 | 3.06 | 2.66 | 2.62 |
+| KV peak | 0.93 | 0.99 | 0.92 | 0.99 |
+| retractions | 2 | 2 | 2 | 2 |
+| tokens/request | 1,779 | 1,736 | 1,579 | 1,770 (+12%) |
+| boot | not recorded | not recorded (`DEADLINE at` was not grepped then) | not recorded | **`DEADLINE at 721s`**; after-boot tier check `NOT CONFIRMED` (server still loading at the 12-min release) |
+
+The tier itself adds no device KV. It makes evictions cheap (write-through pages reload over PCIe instead of
+re-prefilling), so the 16th stream can run on an oversubscribed pool without retractions. The gain is the extra
+concurrency minus the per-step cost of a bigger batch. Both arms reached a 0.99 peak with 2 retractions, so the tier
+worked the same way in both.
+
+Three explanations, in order of weight; none can be settled from the digests we have:
+
+1. **Boot time in the denominator (most likely the largest part).** `gen tok/s` is the harness's `generated
+   tokens/sec` in `summary.txt`, and the game clocks start at the release (`bm.run`), which is clamped at 12 min after
+   the notebook started, not at server-ready (`stage7_m2_speed.md`, boot-time audit, point 2). Every minute the server
+   boots past the release is idle time in a 25-minute run: about 4% per minute. B + tier printed `DEADLINE at 721s`
+   and its post-boot check found no tier line, so its server was not ready at the release. A + tier's boot was never
+   recorded. The same pattern shows on arm C itself, on an identical notebook: v1 printed `DEADLINE at 722s` and ran
+   728.7 tok/s; v2 printed `READY after` and ran 789.9 (−7.7% for v1). A 32 GB pinned host pool could also lengthen
+   the boot by itself. That is unmeasured.
+2. **Single-run noise.** Arm C v1 and v2 (identical code) differ by 8%. The difference between two single-run deltas
+   (+7.7 vs +1.6) is therefore within about one sd of zero, before any boot correction.
+3. **Acceptance (weak).** To first order, more streams raise throughput by the same factor whatever the acceptance:
+   the draft (3 MTP steps) and verify (4 tokens per request) cost the same in both arms, and acceptance only scales
+   tokens per step. Two second-order effects favour A: lossy acceptance makes each step yield ~16% more tokens
+   (3.06 vs 2.62), so a larger share of wall time is decode rather than host-side work; and B + tier's requests got
+   12% longer, which keeps more context per stream on the pool. Neither predicts a 6-point gap.
+
+**Arm C resembles A.** Its serving is A's: REAP-448, acceptance 0.5 / 0.5 (accept median 3.12-3.14), the ARC map, 14
+streams / Mamba 84, `MEMFRAC` 0.96; the launcher cells differ only in prints. C differs from A in the harness (D′
+instead of PRIORITY_TAIL, the six-patch bundle, no history cache) and in the check shape:
+
+- **The full-length shape dilutes boot loss.** One late minute is 0.8% of a 121-minute run against 4% of a 25-minute
+  run, so this check run measures the tier more cleanly than either hic16 check did.
+- **Held slots that are not decoding.** C v2's running median was 13 at 14 slots. A slot is held while the game runs
+  Python, plays actions or waits on a handover, and in v1 the samples at 2-5 running requests were ~19% of the total.
+  Two more slots raise the running count in proportion only while ≥ 15 games want to run. With 25 games ticking for
+  121 minutes and 6-7 won early, that is most of the run.
+- **KV.** C v2 peaked at 0.91 of 1,477,888 tokens at 14 streams. Scaled to 16 streams that is ~1.54M tokens against a
+  pool of ~1.43M (Mamba 96 costs ~50k tokens; A + tier's pool was 1,427,968), about 108% of the pool. A was at about
+  110%, and its tier absorbed that with 2 retractions.
+- **Host RAM.** C v2's `MemAvailable` minimum was 61.6 GiB. The 32 GB tier is 29.8 GiB, so expect a minimum near
+  31-32 GiB (A + tier measured 29.9). That leaves 3× the 10 GiB bar.
+
+Expectation: if C gains as A did, 789.9 × 1.077 ≈ 851 tok/s, just over the 845 pass bar; if it gains as B did, ≈ 802,
+a near-pass. The pass bar is about the size of the identical-run spread (C v1/v2), so one run can land on either side
+of it. That is the reason for the near-pass rerun rule.
+
+### 14.3 Check run (pre-registered; full-length shape, 25 games × 121 min, ~2.0-2.3 GPU-h)
+
+Baseline: arm C v2 (789.9 gen tok/s, accept 3.12, KV peak 0.91, retractions 2, tokens/request 1,989, MemAvailable min
+61.6 GiB, 111 levels, 48.03). Push only into a free GPU slot, with `jadh16-push-1` (CLAUDE.md).
+
+**Pass** (all of):
+- gen tok/s **≥ 845** (+7% over C v2's 789.9);
+- `HICACHE_TIER attached hicache_attached=True` (the post-run line counts);
+- 16 streams: `priority gate active: 16 concurrent streams` and `STREAMS max_running_requests=16 cuda_graph_bs=` in
+  the notebook log;
+- `MemAvailable` ≥ 10 GiB in every `[sys] RAM` census line (`sys_ram.all_ge_10`);
+- retractions ≤ 4;
+- accept 3.0-3.3;
+- tokens/request within ±10% of 1,989 (1,790-2,188);
+- 0 tracebacks outside serving teardown; 25/25 games terminal;
+- levels ≥ 103 and score ≥ 44;
+- arm C's other submit markers present (`harness patch applied successfully`, `our harness patches applied
+  successfully: 6`, `#OURS_FORM ok version=d_prime`, REAP `48 layers x 448 experts`, `FR-Spec map
+  hot_tokens_64k_arc.pt written`).
+
+**Kill** (any one): gen tok/s < 790 (no better than C v2); the tier not attached (`HICACHE_TIER NOT ATTACHED`, or no
+attached line even after the run); `Not enough host memory` anywhere; levels < 95; score < 40.
+
+**Near-pass**: 790-845 tok/s with every other pass line met. Rerun once before any adoption.
+
+**Also read** (not pass lines): `DEADLINE at` / `READY after` (a late boot costs ~0.8% per minute here; record it
+next to the tok/s); the speed digest's `by_running` (decode tok/s and sample share at 15-16 running requests against
+13-14) and `running_med` (C v2: 13); KV pool and peak (a peak pinned at 1.0 with retractions means the tier is not
+absorbing the overflow); the `oom` hits (the benign SGLang lazy-Triton advisory in hic16 runs; read them with
+`show_lines`, and check `killed` 0); `#OURS_FRESH replaced=` (25 in C v2).
+
+### 14.4 Slots
+
+A pass makes C+hic16 eligible; it does not by itself earn slots.
+- It is the same mechanism as arm C with better measured throughput, so under the CURRENT STATUS rule ("a variant
+  that passes its check run may take over an arm's remaining slots only if it is the same mechanism with better
+  measured throughput") it may take over arm C's remaining slots. Decide at the 10-18 exploit decision, not before.
+- Cost of switching: arm C's draws pool with JustAdev742's exp-081 draw (34.04) as a verbatim fork. C+hic16 draws do
+  not. Report them as a separate arm, or pool them with C only as "same harness, faster serving".
+- A near-pass or a pass that rests on a late-boot C v2 comparison is not adopted on one run.
+- C+hic16 is not combined with C+LM or C+U. Each of the three is one change against C.
+
+### 14.5 Risks
+
+- **Boot time.** Allocating and pinning a 32 GB host pool may add to the boot. The release stays at 12 min, so in the
+  check run a later boot costs ~0.8% of tok/s per minute. In a rerun, the 2400 s grace covers a boot up to ~57 min
+  after the notebook starts.
+- **Host RAM in a rerun is unmeasured.** The census runs only outside a rerun (`if not TRUE_SUBMISSION`). A rerun has
+  ~110 game sessions where the check run has 25. SGLang checks `MemAvailable − 10 GiB` only when it allocates (a
+  too-large tier fails loudly at boot). A host OOM after boot would kill the server mid-run. Neither hic16 kernel has
+  ever run in a rerun. The check run's minimum `MemAvailable` (expected ~31 GiB) is the margin for the 85 extra
+  sessions.
+- **Thin device headroom.** A + tier logged 0.84 GiB free when SGLang lazily loaded Triton kernels (an advisory, not an
+  allocation failure). Mamba 96 takes ~0.67 GB more than 84. `MEMFRAC` stays at 0.96, because 0.98 OOMs.
+- **Graph padding.** With 11-15 running requests the decode graph pads to 16, as in turbo-tail-hic16. A + tier showed
+  no per-request gain at 15-16 over 12-14 running (`stage7_m2_speed.md`), so the gain, if any, comes from the share of
+  time at higher concurrency, not from faster steps.
+- **Score.** The score effect of +7% tokens is +0.2 to +1.5 points in the §13 model. That cannot be measured by hidden
+  draws. Adoption rides on the throughput line and the no-harm lines.
+
 ## 15. Reproducing JustAdev742's MTP drafter fine-tune for arm C [READ, 2026-10-12; nothing built, no GPU]
 
 **Question.** JustAdev742 fine-tuned the dense weights of the MTP draft head; the experts stayed frozen. Their output
