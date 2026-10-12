@@ -1,51 +1,6 @@
 {
- "id": "read-1012-ulm-d",
+ "id": "read-1012-d-only",
  "ops": [
-  {
-   "op": "status"
-  },
-  {
-   "op": "kernel_output",
-   "kernel": "calamitychasm/arc3-jad-exp081-ulm",
-   "grep": [
-    "harness patch applied successfully",
-    "our harness patches applied successfully: 8",
-    "#OURS_FORM ok version=d_prime",
-    "#OURS_FRESH replaced=",
-    "priority gate active: 14 concurrent streams",
-    "48 layers x 448 experts, router sha256 for every layer",
-    "ours: FR-Spec map hot_tokens_64k_arc.pt written",
-    "STALE_LATCH_FIX installed",
-    "UNTRIED_NOTICE installed mode=i1",
-    "LEVEL_MEMORY installed",
-    "UNTRIED_NOTICE summary",
-    "STALE_LATCH_FIX summary",
-    "LEVEL_MEMORY summary",
-    "C+U summary failed",
-    "ours (--fail-fast): server watchdog on",
-    "ours (--fail-fast): the",
-    "ours: inputs mounted after",
-    "[view] scrolled",
-    "DEADLINE at",
-    "READY after",
-    "analyzer failed"
-   ],
-   "transcripts": {
-    "games": [
-     "sp80",
-     "tn36",
-     "vc33",
-     "cn04"
-    ],
-    "grep_text": {
-     "Not yet tried on this level": 8,
-     "Rule for level": 8
-    },
-    "samples": {
-     "StaleStateActionError": 5
-    }
-   }
-  },
   {
    "op": "kernel_output",
    "kernel": "calamitychasm/arc3-jad-exp081-draft",
