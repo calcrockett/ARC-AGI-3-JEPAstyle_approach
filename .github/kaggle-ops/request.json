@@ -1,4 +1,10 @@
-{"id": "scout-1012-a", "ops": [
- {"op": "list_kernels", "sort_by": "dateCreated", "page_size": 50, "pages": 2},
- {"op": "list_kernels", "sort_by": "voteCount", "page_size": 50, "pages": 2}
+{"id": "scout-1012-b", "ops": [
+ {"op": "pull_kernel", "kernel": "sujanmajhisuzan/arc-agi-3-m2-top-submission", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "jingshuifu/arc3-m2-solution", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "heliosli/try-merging-it-you-might-get-lucky-and-win-gold", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "skarin/arc-agi-3-27-80-lb-100-trajectory-audit", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "zhangyues0000/arc-agi-3-m2-franzen-fork", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "bang1850/arc-prize-2026-sovereign-agent", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "superstringdev/arc-agi-3-nvfp4-sglang-public", "max_lines": 200},
+ {"op": "pull_kernel", "kernel": "kunaldesale2408/duck-harness-fast-eval", "max_lines": 200}
 ]}
