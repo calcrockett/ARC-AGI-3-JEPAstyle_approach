@@ -540,6 +540,7 @@ GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by
   `kernel_output` op (also `turn_chars`, `first_turns`, `last_turns`, `list_actions`, `count`). Per game's `<game>*requests.jsonl` it
   prints a per-level timeline (requests, tokens, `action(` count, steps, cleared/ended), tool-result counts (StaleStateActionError,
   NameError, Traceback, `[view] scrolled`, GAME_OVER, RESET) and the first 2 / last 3 assistant turns of the last level. <= 3,000 lines, scrubbed.
+  Also `excerpt_levels` {game|"*": level}, `samples` {text: n} (first n tool results containing it + the call before) and `grep_text` {regex: n}.
 
 ### Branches merged into this one (2026-10-09)
 

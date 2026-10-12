@@ -47,7 +47,7 @@ def record(messages, comp=100, **kw):
                        "tools": [], "usage": {"prompt_tokens": 1000, "completion_tokens": comp}, **kw})
 
 
-def conversation():
+def conversation(code2="action(1)\naction(2)"):
     """Level 1: two turns, then cleared; level 2: three turns, game ends there."""
     h = []
     recs = []
@@ -56,7 +56,7 @@ def conversation():
         h.extend(msgs)
         recs.append(record(list(h), **kw))
     step([opener(1, 1), asst("click the blue bar", "action(6, 10, 20)", "think A " * 40)], action=1)
-    step([tool("changed: yes"), opener(2, 1), asst("again", "action(1)\naction(2)")], action=2)
+    step([tool("changed: yes"), opener(2, 1), asst("again", code2)], action=2)
     step([tool("StaleStateActionError: refused\nStaleStateActionError: refused again\nNameError: x"),
           opener(3, 2), asst("L2 first turn " + "w" * 600, "action(6, 3, 4)", "reasoning L2 first")], action=3)
     step([tool("[view] scrolled by 5\nGAME_OVER\nRESET done"), opener(4, 2), asst("L2 second", "action(5)")], action=4)
@@ -202,6 +202,33 @@ def test_extra_count_strings_and_bad_lines(tmp_path, capsys):
     write_game(tmp_path, recs=recs[:2] + ['{"event": "response", "messages": [tr'] + recs[2:])
     res, out = report(tmp_path, {"games": ["sp80"], "count": ["refused"]}, capsys)
     assert res["games"]["sp80"]["counts"]["refused"] == 2 and "1 unreadable lines" in out
+
+
+def test_samples_grep_text_and_excerpt_level(tmp_path, capsys):
+    write_game(tmp_path)
+    cfg = {"games": ["sp80"], "samples": {"StaleStateActionError": 2}, "grep_text": {"blue bar": 3, "nomatch_xyz": 1},
+           "excerpt_levels": {"sp80": 1}, "max_lines_per_game": 100}
+    _, out = report(tmp_path, cfg, capsys)
+    assert "excerpt of level 1: 2 assistant turns there" in out and "[rec 1, step 1]" in out and "L2 LAST turn" not in out
+    assert "first 1 tool results containing 'StaleStateActionError'" in out
+    assert "2x in this result, prior code had except=False" in out and "prior code tail: action(1) action(2)" in out
+    assert "matching /blue bar/ (first 1):" in out and "[L1 rec 1 step 1]" in out and "click the blue bar" in out
+    assert "matching /nomatch_xyz/ (first 0):" in out and "(no match)" in out
+    # the default "*" key, and a wrapped call is flagged
+    write_game(tmp_path, recs=conversation("try:\n action(1)\nexcept Exception:\n pass"))
+    _, out = report(tmp_path, {"games": ["sp80"], "samples": {"NameError": 1}, "excerpt_levels": {"*": 2}}, capsys)
+    assert "prior code had except=True" in out and "excerpt of level 2" in out
+
+
+def test_parse_request_validates_new_transcript_keys():
+    ok = {"op": "kernel_output", "kernel": K, "transcripts": {
+        "games": ["sp80"], "excerpt_levels": {"sp80": 2, "*": 1}, "samples": {"StaleStateActionError": 3},
+        "grep_text": {"SPACE": 4}}}
+    ko.parse_request(json.dumps({"id": "x", "ops": [ok]}))
+    for bad in ({"excerpt_levels": {"sp80": "2"}}, {"excerpt_levels": []}, {"samples": {"a": 0}}, {"samples": {"a": 9}},
+                {"grep_text": {"": 1}}, {"grep_text": {"a": True}}, {"samples": ["a"]}):
+        with pytest.raises(ko.RequestError):
+            ko.parse_request(json.dumps({"id": "x", "ops": [dict(ok, transcripts=dict(ok["transcripts"], **bad))]}))
 
 
 def test_files_without_request_logs(tmp_path, capsys):

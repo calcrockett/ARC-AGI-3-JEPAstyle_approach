@@ -14,7 +14,8 @@ Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
                       (grep only reports present/absent; show_lines prints up to N matching lines per marker from all *.log;
                        transcripts prints, per game, a per-level timeline from that game's *_requests.jsonl, counts of
                        StaleStateActionError / NameError / Traceback / [view] scrolled / GAME_OVER / RESET in the tool
-                       results and the first 2 / last 3 assistant turns of the level the game ended on; bounded, scrubbed)
+                       results and the first 2 / last 3 assistant turns of the level the game ended on; bounded, scrubbed;
+                       extras: excerpt_levels {game|"*": level}, samples {text: n}, grep_text {regex: n})
   {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
    "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
   {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
@@ -169,6 +170,16 @@ def _check_transcripts(t: Any, i: int) -> None:
         v = t.get(key)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
             raise RequestError(f"ops[{i}]: transcripts.{key} must be an integer in {lo}..{hi}")
+    el = t.get("excerpt_levels", {})
+    if not isinstance(el, dict) or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
+                                           and v >= 0 for k, v in el.items()):
+        raise RequestError(f"ops[{i}]: transcripts.excerpt_levels must map game id (or \"*\") to a level number")
+    for key, hi in (("samples", 5), ("grep_text", 8)):
+        d = t.get(key, {})
+        if not isinstance(d, dict) or len(d) > 6 or not all(
+                isinstance(k, str) and 1 <= len(k) <= 60 and isinstance(v, int) and not isinstance(v, bool)
+                and 1 <= v <= hi for k, v in d.items()):
+            raise RequestError(f"ops[{i}]: transcripts.{key} must map up to 6 short strings to counts in 1..{hi}")
     c = t.get("count", [])
     if not isinstance(c, list) or len(c) > 10 or not all(isinstance(x, str) and 1 <= len(x) <= 60 for x in c):
         raise RequestError(f"ops[{i}]: transcripts.count must be a list of up to 10 short strings")
@@ -1031,6 +1042,11 @@ def tx_scan_file(path: Path, cfg: dict) -> dict:
                                          "steps": [None, None], "first": None, "last": None, "t": [None, None],
                                          "counts": Counter(), "win": 0, "act_args": []})
     tot = {lab: [0, 0, 0] for lab, _ in counters}      # per label: total, tool results containing it, max in one
+    sample_pats = [(lab, re.compile(re.escape(lab)), n) for lab, n in (cfg.get("samples") or {}).items()]
+    grep_pats = [(lab, re.compile(lab, re.I), n) for lab, n in (cfg.get("grep_text") or {}).items()]
+    samples: dict[str, list] = {lab: [] for lab, _, _ in sample_pats}
+    greps: dict[str, list] = {lab: [] for lab, _, _ in grep_pats}
+    last_code = ""
     seq: list = []
     turns: list[dict] = []
     cur: dict = {"level": None}
@@ -1083,6 +1099,14 @@ def tx_scan_file(path: Path, cfg: dict) -> dict:
                         tot[lab][1] += 1
                         tot[lab][2] = max(tot[lab][2], n)
                 lv(cur["level"])["win"] += len(TX_WIN_RE.findall(it["text"]))
+                for lab, pat, n in sample_pats:
+                    m = pat.search(it["text"])
+                    if m and len(samples[lab]) < n:
+                        a = max(m.start() - 150, 0)
+                        samples[lab].append({"level": cur["level"], "rec": info["records"],
+                                             "step": lv(cur["level"])["steps"][1], "n_in_result": len(pat.findall(it["text"])),
+                                             "text": it["text"][a:m.end() + 250], "code": last_code[-300:],
+                                             "except": "except" in last_code})
             if st:
                 info["markers"] += 1
                 cur["level"] = st[1]
@@ -1093,6 +1117,13 @@ def tx_scan_file(path: Path, cfg: dict) -> dict:
                 L["last"] = st[2]
             if it["kind"] == "assistant":
                 L = lv(cur["level"])
+                last_code = "\n".join(it["calls"])
+                body = it["reasoning"] + "\n" + it["text"]
+                for lab, pat, n in grep_pats:
+                    m = pat.search(body)
+                    if m and len(greps[lab]) < n:
+                        greps[lab].append({"level": cur["level"], "rec": info["records"], "step": L["steps"][1],
+                                           "text": body[max(m.start() - 160, 0):m.end() + 200]})
                 L["calls"] += len(it["calls"])
                 for code in it["calls"]:
                     for mm in TX_ACTION_RE.finditer(code):
@@ -1122,7 +1153,7 @@ def tx_scan_file(path: Path, cfg: dict) -> dict:
                 tv = str(rec[k])[:26]
                 L["t"] = [L["t"][0] or tv, tv]
                 break
-    info.update(levels=levels, totals=tot, turns=turns, ended=prev_level)
+    info.update(levels=levels, totals=tot, turns=turns, ended=prev_level, samples=samples, greps=greps)
     return info
 
 
@@ -1176,16 +1207,34 @@ def tx_game_lines(game: str, path: Path, root: Path, cfg: dict) -> tuple[list[st
             timeline.append(f"      action() args (first {len(s['act_args'])}): " + "; ".join(s["act_args"]))
     tail: list[str] = []
     ended = inf["ended"] if inf["ended"] is not None else top
+    forced = (cfg.get("excerpt_levels") or {}).get(game, (cfg.get("excerpt_levels") or {}).get("*"))
+    if forced is not None:
+        ended = forced
     mine = [t for t in inf["turns"] if t["level"] == ended]
     if not inf["turns"]:
         tail.append("  no assistant turns found in the request messages")
     else:
         pick = mine if len(mine) <= n_first + n_last else mine[:n_first] + (mine[-n_last:] if n_last else [])
-        tail.append(f"  game ended on level {'?' if ended is None else ended}: {len(mine)} assistant turns there, "
+        tail.append(f"  {'excerpt of level' if forced is not None else 'game ended on level'} "
+                    f"{'?' if ended is None else ended}: {len(mine)} assistant turns there, "
                     f"showing the first {n_first} and last {n_last}")
         for t in pick:
             body = _tx_fit([("R", t["reasoning"], True), ("T", t["text"], False), ("CALL", t["code"], False)], chars)
             tail.append(f"   [rec {t['rec']}, step {t['step']}] {body or '(empty turn)'}")
+    for lab, items in inf["samples"].items():
+        tail.append(f"  first {len(items)} tool results containing {lab!r}:")
+        for x in items:
+            tail.append(f"   [L{x['level']} rec {x['rec']} step {x['step']}, {x['n_in_result']}x in this result, prior code had "
+                        f"except={x['except']}] result: {_tx_flat(x['text'], 380)}")
+            tail.append(f"      prior code tail: {_tx_flat(x['code'], 240, tail=True)}")
+        if not items:
+            tail.append("   (none)")
+    for lab, items in inf["greps"].items():
+        tail.append(f"  assistant text (reasoning + reply) matching /{lab}/ (first {len(items)}):")
+        for x in items:
+            tail.append(f"   [L{x['level']} rec {x['rec']} step {x['step']}] {_tx_flat(x['text'], 360)}")
+        if not items:
+            tail.append("   (no match)")
     summary = {"records": inf["records"], "markers": inf["markers"], "ended_level": ended,
                "levels": {("?" if k is None else str(k)): {"reqs": v["reqs"], "tok": v["comp"], "calls": v["calls"],
                                                           "action_calls": v["acts"], "counts": dict(v["counts"])}
