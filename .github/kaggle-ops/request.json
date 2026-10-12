@@ -1,4 +1,74 @@
-{"id": "jad81-tx-alloc-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
-  "grep": ["DEADLINE at", "READY after"],
-  "transcripts": {"games": "all", "max_lines_per_game": 30, "first_turns": 0, "last_turns": 1, "turn_chars": 300,
-                  "list_actions": 0}}]}
+{
+ "id": "read-1012-lmu",
+ "ops": [
+  {
+   "op": "status"
+  },
+  {
+   "op": "kernel_output",
+   "kernel": "calamitychasm/arc3-jad-exp081-lm",
+   "grep": [
+    "harness patch applied successfully",
+    "our harness patches applied successfully: 6",
+    "#OURS_FORM ok version=d_prime",
+    "#OURS_FRESH replaced=",
+    "priority gate active: 14 concurrent streams",
+    "48 layers x 448 experts, router sha256 for every layer",
+    "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+    "LEVEL_MEMORY installed",
+    "LEVEL_MEMORY summary",
+    "ours (--fail-fast): server watchdog on",
+    "ours (--fail-fast): the",
+    "ours: inputs mounted after",
+    "[view] scrolled",
+    "DEADLINE at",
+    "READY after",
+    "analyzer failed"
+   ]
+  },
+  {
+   "op": "kernel_output",
+   "kernel": "calamitychasm/arc3-jad-exp081-u",
+   "grep": [
+    "harness patch applied successfully",
+    "our harness patches applied successfully: 8",
+    "#OURS_FORM ok version=d_prime",
+    "#OURS_FRESH replaced=",
+    "priority gate active: 14 concurrent streams",
+    "48 layers x 448 experts, router sha256 for every layer",
+    "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+    "STALE_LATCH_FIX installed",
+    "UNTRIED_NOTICE installed mode=i1",
+    "UNTRIED_NOTICE summary",
+    "STALE_LATCH_FIX summary",
+    "C+U summary failed",
+    "ours (--fail-fast): server watchdog on",
+    "ours (--fail-fast): the",
+    "ours: inputs mounted after",
+    "DEADLINE at",
+    "READY after",
+    "analyzer failed"
+   ],
+   "transcripts": {
+    "games": [
+     "sp80",
+     "tn36",
+     "vc33",
+     "cn04"
+    ],
+    "grep_text": {
+     "Not yet tried on this level": 8
+    },
+    "samples": {
+     "StaleStateActionError": 5
+    },
+    "excerpt_levels": {
+     "sp80": 2,
+     "tn36": 2,
+     "vc33": 4,
+     "cn04": 2
+    }
+   }
+  }
+ ]
+}
