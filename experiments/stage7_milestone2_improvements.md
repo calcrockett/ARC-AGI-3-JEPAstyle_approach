@@ -2520,3 +2520,112 @@ concentrated on the kernel that will be selected.
 - rho is unknown (16.1). The field model's private bar is crude.
 - None of the variant effects will be confirmed by draws. The bundle is chosen on mechanism counts and expected value, not on
   measured score.
+
+### 16.8 The bundle C+UL built: `calamitychasm/arc3-jad-exp081-ulm` [CODE + BUILT, 2026-10-12; never pushed]
+
+Kernel `calamitychasm/arc3-jad-exp081-ulm`, `kaggle_submission_jad_exp081_ulm/notebook/`. Built by
+`scripts/_build_jad_exp081_ulm_kernel.py`; tests `tests/test_jad_exp081_ulm.py`, with the interaction probe
+`tests/jad_ulm_probe.py`. This is 16.5's bundle.
+
+**Build: composed, not copied.**
+- The builder imports `_build_jad_exp081_u_kernel.build_notebook()`. That function makes C+U from the sha-pinned arm C v2
+  notebook (`d108fa76…`; read, never rewritten).
+- On top of C+U, the builder makes exactly C+LM's two edits, with the same generator C+LM uses
+  (`_build_m2_level_memory_kernel.install_cell` / `RUN_ANCHOR` / `RUN_DUMP`):
+  - the level-memory install cell, inserted right before the run cell;
+  - the `level_memory_summary.json` dump after `bm.run`.
+- The builder also checks that both variants are defined on the same arm C notebook and the same `bm.run` anchor.
+
+**Diff against arm C v2.** It is the union of the two variants' diffs. Each added cell is byte-identical to the
+variant notebook's cell (pinned by a test):
+1. ours-10 (`OURS_UNTRIED=i1`) and the stale-latch-fix patch cells, after arm C's last patch cell (C+U's cells).
+2. The setup cell: the `OURS_UNTRIED` line and the 8-patch apply loop, printing
+   `our harness patches applied successfully: 8` (C+U's cell).
+3. Before the run cell, in this order:
+   - D′'s install cell (arm C's, unchanged);
+   - the C+U install cell (`STALE_LATCH_FIX installed …`, `UNTRIED_NOTICE installed mode=i1 …`);
+   - the level-memory install cell (`LEVEL_MEMORY installed`).
+4. The run cell: arm C's cell plus both dumps after `bm.run`, LM's first and then C+U's (5 + 7 lines). Nothing else in it
+   changes.
+
+Everything else is byte-identical:
+- cell 0, D′, REAP-448, acceptance 0.5, 14 streams / Mamba 84, the ARC map;
+- the six exp-081 patches;
+- the 2400 s first-request grace;
+- the 25 × 121 min Save & Run.
+
+`kernel-metadata.json` differs from arm C only in `id`, `title` and `code_file`. The notebook is 855,694 bytes. The `-u` and
+`-lm` notebooks are not touched: their v1 check runs and the scheduled C+U submits pin them, and a test checks their shas.
+
+**Interaction probe** (`tests/jad_ulm_probe.py`, on the real tree). It builds `/kaggle/taaf-kaggle-source-share` from the
+bundle notebook's own cells: Franzen's patch plus all eight `/kaggle/ours-*.patch`, through the vendored `franzen_tree.py`. It
+sets the notebook's own `setup_env`, then executes the C+U and LM install cells verbatim, in notebook order, in one namespace.
+Then it drives the real `ToolAgent` and sandbox:
+- one agent, with the `ours_untried` clock stubbed, plays level 1 (stalls 700 s), a click on a named object, the level-up, a
+  reply without a rule, a 690 s stall on level 2, a reply with the rule, three trims, and a prompt 700 s after the last I1;
+- a second agent, on a fake game that applies the solver's stale rule, runs the latch snippets.
+
+Wrapping is disjoint:
+- LM owns `_build_user_prompt`, `_trim_messages_for_context` and `_ensure_session`;
+- the C+U counters own `_run_python_tool`, `ours_untried.prompt_lines` and `ours_untried.stamp`.
+
+ours-10's call site sits inside the patched `_build_user_prompt` body, which LM's wrapper calls first. The resulting layout:
+
+| prompt | blocks, in order (each at most once) |
+|---|---|
+| level 1, first | tool line |
+| level 1, stalled 700 s | **I1**, tool line |
+| level-2 opener | **03b win record** ("Level 1 record (exact facts …)"), tool line, **LM rule request** (last paragraph) |
+| level 2, stalled 690 s, rule still missing | **I1**, tool line, **LM's second rule request** (last paragraph) |
+| level 2, after the rule was captured | tool line |
+| level 2, after the trims, 700 s after the last I1 | **I1**, tool line |
+
+The opener carries no I1 line: the new level's clock starts at the level-up. The one prompt that carries both an I1 line
+and an LM request is the second ask, if a level stalls 10 min before the rule is written. In that prompt the I1 line
+precedes the tool line and the request is the last paragraph.
+
+After the trims, the messages are:
+`[system = base + LM block] [03b ledger] [retained history …] [the level-2 opener] [reply] [the stalled prompt] [reply] [current prompt]`.
+- The LM block ends the system prompt (one header and one footer), with the captured rule.
+- 03b's ledger is message 1 ("Level 1: won in 3 actions (steps 1-3) …").
+- A third trim of the same history is idempotent: still one block and one ledger.
+- The I1 line renders the same before and after the system prompt is rewritten.
+
+Counters:
+- untried: `i1_lines` 3, `i1_unmatched` 0, `errors` / `tracker_errors` / `i2_lines` 0; the click on the named object counts as
+  a hit (1 of 3; the other two windows close short at the end of the probe).
+- latch: `FIRST True False / SECOND refused / THIRD True True`, `LOOP 4 6`; `stale_refused_after_released` 0,
+  `stale_refused_after_cap` 2, `errors` 0.
+- LM: `levels_recorded` 1, `rules_captured` 1 (on the second ask), `asks` 2, `blocks_applied` 1, `errors` 0.
+
+**Verdict: no interaction found.** There are no duplicate or missing blocks and nothing mis-ordered. The only extra prompt
+cost of combining the two is the coincidence above, which happens at most once per level.
+
+**Check run (pre-registered; full-length 25 × 121 min, ~2.3 GPU-h; push into a free GPU slot with `jadulm-push-1`, read with
+`jadulm-out-1`).** The criteria are the union of 10.4 and 12.5, as in 16.5. Baseline: C v1 / v2 (728.7 / 789.9 gen tok/s,
+107 / 111 levels, 49.21 / 48.03, C v2 1,989 tokens/request).
+- **Pass, mechanism**:
+  - markers `harness patch applied successfully`, `our harness patches applied successfully: 8`,
+    `#OURS_FORM ok version=d_prime`, `priority gate active: 14 concurrent streams`,
+    `48 layers x 448 experts, router sha256 for every layer`, `ours: FR-Spec map hot_tokens_64k_arc.pt written`,
+    `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1`, `LEVEL_MEMORY installed`;
+  - `level_memory_summary.json`: `errors` 0, `levels_recorded` > 0, `blocks_applied` > 0, `rules_captured` ≥ 0.5 ×
+    `levels_recorded`;
+  - `untried_summary.json`: `errors` 0, `tracker_errors` 0, `i2_lines` 0, `i1_lines` ≥ 20, **I1 click-within-3 share ≥ 15%**
+    (also read `i1_unmatched`, expected 0);
+  - `stale_latch_summary.json`: `errors` 0 and **`stale_refused_after_released` 0**;
+  - 0 tracebacks outside serving teardown; 25/25 games terminal.
+- **Pass, serving**: gen tok/s **≥ 750**; accept 3.0-3.3; repeated assistant turns ≤ 1; retractions ≤ 4; tokens/request
+  **≤ 2,190**.
+- **Pass, outcome**: **≥ 3 of 4 key levels** (sp80 L2, tn36 L2, vc33 L4, cn04 L2); levels **≥ 103**; score **≥ 44**.
+- **Kill** (any one):
+  - gen tok/s < 723; levels < 95; score < 40; tokens/request > 2,390;
+  - LM `errors` > 0; `blocks_applied` 0; `i1_lines` 0; `stale_refused_after_released` > 0;
+  - a missing install marker;
+  - a traceback from `level_memory`, `ours_untried`, `cu_counters`, the install cells or the patched refusal lines.
+- **Near-pass** (tok/s 723-750, levels 95-103, score 40-44, click share 10-15%, or 2 of 4 key levels): **rerun once**. This
+  follows the build brief, and replaces 16.5's "do not rerun".
+  - Until a rerun passes, C+U v1 takes the bundle's slots (16.5, 16.7).
+  - A second near-pass counts as a non-pass: C+U keeps the slots.
+- **Slots**: per 16.7, from 10-15, and only after a check run of the version being submitted has passed (`jadulm-submit-N`,
+  version 1).
