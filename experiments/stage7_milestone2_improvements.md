@@ -1158,7 +1158,7 @@ each is judged by mechanism counts.
 - Give it slots only if C's mean holds up and exp-085's hidden draws are not below exp-081's. Keep C3 for a later
   isolated arm.
 
-### 11.5 Instrument C0: transcript excerpts from `kernel_output` (proposal; not built, request.json untouched)
+### 11.5 Instrument C0: transcript excerpts from `kernel_output` (proposal; built and run, see 11.7)
 
 The check-run output holds one `<game>…_requests.jsonl` per game: 25 in v2, 2,952 responses. Each `"event": "response"`
 record carries the request `messages`, so the merged assistant sequence covers the whole game, not just the last window.
@@ -1195,6 +1195,60 @@ re-downloads from Kaggle in any case) to check the per-game claims of §11.2 on 
   levels (critical levels 9 of 12 against 9 of 16) is suggestive, not established.
 - **The weak public games stand for a hidden-set population that is about 60% "hard"** (G15). Fixing sk48- or
   wa30-type stalls would need faster rule induction or planning by the model, which no harness line here supplies.
+
+### 11.7 Arm C v2 transcript check (C0 built and run, 2026-10-12)
+
+**What ran.** C0 is built as the `transcripts` option of the `kernel_output` op (`scripts/kaggle_ops.py`, tests in
+`tests/test_kaggle_ops_transcripts.py`, usage in CLAUDE.md). It read arm C v2's own `*_requests.jsonl` through three kaggle-ops
+requests: `jad81-tx-1` (run 38189671297), `jad81-tx-2` (38192378153) and `jad81-tx-3` (38192686222). Each re-downloaded
+v2's output (212 files, 26 `*_requests.jsonl`; the layout is flat, `<game>-<hash>_p0_requests.jsonl`, one per game, 34-123 MB
+each). Nine games were read: sp80, lf52, g50t, bp35, sk48, wa30, tn36, vc33, cn04.
+- **Record layout** (probed, then fixed in the reader): keys `action, analysis_step, chat_template_kwargs, event, finish_reason,
+  messages, request_index_within_turn, tool_choice, tools, usage`. `messages` holds the whole request including the reply, and
+  `Current state: step N, level L.` is in the turn opener.
+- **No wall-clock time anywhere** in the records or the opener. The timeline therefore reports requests, completion tokens and the
+  action counter per level, not minutes.
+- **Counting rule.** One refusal prints `StaleStateActionError` twice (the traceback line and the message), so divide the mention
+  count by 2 for refusals; a caught-and-printed refusal prints it once more.
+- The diagnoses below come from one run per game. They say what happened in v2's play, not how often it happens.
+
+**Per-game readings (levels in the table are v2's: sp80 4, lf52 4, g50t 3, bp35 1, sk48 3, wa30 1, tn36 1, vc33 3, cn04 6).**
+
+| game, level | requests / tokens / action() | what the excerpts show | diagnosis in 11.2 |
+|---|---|---|---|
+| sp80 L2 | 58 req, 175k tok, 22 `action()` (counter 12-44), cleared | The model clicked: `MOUSE(25,33)`, `(21,30)`, `(17,12)`, `(17,36)`. Its notes on the winning plan say "the red should be at cols 4-15 and 20-31" and "swap worked exactly as modeled", so it was moving the red bars with clicks and won in 33 actions. `(17,12)` lies in the red columns. The "red" greps only matched L1 (the blue bar turning red under SPACE), so the colour of each click is inferred from the coordinates, not read. | **Not reproduced.** "Red bars never clicked" does not hold for this run. It is one win; the failure may still occur in other runs (v1 cleared only 1 level of sp80). |
+| sp80 L5 (ended) | 19 req, 51k tok, 4 `action()` | Level 5 had a new purple and a yellow object. The model spent its last turns on `logical_grid()` (returned a non-list object), then on writing a search for a bar layout. It was still searching when time ran out. | Time and planning speed, not a missing fact. |
+| lf52 L2 | 24 req, 27k tok, 20 `action()`, cleared | Goal carried over. The first L2 turn reads: "we reduced 5 pegs to 1 and it completed. So the goal is 'reduce to 1 peg'", then jumps. L3 turn 89 states "Goal: 1 peg" again with no re-derivation. | **Refuted for L2** (no goal re-derivation). L3 is slow for another reason: 79 req, 156k tok, a long search over block and peg states. |
+| lf52 stale refusals | 9 refusals in 9 results (L2 1, L3 4, L4 4) | Every sample is a single refusal that stops the snippet (the intended guard). The one caught case (L3 rec 44, a `try/except` around a 4-key loop) ended its loop at the refusal, so no second refusal is visible. | **Not confirmed for lf52.** No snippet in lf52 shows a refused action after a caught refusal. |
+| lf52 scroll | `[view] scrolled` 38 (L3 10, L4 28) | The perception patch is live; the view moved with the pegs. L5 notes "mem was emptied (level change)" (the ours-05 scratch, not the goal). | Matches 11.2 (08b covers the off-screen cart). |
+| g50t L1 | 24 req, 57k tok, 15 `action()` (counter 1-41), cleared | SPACE was tried at action 3, so it is not unused. It was **misread**: after SPACE moved the player back up, the model concluded "SPACE = UNDO" (turns 7-8, step 6-7). By turn 15 it doubts that ("if it were a replay ghost... unless the replay only starts on some trigger (like SPACE?). But SPACE = undo... Hmm"), and by turn 24 it uses SPACE as the restart that makes the ghost replay. The correction took about 16 requests. | **SPACE misread: confirmed (transient, self-corrected in L1). SPACE unused: refuted.** |
+| g50t L4 (ended) | 37 req, 63k tok, 6 `action()` | Mostly deliberation: `logical_grid` found no lattice and the model fell back to segmentation reads and probing. Stale refusals in g50t: 7 mentions, each a single stop. | Partly harness: the lattice helper returned nothing on this level. |
+| bp35 L2 (ended) | 58 req, 174k tok, 10 `action()`, 6 GAME_OVER mentions (4 results) | The model repeats "Hmm, so the goal appears when something happens. Hmm, so..." for a whole turn (rec 96) and then fell back to row-by-row ASCII scans. It never states what killed the ball. `[view] scrolled` 9 (L1 5, L2 4), so the scroll is perceived. | Goal identity unknown (the "lost goal after a trim" reading fits better than "cause of death"). Scroll perception is not the limit. |
+| sk48 L4 (ended) | 13 req, 22k tok, 1 `action()` | L1 took 70 req / 152k tok, L2-L3 about 20-30 each. L4 started late and the last turns are model-building (cable extent, "the tip at 34"). | Time and rule-induction speed; no harness fact is missing. |
+| wa30 L2 (ended) | 37 req, 120k tok, 25 `action()` (counter 61-252), 4 GAME_OVER mentions | Bar-outs, then at the end: "if the orange can't place E, the level fails ... observe first. 3 SPACEs". | Budget-limited multi-agent planning, as in 11.2. |
+| tn36 L2 (ended) | 58 req, 163k tok, 29 `action()`, 3 RESET mentions | A switch-panel puzzle; the model keeps clicking the ball (58,46) and tests switch layouts in batches of 6. Refusals: see below. | Stale-latch: confirmed here. |
+| vc33 L4 (ended) | 63 req, 205k tok, 24 `action()` | Four refusals, all single uncaught stops (clicking the same bar twice). 2 GAME_OVER mentions. | Time spent on pour-level modelling. |
+| cn04 L6 (ended) | 27 req, 23k tok, 18 `action()` | L2-L5 cleared with only 12-62 requests each. L6 ended at the first shape-placement attempts. | Time. |
+
+**The stale-latch bug (C2): confirmed in the transcript of one game.** tn36 L2, request 24 (step 27), a snippet wrapped in
+`try/except`: its stdout reads `retry StaleStateActionError` three times in a row, then `bot cap clicks -1`, and the snippet ended
+in an uncaught `StaleStateActionError: MOUSE(row=58, col=46) was not executed. The action immediately before it,
+MOUSE(row=58, col=46), was a no-op`. That is three caught refusals each followed by a retry that was refused again, which is the
+deadlock 11.3 derived from the source. It is the only snippet of that shape in the nine games; the other 25-odd refusals are
+single stops. So the bug is real on arm C, but in this run it cost a few actions in one level.
+
+**Verdicts for the three checks you asked about.**
+- **sp80 L2, red bars never clicked: refuted for this run.** L2 was cleared in 33 actions with at least four clicks, and the
+  model's own plan text moves the red bars. Unchanged: v1 cleared only one sp80 level, and the I1 notice's case rests on other runs.
+- **lf52, goal re-derived on L2 and stale-latch refusals after a caught error: both not confirmed.** The goal carries over from L1
+  in the first L2 turn. lf52 has 9 refusals, none after a caught one.
+- **g50t, SPACE misread: confirmed, transient.** The "SPACE = UNDO" reading appears at step 6-7 and is corrected by step 36; L1
+  was still cleared in 41 actions. The "SPACE unused" form of the claim is refuted (first used at action 3).
+
+**What this changes in 11.4.** C1's sp80 case loses its best example in v2 (it cleared L2 without the notice), though the
+bimodal post-mortem still holds. C2 is confirmed once and is worth its three lines only as hygiene (expected effect near zero on
+this evidence). For lf52 the carried-goal part of C+LM has no failure to fix at L2. The largest visible loss across the nine
+games is time spent in model-building on the last level (sk48 L4, sp80 L5, cn04 L6, g50t L4), which no harness line here targets.
 
 ## 12. Arm C+U: the I1 notice and the stale-latch fix on exp-081 [CODE + BUILT, 2026-10-12; never pushed]
 
