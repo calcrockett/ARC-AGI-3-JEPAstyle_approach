@@ -2629,3 +2629,174 @@ cost of combining the two is the coincidence above, which happens at most once p
   - A second near-pass counts as a non-pass: C+U keeps the slots.
 - **Slots**: per 16.7, from 10-15, and only after a check run of the version being submitted has passed (`jadulm-submit-N`,
   version 1).
+
+## 17. What could explain the 45-67 scores, and what we could adopt by 10-24 [READ (web + JustAdev742 repo + our history), 2026-10-12; nothing built]
+
+Brief: our best hidden draw is 33.29 and the top-1% bar is 33.60. The leaders are at 67.49 (Yi-Chia Chen), 56.52 (Tufa
+Labs) and 45.00 (mtg). They work under the same constraints as we do: one RTX PRO 6000, 9 h, no internet, open weights.
+Which methods could explain their scores, and which could we adopt in the three weeks left? A second question was
+whether our CodeWorldAgent idea fits: the model writes a world model and the harness BFS-plans against it inside the
+sandbox.
+
+**Short answer.**
+- **No leader has published a method.** The best-supported explanation is trained artifacts: a post-trained policy, a
+  drafter trained on the team's own traffic, or both. More decode capacity and a low-noise evaluation loop that lets
+  them stack small harness wins probably add to that.
+- **We cannot train a policy by 11-02.** Of the "trained artifact" levers, only the drafter is within reach, and it is
+  already built (§15).
+- **The published world-model agents that score 41-98% on the public games all run frontier coding models.** The one
+  ablation of their parts finds that model strength dominates. It also finds that an executable world model does not
+  reliably beat plain text reasoning.
+- **The model-writes-world-model-then-search tool is already in arm C** (JustAdev742's ours-04, `OURS_SEARCH_HELPER=1`).
+  The model rarely calls it, and the bundle that added it did not move the score.
+- **Nothing new is adoptable at a measurable level by 10-24.** The two changes worth finishing are the ones already in
+  flight: the drafter (§15) and C+hic16 (§14). Both are throughput levers, and both can be judged by a check run without
+  a draw. A replay-verifier / goal-monitor tool is the only new idea with literature support. It is optional and ranked
+  third. Its expected effect is below what draws can see.
+
+All web content below was read as search-result snippets; arXiv, alphaxiv and the blogs were not fetchable through the
+proxy. Figures marked "secondary" were not checked against the primary source.
+
+### 17.1 What the leaders are known to do
+
+| Team (best) | Verified facts | Reading (inference) | Source |
+|---|---|---|---|
+| Yi-Chia Chen, `threerabbits` (59.17 on 10-08, **67.49** on 10-11; ~26 submissions) | In June, for a different competition, on the same GPU class, offline: their own SGLang build (sm120 triton attention, FP8 KV, 48 running requests, 200k context); a **self-trained DFlash draft** (8 draft tokens); an **on-policy-distilled target model** (`opd-32b-v33-s200-gptq-w4a16`); a venv archive with warm kernel caches. Forum, 09-28: "Given the complexity of the process, I've decided not to open-source my solution for the second milestone." | Their own trained policy and/or drafter on their own serving stack. Their best rose on 8 of 12 days (09-27..10-08), which fits a sequence of trained checkpoints. | JustAdev742 `docs/research/beat-tufa/intel.md` §3, `intel-oct10.md` §1 (their Kaggle and forum reads); CLAUDE.md leaderboard reads |
+| Tufa Labs (56.52; 159+ submissions) | Milestone-1 winner ("The Duck": a small open LLM writing Python in a live REPL, oldest-message eviction, "gains from multimodality and better base models"). Early September: forks of a full RL post-training stack (slime, miles, verl, Megatron/TE, sglang). Team bios list RL, self-play and test-time RL. Their May paper is on on-policy self-distillation from world feedback. Their evaluation config runs 20 passes × 25 games on a B200 Slurm cluster. Forum: they will release only at the end. | A post-trained policy (+66% step from 27 to 45 on 09-26..28 that no public serving change explains), plus a low-noise evaluation loop. | arcprize.org Milestone #1 post; JustAdev742 `intel.md` §2, §6 |
+| mtg (45.00), NVARC3 (40.97), SparseTech (37.98) | No public trace. NVARC3 redacted a dataset path "as it may leak info". SparseTech's only public datasets are a custom sm120 inference binary and a 150B REAP-pruned MXFP4 build. | Custom runtimes / pruning for capacity (guess). | JustAdev742 `intel-oct10.md` §1 |
+| Milestone-2 open winners: Franzen 27.9, Lord Han Solo 23.8, Lohit Siriki 22.5 | Their stacks are public, and our arms are built from them (§2, §9). | They are the 25-35 band. Nobody has published a combination of them that leads. | ARC Prize post on X (via search snippet); Tong Hui Kang's table, thread 744792 |
+
+**Public fine-tuning attempts on the served model have no leaderboard gain so far.** Four teams report this: an SFT on
+synthetic variants (no improvement, "very difficult because it's an MoE"); an RL pipeline on a full H200 node ("did not
+gain any performance"); behaviour cloning (+2 public, not on hidden); and a public LoRA (no gain yet). So training works
+for the two leaders and not, yet, for anyone who has said what they did. That fits "trained artifacts plus a lot of
+iteration compute", and does not fit a trick that can be copied.
+
+### 17.2 Methods in the literature, and their fit
+
+| Method | Source | Claimed result | Model | Fit to our constraints |
+|---|---|---|---|---|
+| Executable world model, verified against past transitions, simplified (MDL proxy), planned through before acting | Rodionov, arXiv 2605.05138 | 25 public games: 15 fully solved, mean RHAE 58.12% (stronger model); 8 solved, 41.29% (weaker). Private set untested. One aggregator reports an earlier 7 solved / 32.58%. | frontier coding agents | Mechanism transferable; capability not. See 17.3. |
+| Nested ablation of the above: textual vs executable vs +simplification vs +exact replay verification | Rodionov, arXiv 2607.15439 | "Model strength dominates". Textual **beat** the flexible executable variant at both settings of the stronger model. Simplification helped in 3 of 4. **Verification ranked first in all 4**, at substantially more resources. At max effort the textual variant completed every level below the human action count. | frontier coding agents | The key evidence: the world-model *mechanism* is a small, setting-dependent effect even for frontier models. Verification is the one consistently positive part. |
+| OPINE-World: object-centric programmatic world model; one agent acts, another writes the model and replays past transitions; exploration steered by "ontology error" | Courtis, Li, Sanner, arXiv 2607.01531 | 20 of 25 games, action-efficiency score 78.4 (abstract) | LLM agents (frontier, as far as the abstract shows) | Two cooperating agents at frontier scale; not portable in 3 weeks. Replay verification is common to all three papers. |
+| Tycho: game as a rendered deterministic Moore machine, free-form executable hypothesis revised from history | Lehmann, Aioanei, Vahdati, arXiv 2607.28287 (Apache-2.0 code) | results section not seen; JustAdev742's lesson 0013 records +6 RHAE from checking the model against transitions (79 → 85) | frontier | as above |
+| Twin: test-time digital twin written by a coding agent | Skoutnev et al., arXiv 2608.14490 | 179 of 183 levels, 93.3 RHAE (secondary) | frontier | as above |
+| AERA: explore / verify / plan | Liew, arXiv 2605.25931 | 4 games, RHAE 0.21 on public with a 0.5B model; a linked entry reportedly 0.30 on private (secondary) | 0.5B open | Shows a small-model scale world-model agent sits two orders of magnitude below the harness family. |
+| Harness-only differences between labs' runs of one frontier model (62.7% standard harness vs 98.6-99.9% custom; one vendor harness took another frontier model from 30% to 100%) | arcprize.org/blog/astra; press coverage | as stated | frontier | Confirms harness matters a lot *at frontier capability*. Our own record (§0, lesson 0025) is that harness text moves a 6B-active model inside draw noise. |
+
+### 17.3 Our own evidence on "model writes a world model, harness plans against it"
+
+- **CodeWorldAgent** (`experiments/stage7_codeworld_prototype.md`, kernels v1-v8): once the renderer fix kept prompts
+  inside the context, the served model wrote replay-passing world models (16 passes, 4 of 12 games). Every later wall was
+  instrumented and fixed: goal_hint reading the HUD, legal moves, state leaks, goal falsification. Across v3-v8 it
+  completed **0 levels**. The final wall was hypothesis diversity: after a falsified goal, the model perturbed the
+  coordinates of the same idea. That is a capability limit, not plumbing.
+- **ours-04 in arm C** (`search()` BFS / A* / beam over a model-written `step`, `run_plan()` that stops at the first
+  surprise; on in arm C, the bundle and every C variant). JustAdev742's whole-game read of exp-077: **16 `search()` calls
+  in 5 games and 49 `run_plan()` calls in 8**, out of 2,779 tool calls. That bundle scored 48.96 against a base mean of
+  49.4 (per-game −0.48, SE 4.2). On recorded model code, `search()` found tu93's 31-move plan and a 7-click r11l L3 plan
+  in 0.12 s. That r11l plan then failed at its first real click, because the model's own map was wrong.
+- **Where the model-built model fails is the model, not the planner.** sk48 in exp-073b: the transition model checked
+  111/111 and A* returned a 42-move plan, but `sim win False`: the goal was never verified (§11.2). Most stalled levels are
+  "mechanic never decoded" or "key object never acted on" (§11.3), which a planner cannot fix.
+- **So the proposed combination already exists in arm C, and the data says it is not the bottleneck.** Building a second,
+  heavier version (a fit-and-run world-model tool with its own prompt protocol) would repeat ours-04 with more prompt text.
+  The cost would land on the 6B-active model's turns, which is where every added-text arm has measured neutral or negative
+  (lesson 0025; ours-06b/07 in exp-078/079: 39.73 / 45.02).
+
+### 17.4 What could plausibly explain 45-67, ranked by evidence
+
+1. **A post-trained policy** (OPD, RL or SFT on ARC-like play), for both leaders. Evidence: Yi-Chia's OPD-trained 32B and
+   Tufa's RL stack and paper; daily small improvements; four failed public attempts that show it is hard. Gain: unknown,
+   possibly most of the gap. **Not adoptable:** it needs BF16 weights on multi-GPU rental, a merge and re-quantisation, and
+   a new serving check. JustAdev742 costs it at $1.5-3k with a ~40% chance of no gain. Prize eligibility would also
+   require publishing the weights. Three weeks is not enough.
+2. **A drafter trained on the team's own harness traffic**, with their own serving build. Evidence: Yi-Chia's self-trained
+   DFlash draft in June. Son Pham's retrained draft head was part of his 25 → 40 public-25 step. JustAdev742's fine-tuned
+   MTP draft raised accept 3.14 → 3.33 and run-level output +3% on our exact arm (exp-084 vs exp-081). **Adoptable:
+   §15, built.**
+3. **More decode capacity at long context** (pruning, more streams, host KV tier). Evidence: Son Pham 7 → 16 lanes, 21.4 →
+   33.9 (one run). REAP-448 + 14 streams +14% on our stack. The host tier gave +7.7% on arm A's serving, which is arm C's
+   serving. **Adoptable: §14 (C+hic16), pushed 10-12.**
+4. **A low-noise evaluation loop** (20 passes × 25 games) that lets a team stack many +2-5% changes we cannot see.
+   Evidence: Tufa's config. **Not adoptable:** at ~2.3 GPU-h per full public-25 run and a 30 GPU-h weekly quota, we get
+   about 10 runs a week, not 20 per arm.
+5. **Harness behaviour fixes** (pinned rules, budget meter, untried notices, perception). These are what arm C and its
+   variants already are (ours-02/03b/04/05/08b/10, LM, the latch fix). Expected +2 to +5 total on a Franzen base, by
+   JustAdev742's estimate. That matches arm C's single hidden draw of 34.04, not 50+.
+
+The gap from 33 to 56+ is therefore most likely items 1 and 4, which we cannot buy. Items 2 and 3 are worth a few percent
+of tokens each: about +0.2 to +1.5 points per +5% tokens (§13 rerun model).
+
+### 17.5 Adoptable changes, ranked (build on arm C, finish by 10-24)
+
+**1. The MTP drafter fine-tuned on arm C's own traffic (§15; L0 built, session A pushed 10-12 07:01 UTC).**
+- **Evidence.** JustAdev742's draft on the identical arm: accept 3.14 → 3.33, +3% run-level output tok/s. Yi-Chia and
+  Son Pham both trained drafters. Hidden evidence is null at n=1.
+- **Remaining work.** Read session A's drafter gate (`mtps-out-1`). Build C+D with
+  `scripts/_build_jad_exp081_draft_kernel.py --draft-manifest ... --expect-sha ...`, then run its check run.
+- **Cost.** ~0.5 agent-day. GPU: session A ~1.5 h nominal (cap 4.5 h), plus the C+D check run ~2.3 h.
+- **Measure.** The drafter gate (realized accept +0.20, greedy +0.20, step-1 KL −40%), then the C+D gate (§15.6): accept
+  median ≥ 3.27, gen tok/s ≥ 805 or decode median ≥ 948, levels ≥ 100, score ≥ 42. The serving swap onto the bundle
+  must pass by 10-24 (CLAUDE.md decision rule 3).
+
+**2. C+hic16: 32 GB host KV tier + 16 streams (§14; pushed 10-12 06:42 UTC).**
+- **Evidence.** The same change gave +7.7% on arm A's serving, which is arm C's serving. Arm B's +1.6% run had a late
+  boot.
+- **Remaining work.** Read the check run (`jadh16-out-1`). On a pass, rebuild it on the bundle and run the swap check.
+- **Cost.** ~0.5 agent-day; GPU 2.3 h (its own check) + 2.3 h (swap check).
+- **Measure.** §14.3: gen tok/s ≥ 845 (kill < 790), `hicache_attached=True`, MemAvailable ≥ 10 GiB, levels ≥ 103,
+  score ≥ 44.
+- **Choosing between 1 and 2.** Both are serving swaps, and the schedule allows only one swap by 10-24. Take whichever
+  passes first. Stacking the two needs a third check run (~2.3 GPU-h) and only makes sense if both pass by ~10-20.
+
+**3. Optional, only if 1 and 2 finish early and quota remains: a replay verifier and goal monitor for the model's own
+world model** (JustAdev742's unbuilt M5 `check()` and M6 goal predicates, on top of ours-04's `step` / `observe` interface).
+- **What it adds.**
+  - `check(step, observe)` replays every recorded transition of the level through the model's `step` and returns
+    matched / total and the first mismatch.
+  - Retained functions named `goal_*(frame)` are evaluated after every executed action. A predicate that becomes true
+    without the level completing gets one line in the next prompt: "falsified".
+- **Evidence.**
+  - Verification is the one component that ranked first in all four settings of the ablation (2607.15439). Replay
+    verification is shared by OPINE-World and Tycho. Lesson 0013 recorded +6 RHAE from it at frontier scale.
+  - Our own failures point the same way: sk48's unverified goal (`sim win False` after a 111/111 model), re86's 23-action
+    plan on a wrong goal, and CodeWorld's goal-falsification wall.
+- **Against.**
+  - Uptake by a 6B-active model is the open risk. Only 16 `search()` calls in 25 games means few levels will have a
+    `step` function to check.
+  - Lesson 0010: a verifier without a stop rule turns plans into one action per call.
+  - Added prompt text has measured neutral-to-negative on this stack.
+  - JustAdev742's own estimate is 0 to +1.5 LB, which no draw count we have can see.
+- **Cost.**
+  - 1.5-2 agent-days: a patch on the 8-patch bundle tree, CPU tests on recorded model code from the exp-077 /
+    exp-073b samples, a sha-pinned builder.
+  - ~150 cached prompt tokens.
+  - One check run, 2.3 GPU-h.
+- **Measure** (25 × 121 min, against the bundle's own check run).
+  - Mechanism: `check()` called on ≥ 10% of levels that have a retained `step`; ≥ 1 goal falsification event; errors 0.
+  - No harm: tokens/request within +10%, gen tok/s ≥ 750, levels ≥ 103, score ≥ 44, repeated turns ≤ 1.
+  - Kill: uptake under 10% (it then does nothing), or any harm line.
+- **Slots.** Even on a pass it is a harness change, not a serving swap, so under §16 it gets no slots before the
+  bundle's posterior is settled. Drawing it would split the remaining ~10 draws for an effect we cannot measure.
+  **Recommendation: do not build it unless items 1 and 2 are both decided by ~10-18 and GPU quota is left for that week.**
+
+**Not adoptable in time (and why).**
+- Post-trained policy: compute, money, eligibility (17.4 item 1).
+- A second CodeWorld-style world-model mode: 17.3.
+- Low-noise evaluation: quota.
+- Reasoning effort medium: killed (§6).
+- Fresh start / mid-level context reset: halves solves (lesson 0037).
+- Exposing RESET: hurt in exp-077/078.
+- A third-party reasoning-efficient fine-tune of the served model: gated licence, no hidden evidence.
+- The CPU novelty explorer for games stuck on level 1: every public game cleared level 1 in arm C v2 (§13.2), so the
+  public set cannot measure it. JustAdev742 estimate +0.3-1, with about 2 days of porting.
+
+### 17.6 Bottom line
+
+- **To reach 45-67 we would almost certainly need trained weights**, which we cannot produce and serve by 11-02.
+- **The realistic aim stays the top 1%**: about 33.6 now, 35 on the private ranking (§16.3).
+- **The levers that serve that aim are the ones already in flight.** The C-family bundle's draws, plus at most one
+  serving swap (drafter or host tier) that passes its check run by 10-24.
+- **The world-model-plus-search idea is already in arm C as ours-04.** Neither its uptake nor any score change suggests
+  that more of it would help this model.
