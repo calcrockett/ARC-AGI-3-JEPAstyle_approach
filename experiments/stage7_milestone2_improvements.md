@@ -2227,6 +2227,57 @@ early Saturday UTC, and never ahead of a scheduled arm's check run):
    C's six plus `ours: MTP draft`). **Never push a second version of `arc3-mtp-session-a` once C+D pins it**; a
    retrain goes under a new slug.
 
+### 15.8 Session A passed; C+D built and pushed (2026-10-12) [BUILT + PUSHED v1; check run pending]
+
+**Session A v1** (read 11:39 UTC, kaggle-ops `read-1012-h16`, run 38243454868): drafter gate PASS (held-out realized accept
+2.894 -> 3.123, +0.229; greedy +0.279; step-1 KL -55%; top-1 up at all three steps; 11 of 11 frozen files byte-identical).
+
+**Manifest.** Rebuilt byte-exactly as `json.dumps(obj, indent=1) + "\n"` from that log's
+`PRINT_FILE_JSON mtp-draft/arc3-draft-manifest.json` line, and independently from the file text `print_files` printed in the
+same log (timestamps stripped); both give 2998 bytes, sha256 `6f408d58fd813bce415edc55802f174ebac73fef292455ac388104c404dc1d45`
+(the session's printed value), with `files["mtp-dense.safetensors"]` = `b677e0c4234c6344fe29f147a972b192de241e557e83a12452409da13967a985`,
+26 dense tensors replaced, 12 files. Committed as `kaggle_submission_jad_exp081_draft/arc3-draft-manifest.json`.
+
+**Build.** `python scripts/_build_jad_exp081_draft_kernel.py --draft-manifest kaggle_submission_jad_exp081_draft/arc3-draft-manifest.json
+--expect-sha 6f408d58...1d45` (apply check against Franzen's repo on). Notebook sha256 `0e2a7599a5b3958dd5071210c0b5b8950df27961e88de0fe4bdab241866d4bf6`,
+metadata `ca4d0266c0ce0e3c79b57a522f0f239b7e930e2621422a39f112a74b09817bdd`; both pinned in `tests/test_jad_exp081_draft.py`, which
+also rebuilds them byte-identically from the committed manifest (13 tests; full suite 765 passed).
+
+**Review against arm C v2** (36 cells each, notebook metadata identical):
+- markdown cell 0: the build summary gains the draft clause ("resolves its 5 /kaggle/input paths" instead of 6, since the draft
+  is no longer a model input) and the C+D fork note replaces arm C's;
+- the setup cell (index 11, "cell 4" of 15.4): the single stock-draft line
+  `DRAFT_MODEL_DIR = _ours_input('/kaggle/input/models/dfranzen/albucino-.../transformers/default/1')` becomes the
+  `# >>> ours (--draft)` block: `_ours_draft_dir` polls every 5 s, up to 600 s, for `arc3-draft-manifest.json` under
+  `/kaggle/input/notebooks/calamitychasm/arc3-mtp-session-a/mtp-draft` or `/kaggle/input/arc3-mtp-session-a/mtp-draft`, then
+  checks the manifest's sha256 and `mtp-dense.safetensors`' sha256 (16 MB blocks), raises on any mismatch, and prints
+  `ours: MTP draft <path> after N s (manifest 6f408d58fd81, dense b677e0c4234c)`. It runs before `_ours_need`'s 120 s wait,
+  the precache thread and `prepare_draft_view`, so nothing reads an unchecked draft;
+- `kernel-metadata.json`: id / title / code_file; the `dfranzen/albucino-qwen3-8-flash-next-drafter` model source removed;
+  `kernel_sources` `["calamitychasm/arc3-mtp-session-a"]`. Machine, image, datasets, the target model and the competition are unchanged.
+
+**Mount paths and the draft load.**
+- The new-layout path is proven on our account: session A itself saw its kernel source (arm C) at
+  `/kaggle/input/notebooks/calamitychasm/arc3-jad-exp081/` with the output files at the mount root, so session A's
+  `/kaggle/working/mtp-draft/` should appear at `/kaggle/input/notebooks/calamitychasm/arc3-mtp-session-a/mtp-draft/`
+  (kaggle-ops itself read it back as `mtp-draft/arc3-draft-manifest.json`). JustAdev742's scored exp-083 used the same code path.
+- The older layout (`/kaggle/input/<slug>/`, CLAUDE.md gotcha 2026-10-09) is the second candidate. There is no glob fallback
+  (unlike our `input_resolver`): a third layout fails after 600 s with `MTP draft not mounted after 600 s` (loud, not silent).
+- `prepare_draft_view` rglobs `config.json` under `DRAFT_MODEL_DIR` and needs exactly one compressed-tensors config with
+  `mtp_routed_experts`; `mtp-draft/` holds one `config.json` and one `model.safetensors.index.json` (both frozen, byte-identical to
+  the stock draft's) and exactly two shards, `mtp-dense.safetensors` and `mtp-routed-experts-int4.safetensors`, so the view should
+  build as for the stock draft (not checked on a GPU here; exp-084 used the same exporter output).
+  `DRAFT_MODEL_DIR` points at `mtp-draft/`, not the mount root, so session A's `mtp-train/` (1.25 GB, also mounted) is never searched.
+- Hashing the dense shard adds a read of it from the mounted input before boot (seconds to ~1 min on slow storage); it is
+  inside the 2400 s first-request grace.
+- `kernel_sources` takes no version: Kaggle mounts the session's **latest** version. v1 is the only one; a changed output
+  fails the manifest sha check rather than serving another draft. **Never push a v2 of `arc3-mtp-session-a`.**
+
+**Push.** kaggle-ops `jadd-push-1`, run 38245684435, 11:55 UTC: `PUSHED`, version 1 (first push of the slug), `busy_before`
+only `arc3-jad-exp081-ulm` RUNNING, so the push went into the free slot and its kernel source should mount. Read it with
+`jadd-out-1` (CLAUDE.md examples) against the C+D gate of 15.6; markers are arm C's six plus `ours: MTP draft` with
+`(manifest 6f408d58fd81, dense b677e0c4234c)`.
+
 ## 16. Slot plan 10-13..11-02 for P(top 1%) on the private ranking [ANALYSIS + MC, 2026-10-12; nothing built]
 
 Written 2026-10-12 ~07:30 UTC, before arm C draw 1 (57089293) scored. This section proposes a schedule. CLAUDE.md's schedule
@@ -2807,3 +2858,4 @@ world model** (JustAdev742's unbuilt M5 `check()` and M6 goal predicates, on top
 - **C+hic16 check run: near-pass.** 803.82 gen tok/s (bar 845, kill 790; C v2 789.9, +1.8%), tier attached, 16 streams, MemAvailable min 27.5 GiB, retracts 2, accept 3.13, tokens/request 2027, 114 levels, mean_score 50.27, `READY after 532s`, no `DEADLINE at`. Rerun once before any adoption (14.3); serving-swap deadline 10-24.
 - **MTP session A: drafter gate PASS** (realized accept +0.229, greedy +0.279, step-1 KL -55%, top-1 up at all three steps; manifest sha256 `6f408d58fd813bce415edc55802f174ebac73fef292455ac388104c404dc1d45`, frozen files identical, 54.6 min). Next is 15.7 step 3 (build and push `arc3-jad-exp081-draft`).
 - **Bundle `arc3-jad-exp081-ulm` v1 check run pushed** (no GPU kernel busy before it); read it with `jadulm-out-1`.
+- **C+D (`arc3-jad-exp081-draft`) built from session A's manifest and pushed v1** at 11:55 UTC (`jadd-push-1`, run 38245684435; only the bundle running before it). Detail in 15.8; read it with `jadd-out-1` against the 15.6 gate.
