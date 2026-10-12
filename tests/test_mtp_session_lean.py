@@ -27,7 +27,7 @@ KDIR = ROOT / "kaggle_submission_mtp_session"
 VENDOR = KDIR / "vendor"
 NB = KDIR / "notebook" / "arc3-mtp-session-a.ipynb"
 META = KDIR / "notebook" / "kernel-metadata.json"
-NB_SHA = "ae24dbf5d82d7c46a978fe4bd0d24e4d61b46bfe95b8ae6a8236aac749fcad9f"
+NB_SHA = "f11d1ea9223e1545a6c75b935d7f1b0ea44377cf6f04b18c23556532f170d336"
 META_SHA = "a37adfc33bdf3ccd9120cd058b20c2ea0d487d08cdf0e2066bdc49f34f4dd284"
 UPSTREAM = Path("/home/user/ext/JustAdev742_Arc-Agi-3-Kaggle-comp")
 LAUNCH_ANCHOR = "CFG = dict(\n"
@@ -144,7 +144,10 @@ def test_metadata_is_ours_with_arm_c_v2_as_the_only_kernel_source():
 def test_session_config_inputs_deadline_and_their_recipe(nb):
     data, cells = nb
     cfg = _config(cells)
-    assert cfg["inputs"] == {"logs": {"kind": "kernel", "id": "calamitychasm/arc3-jad-exp081", "files": {}}}
+    sizes = json.loads(B.LOGS_MANIFEST.read_text())["files"]  # listed by kaggle-ops mtps-ls-1 (run 38214680909)
+    assert len(sizes) == 25 and sum(sizes.values()) == 1_798_106_223
+    assert all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in sizes.values())
+    assert cfg["inputs"] == {"logs": {"kind": "kernel", "id": "calamitychasm/arc3-jad-exp081", "files": sizes}}
     assert cfg["session_hours"] == 4.5 and cfg["train"]["reserve_minutes"] == 20 and cfg["storage"]["probe_gb"] == 0.0
     assert B.lean_worst_case_minutes(cfg) <= cfg["session_hours"] * 60
     # their v1 recipe and hold-out, unchanged
