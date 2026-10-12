@@ -1,1 +1,1 @@
-{"id": "jad81-tx-3", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081", "grep": ["[view] scrolled"], "transcripts": {"games": ["tn36", "lf52", "g50t"], "max_lines_per_game": 60, "first_turns": 0, "last_turns": 1, "list_actions": 0, "samples": {"StaleStateActionError": 5}, "sample_chars": 2200}}]}
+{"id": "jadu-push-1", "ops": [{"op": "status"}, {"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_u/notebook"}]}
