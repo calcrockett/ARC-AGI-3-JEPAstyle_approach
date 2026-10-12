@@ -2801,7 +2801,7 @@ world model** (JustAdev742's unbuilt M5 `check()` and M6 goal predicates, on top
 - **The world-model-plus-search idea is already in arm C as ours-04.** Neither its uptake nor any score change suggests
   that more of it would help this model.
 
-## 17. Results read 2026-10-12 11:39 UTC (kaggle-ops `read-1012-h16`, run 38243454868)
+## 18. Results read 2026-10-12 11:39 UTC (kaggle-ops `read-1012-h16`, run 38243454868)
 
 - **Arm C v2 draw 1 (57089293) = 20.70.** Low-draw rule of 16.6 fires: 10-13 = C v2 (`jad81-submit-2`, version 2), 10-14 = C+U v1 (`jadu-submit-1`). n=1; the standing rule applies from 10-15.
 - **C+hic16 check run: near-pass.** 803.82 gen tok/s (bar 845, kill 790; C v2 789.9, +1.8%), tier attached, 16 streams, MemAvailable min 27.5 GiB, retracts 2, accept 3.13, tokens/request 2027, 114 levels, mean_score 50.27, `READY after 532s`, no `DEADLINE at`. Rerun once before any adoption (14.3); serving-swap deadline 10-24.
