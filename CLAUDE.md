@@ -341,6 +341,55 @@ Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-f
 `scripts/_build_m2_speed_kernels.py m97s12 m96s12hic m97s12hic`, `scripts/_build_m2_vllm_kernel.py`
 (all idempotent; tests pin the committed notebooks). Report: `python scripts/m2_speed_report.py base <names>`.
 
+**GPU quota budget (2026-10-12 12:15 UTC; a tally from this file, NOT a read of the API -- the cloud box cannot reach kaggle.com).**
+Kaggle gives **30 GPU-h per week**; the RTX PRO 6000 kernels draw on it; the window resets **Saturdays 00:00 UTC** (JustAdev742
+`scripts/kaggle_quota.py`, `docs/status.md`; resets seen 09-19, 09-26, 10-03, 10-10). So this week's window is 10-10 00:00 .. **10-17 00:00 UTC**,
+the next one 10-17 .. 10-24 00:00 UTC. Whether OUR account has the same 30 h and the same reset is assumed, not verified.
+
+| since the 10-10 00:00 reset | GPU-h | basis |
+|---|---:|---|
+| `vllm-s14`, `re-medium`, `turbo-lossless-tail-hic16`, `dprime-ff` (4 x 25-game x 25-min check runs) | ~4.0 (3.2-4.8) | **estimate**: ~1 h each, durations not recorded |
+| `arc3-jad-exp081` v1 + v2, `-lm`, `-u`, `-hic16` (25 x 121 min) | 10.2 | recorded: 2h01m47s, 2h01m44s, 2h02m02s, 2h02m25s, 2h01m39s |
+| `arc3-mtp-session-a` v1 (pushed 07:01) | ~1.5 (1.2-2.5) | **estimate** (nominal 1.5, slow-storage cap 2.5), duration not recorded |
+| **completed, total** | **~15.7 (14.6-17.5)** | |
+| in flight: `arc3-jad-exp081-ulm` (pushed 11:39), `arc3-jad-exp081-draft` (pushed 11:55) | ~0.8 so far, ~4.1 when both finish (~13:45-14:10 UTC) | 2 x ~2.05 h expected |
+| **projected used after both finish** | **~19.8 (18.7-21.6)** | |
+| **projected left until the 10-17 reset** | **~10.2 (8.4-11.3)** | |
+
+Not counted (flag): the 10-09 evening pushes (strategy-audit 21:51, turbo-tail-hic16 22:12) should have ended before 00:00 UTC; any push made from the
+dev box outside kaggle-ops is not in the repo; whether time held QUEUED before a session starts counts is unknown (JustAdev742 lost ~5 h that way, effect on
+quota unknown); whether the daily submission reruns count: JustAdev742's `kaggle_quota.py` says a competition rerun does not (their status.md calls it
+UNVERIFIED), and ours submit existing check-run versions, so none is added here. Cross-check: the 11-13 h "used" in section 15.3 matches this tally at ~07:00 UTC.
+
+**Reservation rule (JustAdev742 lesson 0035):** Kaggle refuses a push when used + ~12 h per running session would pass 30 h. At ~19.8 used, ONE session
+is accepted but a second concurrent one is refused, so from this afternoon until the reset the checks below run **one at a time** (~2.1 h each), not in
+parallel. `kaggle_ops.py push_kernel` only checks the 2-session count, so a refused push must be retried, not forced. Avoid pushing Fri 10-16 evening
+to Sat 10-17 ~03:00 UTC (slow storage and a saturated pool after the reset, lessons 0031 / 0038).
+
+**Planned GPU needs through 10-24** (each full-length check ~2.3 h with margin):
+- swap check run `arc3-jad-exp081-ulm-draft`: 2.3, only after BOTH the bundle and C+D pass;
+- reruns of near-passes (bundle, C+D, or the swap run): 2.3 each;
+- hic16 rerun: 2.3 (it is C+hic16, 803.8 vs the 845 bar; a swap on the bundle needs a further 2.3 swap check, so the hic16 path is 4.6 in all).
+Worst case this week: swap 2.3 + bundle rerun 2.3 + C+D rerun 2.3 + swap rerun 2.3 = 9.2, which just fits the ~10.2 left (it does not fit the
+low-end 8.4); adding the hic16 rerun (2.3) does not fit. Overflow simply moves to the 10-17 window (30 h fresh), still before the 10-24 swap
+deadline, so **quota does not bind before 10-24; the order and the one-at-a-time rule do.**
+
+**Priority order:**
+1. **Swap check run** (`jadulmd-push-1`) if both the bundle and C+D pass. (If one is only a near-pass, its rerun comes first, because the swap needs both
+   passed.)
+2. **Any required rerun** of the bundle or C+D (a near-pass gets one rerun; a kill gets none). Run them serially.
+3. **hic16 rerun last**, only if quota is left after 1-2 (keep >= 2 h in hand) or in the 10-17 window. **C+D is preferred over hic16 for the single serving
+   swap** (rule 3): C+D has a +0.23 accept gain and a throughput bar it can meet; hic16 is +1.8% on C and +1.6% on B.
+Re-tally when the bundle and C+D results are read; replace the estimates above with a real `quota` read once the status op prints it.
+
+**Does the SDK expose the quota? Yes.** `kagglesdk` 0.1.37 (installed, with `kaggle` 2.2.4):
+`kaggle.kernels.kernels_api_client.get_accelerator_quota_statistics(ApiGetAcceleratorQuotaStatisticsRequest())` returns `quota_refresh_time`
+(the window reset, a datetime) and `gpu_quota` / `tpu_quota`, each with `time_used`, `time_reserved` (running sessions' reservation),
+`total_time_allowed`, `minimum_time_allowed`, `is_pay_to_scale_enabled`, `has_ever_run` (timedeltas). A `status` op could print it by taking
+`api.build_kaggle_client()` the way `scripts/kaggle_submit_when_ready.py` (line ~128) does, calling the method above inside `Runner.op_status`
+(`scripts/kaggle_ops.py`, ~line 601), and adding `res["gpu_quota"] = {used_h, reserved_h, allowed_h, left_h, refresh_utc}` plus one log line; or a
+separate `quota` op. JustAdev742's `scripts/kaggle_quota.py` is a 25-line example. Not implemented; untested from here (no kaggle.com access).
+
 **Dev-box action queue (in order):**
 
 1. **Every UTC day, submit something.** Until a challenger passes its check run, submit the incumbent v1
