@@ -2226,3 +2226,297 @@ early Saturday UTC, and never ahead of a scheduled arm's check run):
    push `calamitychasm/arc3-jad-exp081-draft` (ids `jadd-*`) and read it against the C+D gate of 15.6 (markers: arm
    C's six plus `ours: MTP draft`). **Never push a second version of `arc3-mtp-session-a` once C+D pins it**; a
    retrain goes under a new slug.
+
+## 16. Slot plan 10-13..11-02 for P(top 1%) on the private ranking [ANALYSIS + MC, 2026-10-12; nothing built]
+
+Written 2026-10-12 ~07:30 UTC, before arm C draw 1 (57089293) scored. This section proposes a schedule. CLAUDE.md's schedule
+is unchanged until the orchestrator adopts the table in 16.7. The Monte Carlo scripts live in the session scratchpad and are not
+in the repo; 16.2 gives the model in enough detail to rebuild them.
+
+### 16.1 Inputs
+
+| item | value |
+|---|---|
+| slots | 21 (10-13..11-02), 1 per UTC day, 1 PENDING at a time, ~9 h to score; submit right after 00:00 UTC |
+| incumbent (m2 + LM) | n=5: 33.29, 28.18, 31.03, 29.38, 25.21 (mean 29.42, sd 3.03) |
+| arm A (turbo-tail) | n=1: 26.59 |
+| arm B (turbo-lossless-tail) | n=0 |
+| arm C (exp-081 verbatim, v2) | n=0 of ours, draw 1 pending; JustAdev742's exp-081 draw 34.04 (n=1) |
+| same-serving draws without the bundle | 27.97, 26.04, 28.87 (JustAdev742), 26.59 (our A) |
+| per-draw sd | ~3 (incumbent 3.03; Franzen copies 1.6-3.9) |
+| C-family check runs | C+LM PASS (104 levels / 47.21), C+U PASS (114 / 50.26), both v1; C+hic16 and MTP session A pending |
+| leaderboard (06:38 UTC) | top-1% bar 33.60 (rank 42 of 4,193), rising ~0.1-0.2/day; our best 33.29 (rank 57); #1 67.49 |
+
+**Final ranking.** `rules.md` says only "up to 2 Final Submissions selected for judging" and does not say how the two combine.
+This plan assumes the usual Kaggle rule: the better of the two selected submissions' private scores counts. The recommended
+selection rule (16.6) is also the right one if the two were averaged, because it maximises the expected score as well. Verify on
+the live rules page before 11-02.
+
+**Public/private correlation (rho).** Each submission is one run over all 110 games, scored as 55 public + 55 private games, so a
+draw's public and private scores share a run. The evidence on rho points both ways and cannot be resolved here:
+- Arm C-family full-length public-25 runs spread only ~1.3 (49.21, 48.03, 47.21, 50.26 across C v1/v2, C+LM, C+U). So
+  per-game noise over 55 games is small, and most of the hidden sd of ~3 is run-level. That argues for a high rho.
+- But in a rerun the D′ gate shares one token budget across all 110 games. A run in which some public games absorb tokens
+  starves private ones, which makes that part of the run-level noise zero-sum between the halves. That argues for a low rho.
+
+The plan must therefore hold for rho anywhere in 0-0.6. All results below are reported at rho = 0, 0.3 and 0.6.
+
+### 16.2 Model
+
+**Per draw.**
+- public = mu_k + s + e1
+- private = mu_k + off_family + off_kernel + s + e2
+- var(s) = rho·9 and var(e) = (1-rho)·9, so the per-draw sd is 3.
+- off_family ~ N(0, 1): one per family (incumbent; A/B; C). It models arm-specific differences between the public and
+  private game sets. off_kernel ~ N(0, 0.5).
+
+**Priors** (on the hidden-set mean per draw):
+
+| kernel | prior | basis |
+|---|---|---|
+| incumbent | N(29.42, 1.36) | its 5 draws (sd/√5); the 5 public values are fixed and their privates are drawn conditionally |
+| B | N(28.5, 2.0) | same serving as A plus lossless; family draws 26-29 |
+| C base | **main N(31.8, 2.2)**; **skeptical N(30.0, 2.5)** | main: base family 27.3 ± 1.5, plus a skeptical bundle-effect prior N(+1.5, 3), updated on exp-081's 34.04 (σ 3) |
+| C+U | C + dU, dU ~ N(+0.7, 1.0) | §11.4: +1-2 levels per run; mechanism pass |
+| C+LM | C + dL, dL ~ N(+1.5, 2.0) | incumbent's +4.8 shrunk for the 03b overlap (§10.2) |
+| C+UL (bundle) | C + dU + dL + dI, dI ~ N(-0.3, 1.0) | interaction / token cost |
+| + hic16 | + dH ~ N(+0.6, 0.6), with a 3% chance of -10 | §14: +7% tokens = +0.2..+1.5; a host-RAM failure in a 110-game rerun is unmeasured |
+
+There is also an **"effects null" scenario**: dU, dL and dI all have mean 0, with the same spreads.
+
+**In-sim decisions** use the posterior from public draws only. The C family is fitted as one linear-Gaussian model on
+(mu_C, dU, dL, dI, dH), so every C-family draw informs mu_C.
+
+**Outcome**: P(max private of the 2 selected > bar), for bars 34, 35 and 36.
+
+**Policies**:
+
+| policy | slots |
+|---|---|
+| current | CLAUDE.md schedule: B 10-13/15/17, C 10-14/16, then the leader by sample mean; alternate with the incumbent unless the leader is ≥ 1 above it |
+| C_only | 21 × C verbatim |
+| Cfam | C+U 10-13, C 10-14, C+U 10-15, then the bundle C+UL from 10-16 (check run passes with p 0.85, else C+U). Fall back to the incumbent if the C-base posterior drops below the incumbent's mean − 1 after 10-15 |
+| **Cfam_Cmix** | as Cfam, plus C verbatim on 10-19 and 10-25 (C reaches n=4 with 10-12) |
+| Cfam_B3 | Cfam with B on 10-13/15/17 |
+| separate | C, C+U, C+LM rotated, 7 each |
+| B_then_C | B 10-13..15, then the bundle |
+| Cfam_Cmix_H | Cfam_Cmix with the bundle + hic16 from 10-19 |
+
+**Selection rules**:
+- `each2`: the CLAUDE.md rule, i.e. the top public draw of each of the top-2 arms by posterior, n ≥ 3.
+- `best2`: the two highest public draws of the arm with the best posterior, n ≥ 3.
+
+3,000 sims per cell. Arm C's 10-12 draw is simulated, so all results are averaged over its outcome.
+
+### 16.3 Where is the private bar? (field model)
+
+**Fit.** Team means were modelled as N(mu_f, sd_f) for 4,193 teams, each with 1..10 hidden draws (sd 3) since the M2 era
+began. The fit is mu_f = 22, sd_f = 2.75, which gives public quantiles 33.5 / 31.1 / 29.9 at ranks 42 / 210 / 420 (observed
+33.60 / 31.34 / 29.98). Each team's private score is the best private of its 2 highest public draws.
+
+**Projection to 11-02.** Teams get up to 31 draws, and the field means are shifted so that the public bar reaches 35 or 36:
+
+| public top-1% bar | private top-1% bar, rho 0 | rho 0.3 | rho 0.6 |
+|---|---:|---:|---:|
+| 33.6 (today) | 32.6 | 33.3 | 33.7 |
+| 35 (11-02) | 33.0 | 34.1 | 34.7 |
+| 36 (11-02) | 34.0 | 35.1 | 35.9 |
+
+**The public board overstates the private bar by 0-2 points.** The public board ranks each team's best of all its draws; the
+private ranking uses best-of-2 selected draws, so the private bar is lower. So the 34-36 bars applied to our private score
+below run from realistic to conservative. The field model is crude: Gaussian means, equal noise for every team. Use it only for
+the direction and size of the gap.
+
+### 16.4 Monte Carlo results
+
+P(top 1%) at **bar 35**, rule `best2`. In brackets: rule `each2`, then bar 34 / bar 36 for `best2`.
+
+**Main C prior N(31.8, 2.2), main effect priors:**
+
+| policy | rho 0 | rho 0.3 | rho 0.6 |
+|---|---|---|---|
+| current | 0.35 (each2 0.26; 0.47 / 0.25) | 0.50 (0.42) | 0.65 (0.59) |
+| C_only | 0.35 (0.26) | 0.51 (0.41) | 0.66 (0.59) |
+| Cfam | 0.53 (0.42) | 0.67 (0.57) | 0.78 (0.73) |
+| **Cfam_Cmix** | **0.55** (0.48; 0.64 / 0.45) | **0.67** (0.62; 0.76 / 0.58) | **0.78** (0.76; 0.84 / 0.68) |
+| Cfam_B3 | 0.53 (0.42) | 0.66 (0.57) | 0.77 (0.72) |
+| separate | 0.55 (0.49) | 0.65 (0.64) | 0.75 (0.75) |
+| B_then_C | 0.52 (0.41) | 0.66 (0.57) | 0.77 (0.71) |
+| Cfam_Cmix_H | 0.58 (0.56) | 0.70 (0.68) | 0.80 (0.79) |
+
+**Skeptical C prior N(30.0, 2.5):** current 0.23 / 0.36 / 0.50 (rho 0 / 0.3 / 0.6); C_only 0.21 / 0.32 / 0.44; Cfam_Cmix
+**0.38 / 0.51 / 0.62**; Cfam_B3 0.36 / 0.50 / 0.62; separate 0.37 / 0.46 / 0.55. The fallback to the incumbent fired in 30% of
+these sims, against 6% under the main prior.
+
+**Effects null (dU = dL = dI = 0 on average)**, main C prior: current 0.35 / 0.50 / 0.65; C_only 0.35 / 0.51 / 0.66; Cfam_Cmix
+**0.42 / 0.54 / 0.64**; Cfam_B3 0.38 / 0.51 / 0.63; separate 0.44 / 0.54 / 0.66.
+
+**Single arm, more draws (winner's curse).** Arm mean 32; select the top-2 public draws of n; P(max private > 35):
+
+| n | rho 0 | rho 0.3 | rho 0.6 | top public draw → its expected private (rho 0 / 0.3 / 0.6) |
+|---:|---:|---:|---:|---|
+| 3 | 0.31 | 0.35 | 0.39 | 34.5 → 32.0 / 32.8 / 33.5 |
+| 8 | 0.31 | 0.44 | 0.58 | 36.3 → 32.0 / 33.3 / 34.6 |
+| 12 | 0.31 | 0.47 | 0.64 | 36.9 → 32.0 / 33.5 / 34.9 |
+| 20 | 0.31 | 0.51 | 0.72 | 37.6 → 32.0 / 33.7 / 35.4 |
+
+**What the results say**:
+
+1. **(a) Exploration.** 21 draws resolve about one comparison at the 3-point level.
+   - At sd 3, 80% power and one-sided α 0.1 need ~9 draws per arm for +3, ~13 for +2.5 and ~20 for +2.
+   - So the slots can settle one question: is the C family above the incumbent? The prior gap is +2.4.
+   - Within-family differences (+0.5..+2) cannot be resolved by draws at all. The kernel inside the family is chosen by
+     mechanism prior and check-run counts, not by draws.
+   - The MC agrees. "separate" (7 draws each of C, C+U, C+LM) is no better than concentrating on one bundle kernel, and is
+     worse at rho ≥ 0.3 under `best2`.
+2. **(b) Winner's curse / max-of-n.**
+   - At rho 0, draws add nothing beyond identifying the arm. Our 33.29 public draw is worth the incumbent's mean on private
+     (~29.4).
+   - At rho 0.3-0.6, 12-20 draws of the selected kernel raise P(>35) by 12-33 points over 3 draws.
+   - So the kernel we will select should also be the one we draw most. That is the bundle. The public top draw of a 12-draw
+     kernel overstates its private by 3.4 (rho 0.3) to 4.9 (rho 0) points.
+3. **Selection rule.** `best2` beats `each2` by 0.02-0.09 at bar 35 in almost every cell. The exceptions are at rho 0.6 with
+   null effects or the "separate" policy, where the two rules are within 0.02 of each other. The second arm (the incumbent, or B) is about 2 points below the C family. A second draw of the best arm beats the top
+   draw of a worse arm.
+4. **(c) Arm B.** Giving B its 3 explore slots costs 0-0.04 (Cfam_B3 vs Cfam/Cfam_Cmix) and never helps.
+   - B's prior (28.5) is below the incumbent's, and it shares A's serving, which drew 26.59.
+   - Its one open question was whether acceptance 0.5 is lossy. exp-081's 34.04 at acceptance 0.5 answered that for the
+     family we would select.
+   - **Drop B from the schedule.**
+5. **(d) Bundling.**
+   - Cfam_Cmix's lead over C_only (+0.20 at rho 0 under main effects) is mostly the effect priors.
+   - Under null effects it shrinks to +0.07 / +0.03 / -0.01 (rho 0 / 0.3 / 0.6). With the bar above our mean, P(top 1%) is
+     convex in the arm mean, so the extra variance of an uncertain variant pays at low rho.
+   - It never loses more than 0.02 in any scenario.
+   - Adding hic16 to the bundle adds 0.02-0.08 if its check run passes.
+
+### 16.5 (d) The bundle kernel C+UL: build, risk, check run
+
+**What it is.** Arm C v2 + C1/C2 (the two source patches in the apply loop, `...successfully: 8`, untried/stale-latch counters)
++ our level-memory install cell and summary dump. It is the union of `_build_jad_exp081_u_kernel.py` and
+`_build_jad_exp081_lm_kernel.py`; nothing else changes. Slug proposal: `calamitychasm/arc3-jad-exp081-ulm`.
+
+**Why combine.**
+- Neither effect is separable by draws (16.4 item 1).
+- Both passed their own full-length check run with errors 0, and serving costs of −2.1% / −2.0% tok/s and +3.2% / +1.6%
+  tokens/request.
+- They act on disjoint state:
+  - C1 is a line inside the patched `_build_user_prompt` body;
+  - C2 is the sandbox refusal latch;
+  - LM is runtime wrappers on `_build_user_prompt` / `_trim_messages_for_context` / `_ensure_session` that edit the opener's
+    tail and `messages[0]`.
+
+**Risks.**
+- **Opener composition.** One level-up opener would carry 03b's win record, the I1 line (when due) and our rule request.
+  Expect prompt growth of ~+5% tokens/request (≈ 2,085 vs C v2 1,989), on top of the LM block (≤ 8.3 KB system prompt).
+- **ours_untried's append-only assumption.** It reads the solver's game history, and LM never touches that history. But LM
+  replaces the system message at an eviction, and the I1 hit-counter's matching must survive that.
+  - Extend `tests/jad_lm_probe.py` to the 8-patch tree: build the tree with C1/C2, run both install cells, and drive a
+    level-up and two evictions.
+  - Require LM errors 0, `i1_unmatched` 0 and `stale_refused_after_released` 0.
+- **Attribution.** If the bundle draws low, we cannot say which part hurt. Draws could not say that for the parts alone either.
+- **Pooling.** Bundle draws inform mu_C only through the model, not as verbatim exp-081 draws. This is why C verbatim keeps
+  n=4 (Cmix) as the clean family read and the fallback selection.
+
+**hic16 and the drafter are not in the bundle.** They are serving changes with their own risks: host RAM in a 110-game
+rerun (§14.5), and draft quality (§15.5).
+- Each may later replace the bundle kernel under the standing "same mechanism, faster" rule, once its own C check run has
+  passed and a rebuilt bundle + swap check run passes.
+- At most one swap, made no later than 10-24, so that the swapped kernel draws ≥ 8 times.
+- Swapped draws pool with the bundle's for selection as "same harness, faster serving", but the swapped kernel needs n ≥ 2
+  of its own before one of its draws may be selected.
+
+**Check run** (pre-registered; full-length 25 × 121 min, ~2.3 GPU-h; push into a free GPU slot as soon as C+hic16 and session A
+release them):
+- **Pass**: all of the following.
+  - Markers: arm C's six with `our harness patches applied successfully: 8`, plus `STALE_LATCH_FIX installed`,
+    `UNTRIED_NOTICE installed mode=i1` and `LEVEL_MEMORY installed`.
+  - Untried counters: `untried_summary.json` errors 0, tracker_errors 0, i2_lines 0, i1_lines ≥ 20; click-within-3 share
+    ≥ 15%.
+  - Latch counters: `stale_latch_summary.json` errors 0 and `stale_refused_after_released` 0.
+  - LM counters: `level_memory_summary.json` errors 0, blocks_applied > 0, rules_captured ≥ 0.5 × levels_recorded.
+  - Clean run: 0 tracebacks; 25/25 terminal.
+  - Serving: gen tok/s ≥ 750; accept 3.0-3.3; repeated assistant turns ≤ 1; retractions ≤ 4; tokens/request ≤ 2,190.
+  - Outcome: ≥ 3 of 4 key levels (sp80 L2, tn36 L2, vc33 L4, cn04 L2); levels ≥ 103; score ≥ 44.
+- **Kill**: any one of the following.
+  - gen tok/s < 723; levels < 95; score < 40; tokens/request > 2,390.
+  - LM errors > 0; blocks_applied 0; i1_lines 0; `stale_refused_after_released` > 0.
+  - A missing install marker, or a traceback from `level_memory`, `ours_untried`, the counters or the patched refusal lines.
+- **Near-pass** (tok/s 723-750, levels 95-103, score 40-44, click share 10-15%, or 2 of 4 key levels): do not rerun. Keep
+  drawing C+U in the bundle's slots. A rerun would cost 2.3 GPU-h and ~2 slots of delay for an effect draws cannot see.
+- **Kill or near-pass**: C+U takes every bundle slot in 16.7, and C+LM is not drawn.
+
+### 16.6 (e) Decision rules
+
+**After arm C draw 1 (57089293, x)**: the posterior of the C base under the main prior N(31.8, 2.2), and P(mu_C > mu_incumbent):
+
+| x | posterior mu_C | P(> incumbent) | skeptical prior: posterior, P |
+|---:|---:|---:|---|
+| 36 | 33.3 ± 1.8 | 0.96 | 32.5, 0.90 |
+| 33 | 32.2 | 0.90 | 31.2, 0.78 |
+| 30.5 | 31.4 | 0.81 | 30.2, 0.63 |
+| 28 | 30.5 | 0.68 | 29.2, 0.46 |
+| 25 | 29.4 | 0.50 | 28.0, 0.27 |
+| 22 | 28.4 | 0.32 | 26.7, 0.13 |
+
+- **High, x ≥ 33**: run 16.7 unchanged. If the bundle's check run passes in time, it may start on 10-14 (C verbatim moves
+  to 10-15).
+- **Mid, 28 ≤ x < 33**: run 16.7 unchanged. One draw cannot overturn the prior, and P(C > incumbent) stays ≥ 0.68.
+- **Low, x < 28**: do not abandon the family on n=1 (at x = 25 the posterior equals the incumbent's). Swap 10-13 and 10-14:
+  C verbatim on 10-13 for a clean second read of the base, then C+U on 10-14. From then on, the standing rule decides.
+
+**Standing rule** (re-evaluated after every C-family score from 10-15). Compute the C-base posterior: the main prior, updated
+on every C-family draw after subtracting each variant's prior effect mean, with the variance widened by the effect spreads (the
+16.2 joint model). Then:
+- **posterior ≥ 28.4** (the incumbent's mean − 1): stay on the schedule.
+- **27.4 ≤ posterior < 28.4** with ≥ 3 C-family draws: alternate the bundle and the incumbent (incumbent on odd days). This
+  keeps the bundle's option value and adds incumbent draws for selection at rho > 0.
+  - Example: C-family draws 28, 26, 27 give 28.8, so stay.
+  - Example: 25, 25, 26 give 27.8, so alternate.
+- **posterior < 27.4** with ≥ 4 C-family draws: incumbent only.
+- Re-check on 10-18 and 10-25 regardless. Pool JustAdev742's exp-081-family hidden draws (exp-085: bundle + I1 + their
+  drafter) as extra evidence on mu_C, at half weight (σ 4.2) because of the drafter difference.
+
+**Final selection** (both slots explicitly, by 11-02 12:00 UTC, after the 11-02 draw has scored):
+1. Compute posteriors with the 16.2 model for every kernel with n ≥ 3.
+2. If the leader's posterior is ≥ 0.5 above the best other family's: select the **two highest public draws among the
+   leader's family kernels whose posterior is within 1.0 of the leader's** (`best2`). Normally that is the bundle's top two,
+   or the bundle's top plus C verbatim's top.
+3. If the top two families are within 0.5 of each other: select the top public draw of each (`each2`).
+4. Never select a kernel with n < 3, or a serving-swapped kernel with n < 2 of its own.
+5. This replaces "the highest public draw of each of the top-2 arms" in CLAUDE.md. It gains up to 0.09 in P(top 1%) at bar 35,
+   and is never more than 0.02 worse (16.4 item 3).
+
+### 16.7 Proposed replacement schedule (for the orchestrator to adopt into CLAUDE.md)
+
+| date | kernel (version) | why |
+|---|---|---|
+| 10-12 | C (v2), 57089293 | pending; apply 16.6 when it lands |
+| 10-13 | **C+U (v1)**; low x: C (v2) | first hidden draw of the passed variant; pools into mu_C |
+| 10-14 | **C (v2)**; low x: C+U (v1) | C verbatim n=2 |
+| 10-15 | **C+UL (v1)** if its check passed, else C+U | the bundle from here (MC assumed 10-16) |
+| 10-16 | C+UL | |
+| 10-17 | C+UL | |
+| 10-18 | C+UL | checkpoint 1: standing rule, CLAUDE.md "exploit" date |
+| 10-19 | **C (v2)** | C verbatim n=3 (selection-eligible fallback) |
+| 10-20..10-24 | C+UL ×5 | last date for a serving swap (hic16 or drafter) is 10-24 |
+| 10-25 | **C (v2)** | C verbatim n=4; checkpoint 2 |
+| 10-26..11-02 | C+UL ×8 | 11-02 submitted at 00:00 UTC, scored by ~09:00; final selection by 12:00 UTC |
+
+**Totals**: C+UL ~16-17, C verbatim 4 (with 10-12), C+U 1-2, incumbent 0, A 0, B 0. If the bundle's check run fails,
+replace C+UL with C+U throughout. Each submit request uses the version its check run used: C v2; C+U, C+LM and the bundle v1.
+
+**Expected P(top 1%)** (main C prior, bundle effects as priored, private bar 35): 0.55 / 0.67 / 0.78 at rho 0 / 0.3 / 0.6,
+against 0.26 / 0.42 / 0.59 for the current schedule with its current selection rule.
+- Under the skeptical C prior: 0.38 / 0.51 / 0.62 vs 0.18 / 0.31 / 0.46.
+- Under null effects: 0.42 / 0.54 / 0.64 vs 0.26 / 0.42 / 0.59.
+
+Of the gain at bar 35, about 0.09 comes from the selection rule alone (current schedule, `each2` → `best2`). The rest
+(+0.07..+0.20, depending on the effect priors) comes from the schedule: C-family variants instead of B, with the draws
+concentrated on the kernel that will be selected.
+
+**Caveats.**
+- The priors on mu_C and on the variant effects carry the result. The skeptical and null rows are the floor.
+- rho is unknown (16.1). The field model's private bar is crude.
+- None of the variant effects will be confirmed by draws. The bundle is chosen on mechanism counts and expected value, not on
+  measured score.
