@@ -1,4 +1,2 @@
-{"id": "read-1012-lmu-ready", "ops": [
-  {"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-lm", "grep": ["READY after", "DEADLINE at", "ours: inputs mounted after"], "show_lines": 3},
-  {"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-u", "grep": ["READY after", "DEADLINE at", "ours: inputs mounted after"], "show_lines": 3}
-]}
+{"id": "mtps-ls-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
+  "list_files": "*_requests.jsonl", "artifact": false}]}
