@@ -1,7 +1,11 @@
 """Arm C+D (calamitychasm/arc3-jad-exp081-draft): arm C built by their vendored builder plus their --draft with OUR
 session-A manifest. The builder refuses to write anything without a real manifest; with a fake one (temp dir only)
 the notebook differs from arm C v2 only in the drafter cell (cell 4's DRAFT_MODEL_DIR) and markdown cell 0, and the
-metadata only in the slug, the stock-draft model source and the session kernel source."""
+metadata only in the slug, the stock-draft model source and the session kernel source.
+
+The committed notebook was built from session A v1's real manifest (2026-10-12, drafter gate PASS) and is pinned: it
+rebuilds byte-identically from the committed manifest, and its draft cell checks that manifest's and dense shard's
+sha256 in either mount layout of the session kernel's output."""
 
 from __future__ import annotations
 
@@ -20,6 +24,11 @@ import kaggle_ops  # noqa: E402
 
 ARM_C = ROOT / "kaggle_submission_jad_exp081" / "notebook"
 ARM_C_NB_SHA = "d108fa761fb66dfef828df668de947841b857634756568954541d4f77151a26a"
+# The committed C+D build (session A v1's manifest; see experiments/stage7_milestone2_improvements.md section 15.8).
+NB_SHA = "0e2a7599a5b3958dd5071210c0b5b8950df27961e88de0fe4bdab241866d4bf6"
+META_SHA = "ca4d0266c0ce0e3c79b57a522f0f239b7e930e2621422a39f112a74b09817bdd"
+MANIFEST_SHA = "6f408d58fd813bce415edc55802f174ebac73fef292455ac388104c404dc1d45"
+DENSE_SHA = "b677e0c4234c6344fe29f147a972b192de241e557e83a12452409da13967a985"
 DRAFT_LINE = "DRAFT_MODEL_DIR   = _ours_input('/kaggle/input/models/dfranzen/albucino-qwen3-8-flash-next-drafter/"
 
 
@@ -84,6 +93,42 @@ def test_no_notebook_is_committed_without_a_real_manifest():
     manifest = D.KDIR / "arc3-draft-manifest.json"
     assert manifest.is_file()
     D.check_manifest(manifest)
+
+
+def test_committed_build_is_pinned_and_rebuilds_byte_identically(tmp_path):
+    """Session A v1's manifest (2998 bytes, json.dumps(obj, indent=1) + newline), the notebook built from it, and its
+    metadata are pinned; a rebuild from the committed manifest gives the same bytes."""
+    manifest = D.KDIR / "arc3-draft-manifest.json"
+    assert _sha(manifest) == MANIFEST_SHA and manifest.stat().st_size == 2998
+    man = json.loads(manifest.read_text())
+    assert manifest.read_text() == json.dumps(man, indent=1) + "\n"
+    assert man["files"][D.DENSE] == DENSE_SHA and len(man["replaced"]) == 26 and len(man["files"]) == 12
+    info = D.check_manifest(manifest, MANIFEST_SHA)
+    assert info == {"sha256": MANIFEST_SHA, "dense_sha256": DENSE_SHA, "replaced": 26}
+    assert _sha(D.OUT / f"{D.SLUG}.ipynb") == NB_SHA
+    assert _sha(D.OUT / "kernel-metadata.json") == META_SHA
+    D.build(manifest, tmp_path / "nb", expect_sha=MANIFEST_SHA, no_apply_check=True)
+    assert _sha(tmp_path / "nb" / f"{D.SLUG}.ipynb") == NB_SHA
+    assert _sha(tmp_path / "nb" / "kernel-metadata.json") == META_SHA
+
+
+def test_committed_notebook_checks_the_real_draft_in_both_mount_layouts():
+    """The committed notebook differs from arm C v2 only in cell 0 and the drafter line; the draft block waits for the
+    session's mtp-draft/ under /kaggle/input/notebooks/<owner>/<slug>/ or /kaggle/input/<slug>/ and checks the real
+    manifest and dense sha256 before anything reads the draft."""
+    a, b = _cells(ARM_C / "arc3-jad-exp081.ipynb"), _cells(D.OUT / f"{D.SLUG}.ipynb")
+    setup = next(i for i, c in enumerate(a) if "setup_env = {" in "".join(c["source"]))
+    assert [i for i, (x, y) in enumerate(zip(a, b)) if x != y] == [0, setup] and len(a) == len(b)
+    new = "".join(b[setup]["source"])
+    block = new[new.index("# >>> ours (--draft)"):new.index("# <<< ours (--draft)")]
+    call = next(ln for ln in block.splitlines() if ln.startswith("DRAFT_MODEL_DIR   = _ours_draft_dir("))
+    assert call == ("DRAFT_MODEL_DIR   = _ours_draft_dir(['/kaggle/input/notebooks/calamitychasm/arc3-mtp-session-a/"
+                    "mtp-draft', '/kaggle/input/arc3-mtp-session-a/mtp-draft'], "
+                    f"{MANIFEST_SHA!r}, {DENSE_SHA!r})")
+    assert "'arc3-draft-manifest.json'" in block and "'mtp-dense.safetensors'" in block and "timeout_s=600.0" in block
+    # the wait and the sha check run before the precache thread and the draft view read DRAFT_MODEL_DIR
+    assert new.index("DRAFT_MODEL_DIR   = _ours_draft_dir(") < new.index("_ours_need = [")
+    assert "albucino-qwen3-8-flash-next-drafter/transformers" not in new.split("# >>> ours (--draft)")[1]
 
 
 def test_differs_from_arm_c_only_in_the_drafter_cells(built):
