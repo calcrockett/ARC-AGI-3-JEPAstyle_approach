@@ -339,6 +339,11 @@ tokens / ~110 games = ~200K tokens per game, against a per-level reference of
 5. **Prompt-side extras** from the other winners (Wang/Ludvig addenda).
 6. Unseparated: how much of 4.58 -> 24.99 is serving efficiency vs harness
    /perception changes (our switch changed everything at once).
+7. **JustAdev742 update (read 2026-10-12, their repo @ `ccb7214`):** exp-081 (our arm C's source) hidden 34.04 (n=1) vs their
+   base D′ family 26.04-28.87; exp-082 (reasoning effort medium) was their worst full run, matching our closed line. Their
+   fine-tuned MTP drafter (+9-11% accept) has private weights, so it is not adoptable; their untried-objects notices
+   (`OURS_UNTRIED=1`) are a candidate add-on to arm C only if exp-085 lands strong. Detail:
+   `experiments/stage7_milestone2_improvements.md` section 9.5.
 
 ### Environment note: this cloud checkout
 

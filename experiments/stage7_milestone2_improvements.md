@@ -814,3 +814,32 @@ Their exp-084 draws are still evidence on the bundle, at no cost to us.
    so the harness patches are untouched. Check-run criteria: C's, plus `LEVEL_MEMORY installed`, LM errors 0 and blocks applied
    > 0, and tokens/request within +10% of C's. Do not port the bundle into arm B's histcache stack unless the history cache is
    first fixed to patch every bootstrap variant (§9.3).
+
+### 9.5 JustAdev742 update (read 2026-10-12)
+
+Source: their `docs/status.md` and `docs/research_log.md` at commit `ccb7214` (2026-10-11). Second-hand; nothing built from it.
+
+- **Hidden draws** (one draw each unless stated):
+
+  | config | score | note |
+  |---|---:|---|
+  | exp-074t (base D′ + REAP + 14 streams + acceptance 0.5) | 27.97 | |
+  | unchanged D′ | 28.87 | |
+  | exp-083 (base D′ + fine-tuned drafter + ARC map + 40-min first-request grace) | 26.04 | ref 57056251 |
+  | exp-081 (harness bundle + ARC map + albucino drafter) | 34.04 | ref 57026621, n=1; retired for exp-085 without a second draw |
+
+  Base family mean 27.0 (n=2 by their count) vs bundle 34.04 (n=1). They call the gap suggestive only (z ~1.4). Our arm C is a
+  verbatim exp-081 fork, so its draws are the second sample of the bundle.
+- **exp-082** (reasoning effort medium): full-length public-25 32.53 / 84 levels, the lowest of their 9 full runs; never
+  submitted. This confirms our closed line (§6.5).
+- **Fine-tuned MTP drafter**: held-out accept +0.24..+0.31 (~+9-11%); +3.5-8% tok/s at equal batch. The weights are private
+  (kernel output of `scottmahony/arc3-mtp-session-a`, unpublished), so we cannot adopt it.
+- **Untried-objects notices** (their `ours-10` patch, `OURS_UNTRIED=1`): lists objects not yet clicked on the level.
+  - Click-on-named-object within 3 actions: 21.5% vs 10.1% baseline.
+  - exp-085 (bundle + drafter + notices) public-25: 53.77 / 119 levels, and 47.51 on a slow-storage boot.
+  - Their own analysis calls the gain modest (87% of named entries are inert). On the base config (exp-086) it failed their
+    adoption rule.
+  - Candidate add-on to our arm C only if exp-085 lands a strong hidden draw. Not scheduled.
+- **Infrastructure**: slow-storage boots recur. The 2,400 s first-request grace held on its first live use, which supports our
+  standing rule. Their fix for restarts: re-read the model shards sequentially before any server restart.
+- **Their rotation**: exp-083 / exp-085 alternating from 10-12.
