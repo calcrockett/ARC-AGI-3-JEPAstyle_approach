@@ -959,3 +959,239 @@ The comparison baseline is arm C's two full-length runs:
 - It is then interleaved with C (alternating days in the exploit phase) so that the two are compared in the same period.
 - The drop rule and the n ≥ 3 final-selection rule apply unchanged.
 - Expected effect is below +4.8 (§10.2), so expect several draws per arm before the two separate.
+
+## 11. Where arm C stalls on the weak public games, and what the harness could fix [READ + CODE, 2026-10-12; nothing built]
+
+Brief: find fixable failure modes on the games where arm C (`calamitychasm/arc3-jad-exp081`, the exp-081 fork) stalls, and
+propose 1-3 harness or prompt changes with mechanism-level evidence. **Short answer:** two small changes have evidence at
+the mechanism level, an instrument change comes first, and part of the gap is not harness-fixable.
+- The two changes: the untried-objects notice I1 (JustAdev742's ours-10, already measured on this stack), and a
+  three-line fix to a stale-state latch bug confirmed in the source.
+- The instrument change: per-game transcript excerpts in `kernel_output`.
+- Not harness-fixable: wa30 level 2 and sk48 look like planning or understanding speed, not missing harness facts.
+
+### 11.0 Data, and what could not be read
+
+- **Arm C's own transcripts could not be read.**
+  - v2's full output is artifact 11720435997 of kaggle-ops run 38186946527 (451 MB, expires 2026-10-19).
+  - `gh run download`, `gh api …/logs` and the MCP `download_workflow_run_artifact` all redirect to
+    `productionresultssa16.blob.core.windows.net`. The session's egress proxy refuses that host: 403 at CONNECT, logged
+    in `recentRelayFailures` on 2026-10-12 00:33 UTC. That is an organisation policy denial, so it was not retried.
+  - The MCP `get_job_logs` tool does work. So this section uses the two `kernel_output` digests:
+    - v1: request `jad81-out-1`, run 38072197706;
+    - v2: request `daily-1012-s`, run 38186946527.
+  - The digests give levels per game, speed and request-log counts. They contain no reasoning.
+- **Behaviour on these games is taken from transcripts of the same harness family**, all treated as data:
+  - JustAdev742's exp-073b failure analysis (`docs/research/beat-tufa/exp073b-failure-analysis.md`). This is
+    exp-081's base without the bundle: D′, REAP-448, 14 streams, acceptance 0.5. It used whole-run benchmark.json plus
+    each game's last-call window.
+  - Their mechanism reads of exp-077, exp-081 and exp-085/085r/086 (`docs/research_log.md`, and
+    `docs/research/beat-tufa/notice-response-2026-10-10.md`).
+  - Their older-harness studies `docs/research/hard-games-level1.md` and `levels2plus-exp054.md`. These are the Duck base
+    with source-traced mechanics. Use them for the mechanics, not the rates.
+  - Son Pham's stuck-level tally of 11 Franzen-line runs, and the rebuilt Franzen-harness transcripts for wa30, bp35,
+    lf52 and sp80 (`sonpham-org_arc-3/docs/2026-10-06-stuck-levels-tally.md`, `datasets/spark-runner-snapshots/*.json`).
+- **Game source.** `ARC-AGI-3-Agents/environment_files/` is absent in this checkout. The public games' source is in
+  `sonpham-org_arc-3/docs/static/games/src/<game>-<ver>/`. Only wa30's level table was read directly here (step budgets);
+  the other mechanics are as JustAdev742 traced them.
+- **skarin's audit** (Kaggle kernel `skarin/arc-agi-3-27-80-lb-100-trajectory-audit`) could not be opened from this box,
+  so its figures (~50 points from unfinished levels, ~2.6 from efficiency) are taken from the brief.
+  - exp-073b's own decomposition has the same shape: 29.8 points in levels never reached, 11.4 in the levels being
+    played at the end, and 2.9 in efficiency.
+  - jvilladuque's G15 measurement (DESIGN §8.87) makes the same point from another side. Franzen's harness scores 46.3 on
+    the 10 easy public games and 5.4 on the 15 hard ones. Level 1 takes a median 2.6 min against 11.6, and tokens per
+    action are ~600 against ~2,200. The gap is in how fast the model understands the mechanics.
+
+### 11.1 Arm C's weak games (two full-length runs, 25 games × 121 min)
+
+| game | levels | v1 levels / score | v2 levels / score | Franzen line: reliably cleared through / first stuck level (11 runs) | value of the next level, mean points on public-25 |
+|---|---:|---|---|---|---:|
+| bp35 | 9 | 2 / 6.49 | 1 / 1.45 | L1 / L2 (1 of 11 clear it) | 0.18 (L2) |
+| wa30 | 9 | 1 / 1.32 | 1 / 2.22 | L1 / L2 | 0.18 (L2) |
+| sk48 | 8 | 0 / 0.00 | 3 / 16.67 | – / L1 | 0.44 (L4) |
+| g50t | 7 | 2 / 10.71 | 3 / 21.43 | – / L1 | 0.57 (L4) |
+| lf52 | 10 | 1 / 1.82 | 4 / 12.61 | L2 / L3 | 0.36 (L5) |
+| sp80 | 6 | 1 / 4.76 | 4 / 47.62 | L1 / L2 | 0.95 (L5) |
+| also low: tn36, ka59, su15, vc33 | 7 / 7 / 9 / 7 | 6 / 2 / 3 / 4 levels | 1 / 2 / 3 / 3 levels | L1 / L2 (soft) / L3 / none | – |
+
+Notes on the table:
+- **Value column.** It is the level's weight share × 100 / 25, the upper bound if the level is solved at human efficiency.
+  On the hidden set, a mechanism matters through how often its failure mode recurs, not through these six games.
+- **Size of the loss.** In v2 the six weak games lost 498 of 2,500 game points, which is 19.9 of the 52 points arm C
+  missed. tn36, ka59, su15 and vc33 lost another 14.2.
+- **Same build, different outcomes.** v1 and v2 are the same notebook, yet sk48 went 0→3, sp80 1→4, lf52 1→4 and tn36
+  6→1. Single runs swing by whole levels per game, so one check run cannot show a per-game effect. Read every change
+  below by its mechanism counts.
+
+### 11.2 Per game: what the level needs, where the reasoning goes wrong, and whether the harness can help
+
+- **sp80, level 2: harness-fixable, with the best evidence of any game here.**
+  - **What it needs.** A click selects which bar moves, and the liquid must reach all 3 cups.
+  - **What goes wrong.** The losing runs never click the red bars, which they assume are inert.
+    - In JustAdev742's bimodal post-mortem, 7 of 8 losing game-runs over tn36, vc33, sp80 and cn04 never clicked the
+      object that mattered. Every winning run clicked it first.
+    - In exp-073b, sp80 ended on level 5 with "CONCLUSION: The level as I understand it is unsolvable", after 39.8 min
+      parked and an 18.8-min tail with no action.
+  - **Harness fit.** The I1 line is the matching fix: sp80 L2 was won in all 3 runs that carried it, and the winning
+    click cited the line (§11.4 C1).
+- **g50t, levels 1-3: partly harness-fixable.**
+  - **What it needs.** SPACE rewinds the player to the start. From then on, a grey clone replays the recorded path one
+    step per action, and the clone standing on the emitter holds the barrier open. The effect of SPACE is delayed and
+    spread over later actions.
+  - **What goes wrong.** This is effect attribution, not perception:
+    - SPACE was first tried late, or its effect was misread ("SPACE spent one [life], so avoid SPACE"; older harness,
+      engine-checked);
+    - in exp-073b, the model counted ghosts per run by hand from `history` (7 of its last 15 calls). Its level started
+      24.6 min before the end.
+  - **Harness fit.** Partial. I1 names an unused action type (SPACE) after 10 minutes. An exact per-action effect table
+    (ours-06) would state "after SPACE, a grey 5×5 appeared and moved" (C3). The cut-off at the end is a time problem.
+- **sk48, levels 1-4: mostly not harness-fixable.**
+  - **What it needs.** A head on a rail extends, retracts and slides an arm, and pushes cascade. After an arrow move, the
+    arm's blocks read from the head must match a reference arm. The budget is 196 moves.
+  - **What goes wrong.**
+    - On the older harness, the goal was found late in all runs, and 15-41-action open-loop batches ran on a rule model
+      that each batch contradicted.
+    - In exp-073b the transition model checked 111/111 and A* returned a 42-move plan, but the run's own simulation said
+      `sim win False`. The goal predicate was never verified.
+    - The last 20 actions, sent at 120.1 min, were silently not executed.
+  - **Harness fit.** Little. `run_plan`/`search` are already in arm C. The binding constraint is how fast the model works
+    out the rules, which is the G15 point.
+  - **Small follow-up.** Check what `action()` does near the per-game deadline, so a ready plan is not dropped. It is
+    worth at most part of one level, and only when a plan is ready at the deadline.
+- **bp35, level 2: only partly harness-fixable.**
+  - **What it needs.** Gravity pulls upward, the camera scrolls, and the goal gem starts off-screen. Clicks break or
+    toggle terrain, and spikes kill. The character must reach the gem.
+  - **What goes wrong.**
+    - On the older harness, the model took the green blocks for collectibles; both solves were partly accidental.
+    - In exp-073b, the model did not know what killed the player ("Hmm, so what killed the player?"), lost the level-1/2
+      goal after a trim ("I don't have that context in this conversation"), and misread a transition record.
+  - **What arm C already covers.** The perception helpers report the scroll exactly (exp-081: `view_offset` read 46×
+    in bp35), yet bp35 stayed at 1/9 in exp-081 and at 2 and 1 in our two runs. So scroll perception was not the
+    binding constraint.
+  - **Harness fit.** What remains is the cause of death and the goal's identity. ours-06's game-over line ("what the
+    changed objects overlapped in the fatal frame") targets the first; our level memory (C+LM) targets the second.
+    Evidence for either on bp35 is thin.
+- **lf52, levels 2-5: partly harness-fixable.**
+  - **What it needs.** Peg solitaire over a pipe network: a lock or cart carries pegs along the pipe, the view scrolls,
+    and the goal is to reduce to one peg. The goal kind stays the same in every level (lesson 0016).
+  - **What goes wrong.**
+    - In Son's Franzen-line transcript, level 2 re-derived a goal that level 1 had already established ("re-examine the
+      level-1 initial frame for … a lock/key analog"; "I keep going in circles"). The win came at analysis step 47
+      ("the level's goal = 1 peg total").
+    - In exp-073b, the cart left the view and was lost for about 8 calls. The stale-state guard then stopped 8 batched
+      probes ("blocks batched actions after a no-op, even inside try/except").
+  - **What arm C already covers.** Perception 08b fixes the off-screen cart (`left_view` was read 10× in exp-081).
+  - **Harness fit.** Two pieces remain fixable:
+    - the guard bug (C2; confirmed in the source, §11.3);
+    - carrying the goal across levels, which is what our level memory's "Rule for level N" states. C+LM is already
+      built (§10).
+- **wa30, level 2: not harness-fixable.**
+  - **What it needs** (read in `wa30.py`). Level 2 has 5 boxes and an orange helper that carries boxes on its own but
+    too slowly. Its `StepCounter` is **70**, against a human baseline of 119, which counts failed attempts.
+  - **What goes wrong.**
+    - The level needs a near-optimal plan that also uses the player as a carrier inside a 70-step bar.
+    - Arm C spent 229 and 251 actions per run, nearly all on level 2. That is about three bar-outs per run.
+    - In exp-073b the model burned its bar on purpose to restart ("since the level is unwinnable now, let me just trigger
+      the death").
+  - **Harness fit.**
+    - The budget meter (ours-02) and `search()` are already in arm C. Exposing RESET hurt elsewhere (exp-077/078), and a
+      mid-level context reset halves solves (lesson 0037).
+    - This is budget-limited multi-agent planning: a model capability and speed problem.
+    - A level-2 win at about 2× the baseline actions would still score about 0.25 of the level.
+
+### 11.3 Cross-cutting failure modes, and what arm C already covers
+
+| mode (share among stalled levels in the transcript studies) | in arm C already | gap left |
+|---|---|---|
+| Mechanic never decoded, or the key object never acted on (8 of 17 in exp-073b; 15 of 48 in exp-054; 7 of 8 losing bimodal runs) | none directly | **I1 notice (C1)**; effect table (C3) |
+| Out of time while progressing, or the level started too late (8 of 17) | D′ gate, 14 streams, budget meter | scheduling; closed for us (lesson 0039, §8) |
+| Data lost between calls (NameErrors: 3.5% of calls in exp-073b) | ours-05 `mem` (NameErrors 35 per ~2,770 results, from 53-64) | none |
+| Earlier levels lost after a trim; goal re-derived (bp35, ar25, lf52) | ours-03b ledger (facts only) | the goal and rule in words: **C+LM (§10, built)** |
+| Scroll, off-screen and lattice perception (lf52, bp35, ls20) | ours-08b (exact on 285 scrolls) | none |
+| Effects credited to the wrong action; delayed effects (dc22, g50t, ka59) | none | effect table (C3) |
+| The stale-state guard refuses every later action even when caught (lf52 8 stops, m0r0 33 refusals in exp-073b) | **bug present in arm C** | **C2** |
+| Runaway turns with no tool call (ar25 8, sp80 5 in exp-073b's windows) | none | possible; lesson 0022 risk, not proposed |
+
+**The C2 bug, read in the source.**
+- Location: Franzen's `python_tool_sandbox.py` as patched into arm C (`_stale_state` appears 6× in the notebook), with
+  `solver.py` `_stale_detail`.
+- **How it fires.** Arm C sets `ARC3_STALE_STATE_BLOCK=1` with `ARC3_GUARDS_FROM_LEVEL=2`.
+  - When an action changes nothing, `action()` arms a per-snippet latch, and the next `action()` is refused with
+    `StaleStateActionError`.
+  - That error is a plain `Exception`. Its message says it "can be caught if a snippet has good reason to keep acting
+    through no-ops".
+  - But the latch is cleared only by a later result with `gameplay_changed is True`. A refused action never executes, so
+    nothing can clear it: once the latch is set, **every** later `action()` in that snippet is refused, caught or not.
+- **Interactions.** `run_plan` (ours-04) already treats the error as a stop, so the fix does not change it.
+  `RepeatedActionInStateError` still blocks exact repeats from the same board, so the blind-loop protection stays.
+
+### 11.4 Candidate changes, ranked
+
+"Levels per run" means per 25-game × 121-min public run, about 50 game-hours of play. Per game-hour the gains are
+small: +1 level per run is 0.02 levels per game-hour. On the hidden set they show up as about +0.5-1 point per level per
+run-equivalent, which is below one draw's sd (~3). None of these is separable by leaderboard draws at our remaining n;
+each is judged by mechanism counts.
+
+| # | change | failure mode → weak games | evidence | expected levels per run | build / test cost | risk |
+|---|---|---|---|---:|---|---|
+| **C0** | **Instrument**: per-game transcript excerpts in `kernel_output` (spec below) | needed to check C1-C3 on arm C's own runs | – | 0 (enables the reads) | ~2 h incl. a unit test on a synthetic `*_requests.jsonl`; no GPU (re-read v2's output) | none (read-only op) |
+| **C1** | **I1 "not yet tried on this level" notice**: JustAdev742's `ours-10-untried.patch` (sha256 `a3a7d89f…`, Apache-2.0, applies on exp-084's stack = exp-081's patches + a draft change) with `OURS_UNTRIED=i1` (I2 dropped: 2 clicks in 24 lines) | never acted on → sp80 L2 directly; g50t (unused SPACE), tn36, vc33, cn04 | Same stack, 3 full-length runs: the named object was clicked within 3 actions 21.5% (43/200) vs 10.1% (32/318) without the line (z ~3.6); critical levels won 9 of 12 with the line vs 9 of 16 (base) and 5 of 8 (bundle without it); no-harm line held (53.77 / 119, 47.51 / 111, 49.35 / 116). Only ~2 useful clicks per run; 87% of the named entries are inert | +1 to +2 | ~3 h: vendor the patch with its NOTICE, add a builder flag to `_build_jad_exp081_kernel.py`, test pin. ~2.3 GPU-h full-length check | low-medium: the code ran in 3 runs; exp-086 failed its critical-level rule (2 of 4); ~9 inert clicks per run cost actions on the levels where it fires. Their hidden draw of exp-085 (from Oct 12) is free extra evidence |
+| **C2** | **Stale-latch fix**: clear `_stale_state` before raising `StaleStateActionError`, so a caught refusal lets the next action run, as the message promises. About 3 lines; a new patch after the six | guard deadlock → lf52 (the cart probes), m0r0 | Bug confirmed in the source (§11.3). Behaviour seen in 2 games of 1 run (exp-073b); never measured on arm C | 0 to +1 | ~2 h: patch, apply check with `franzen_tree.py check` after the six, a bed test (catch → next action runs; uncaught → snippet stops as now) | low: restores documented behaviour; exact-repeat and known-no-op guards unchanged |
+| C3 | **Effect table** `ours-06b` in `note` mode (an exact per-level action→effect table, `effects()` in the sandbox, one line per new outcome class) | effects misattributed or delayed → g50t (ghost replay), bp35 (cause of death), dc22, ka59 | Replay-validated: 4,819 table lines and 448 notes with 0 errors. Only GPU-run inside the 7-patch bundle with fresh start (07), where both runs lost (39.73, 45.02) for 07's reasons; `effects()` was called 17-27× per run; no separate reading. Franzen saw no gain from automatic animation timelines | −1 to +3 (unknown) | ~4 h: 06b was cut against 02/04/03b/05, so it needs a rebase check on top of 08b (and on top of C1 if both go in). A separate check run read by mechanism | medium: prompt lines are added every turn in `note` mode; no clean ablation exists anywhere |
+| – | C+LM (§10, built, check run pushed) | goal or rule lost after a trim → lf52 L2, bp35 | the incumbent's +4.8 on another stack; overlap analysis §10.2 | see §10 | – | – |
+
+**Not proposed:**
+- fresh start / mid-level reset (07: halved the solve rate, lesson 0037);
+- exposing RESET (sc25 and others, exp-077/078);
+- hopeless-level ending or demotion (lesson 0039);
+- reasoning effort medium (closed, §6.5);
+- an idle nudge (idle stretches are a symptom; no clean arm);
+- a forced "try every action" at level start (costs actions on every level).
+
+**Recommendation.**
+- Do C0 first. It is cheap, and it turns every later check run into per-game evidence instead of a level count.
+- Then build **C+U = arm C + C1 (i1) + C2** as one kernel, and read it by mechanism against v1/v2:
+  - I1 click-within-3 ≥ 15%;
+  - stale-state refusals after a catch = 0, and no snippet with more than 1 refusal in a row;
+  - critical levels (sp80 L2, tn36 L2, vc33 L4, cn04 L2) ≥ 3 of 4;
+  - no harm: levels ≥ 103 and score ≥ 44, the §10.4 lines.
+- Give it slots only if C's mean holds up and exp-085's hidden draws are not below exp-081's. Keep C3 for a later
+  isolated arm.
+
+### 11.5 Instrument C0: transcript excerpts from `kernel_output` (proposal; not built, request.json untouched)
+
+The check-run output holds one `<game>…_requests.jsonl` per game: 25 in v2, 2,952 responses. Each `"event": "response"`
+record carries the request `messages`, so the merged assistant sequence covers the whole game, not just the last window.
+`m2_speed_report.merge_assistant_turns` already does this merge, on hashes. The proposed op option:
+
+```json
+{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
+ "transcripts": {"games": ["sk48", "wa30", "bp35", "lf52", "g50t", "sp80"], "last_turns": 10, "first_turns_of_last_level": 4,
+                 "reasoning_chars": 900, "code_chars": 500, "result_chars": 400, "max_bytes_per_game": 30000,
+                 "count": ["StaleStateActionError", "NameError", "GAME OVER", "[view] scrolled", "unsolvable",
+                           "Not yet tried", "budget"]}}
+```
+
+For each listed game, the op would print to the job log, which `get_job_logs` can read:
+1. **A per-level timeline.** Built from the user openers' "Current state: step N, level L": requests, completion tokens,
+   tool calls containing `action(`, game overs, and the first and last request index per level.
+2. **Counts of the `count` strings in tool results**, per level. The `[view] scrolled` lines and the guard refusals live
+   there, not in the notebook log, which is why the digest's marker for them read False in both runs.
+3. **The first K turns and the last N turns of the level the game ended on.** Each turn shows the reasoning tail, the
+   head of the python code and the head of the tool result.
+
+It would be about 80 lines in `scripts/kaggle_ops.py` (`transcript_digest(out, cfg)`, called from `digest()` when the
+option is set), plus a test on a synthetic two-level `*_requests.jsonl`. The size is bounded by `max_bytes_per_game`:
+six games × 30 KB stays well inside a readable job log. Run it once on v2 (artifact until 2026-10-19; `kernel_output`
+re-downloads from Kaggle in any case) to check the per-game claims of §11.2 on arm C's own play. That check needs no GPU.
+
+### 11.6 What this cannot decide
+
+- **None of arm C's own reasoning was read** (§11.0). The per-game diagnoses come from other runs of the same harness
+  family, plus one older harness. Arm C adds 08b and the bundle to exp-073b, so some exp-073b failures may already be
+  gone (NameErrors, the off-screen cart). C0 is how to check.
+- **Every gain estimate is a judgement.** Each rests on 1-3 public runs whose per-game outcomes swing by whole levels
+  between identical runs (§11.1). C1's mechanism effect is the only measured one (z ~3.6 on clicks). Its effect on
+  levels (critical levels 9 of 12 against 9 of 16) is suggestive, not established.
+- **The weak public games stand for a hidden-set population that is about 60% "hard"** (G15). Fixing sk48- or
+  wa30-type stalls would need faster rule induction or planning by the model, which no harness line here supplies.
