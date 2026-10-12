@@ -185,9 +185,18 @@ after the 11-02 draw has scored); do not rely on auto-selection.
 3. If the top two families are within 0.5 of each other: select the **top public draw of each** (`each2`).
 4. Never select a kernel with n < 3, or a serving-swapped kernel with n < 2 of its own.
 Reasons and caveats:
-- Each run plays all ~110 games, so the public and private halves (55 + 55 games) are likely scored in the same run.
-- Kaggle normally counts the best of the selected submissions. This is assumed: `rules.md` paraphrases and does not confirm
-  it, so **verify on the live rules page** before 11-02.
+- Each run plays all ~110 games, so the public and private halves (55 + 55 games) are likely scored in the same run. Primary source
+  (competition page `data-description`, read 2026-10-12 via kaggle-ops `competition_pages`, run 38218243798): "Competition evaluation
+  uses a **separate, private set of 110 games** that your agent has never seen. Half of these are used for the Public Leaderboard score,
+  and the other half for the Private Leaderboard score." The pages do not say whether this is one notebook run or two; one run is the
+  natural reading (Code Requirements: one notebook <= 9 h, "Submission file will be automatically generated").
+- Best-of vs average of the 2 selected submissions is **NOT stated on any page** (checked all 9: rules, Description, Evaluation, Timeline,
+  data-description, Prizes, Code Requirements, abstract, Upgraded accelerators). What `rules` does say: "b. You may select up to two (2) Final
+  Submissions for judging." (section 2); "A 'Final Submission' is the Submission selected by the user, or automatically selected by Kaggle in
+  the event not selected by the user, that is/are used for final placement on the competition leaderboard." (18.c); "The potential winner(s)
+  are determined solely by the leaderboard ranking on the Private Leaderboard" and the Private Leaderboard is "a ranked display of
+  Participants' Submission scores against the private test set" (7.a, 18.e). "Ranked display of Submission scores" per submission is
+  consistent with Kaggle's usual best-of-selected, but that is Kaggle's convention, not a quoted rule: still an assumption.
 - Monte Carlo (section 16.4): `best2` beats `each2` by 0.02-0.09 P(top 1%) at bar 35 and is never more than 0.02 worse; if public and
   private correlate (rho >= 0.3) the top public draws of the kernel drawn most beat random draws, and at rho = 0 they cost almost nothing.
 - Expected P(top 1%) for the section-16 schedule at private bar 35: 0.55 / 0.67 / 0.78 at rho 0 / 0.3 / 0.6 (main prior), 0.38 / 0.51 / 0.62 under the
