@@ -21,13 +21,16 @@ The interface an LLM-authored module must implement:
 
         def goal_hint(self, state):
             '''Returns a float: higher = closer to a win condition, used
-            only as a search heuristic, never as a hard oracle.'''
+            only as a search heuristic, never as a hard oracle. Only the
+            ORDERING of its values is used (see `hints_tied`); its scale
+            is arbitrary and never compared against a fixed threshold.'''
 """
 
 from __future__ import annotations
 
 import builtins
 import copy
+import math
 import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
@@ -185,11 +188,63 @@ def _describe_bad_prediction(result: Any) -> Optional[str]:
     return None
 
 
-def safe_goal_hint(model: WorldModelProtocol, state: Grid) -> float:
+def isolated(model: WorldModelProtocol) -> WorldModelProtocol:
+    """A private copy of `model` for HYPOTHETICAL calls.
+
+    LLM-written models keep instance state -- 70 of the 83 installed or
+    candidate models saved from kernels v3-v7 do -- and `predict()` updates
+    it (ls20: `self.counter_x += 1`). The planner used to search on the
+    installed instance itself: one plan() call moved ls20's counter from 13
+    to 34, writing 21 imagined moves into the real simulator. It then
+    mispredicted real moves, and each false "divergence" triggered a repair
+    that a freshly loaded copy passed with no LLM call at all -- 7 on ls20
+    in kernel v7, each charged against the coder budget.
+
+    Only REAL transitions may advance the installed instance. Everything
+    imagined -- search, gate probes, peak tests -- runs on a copy. All 83
+    saved models deep-copy cleanly (worst 0.45 ms); if one ever does not,
+    the original is returned, which is the old behaviour.
+    """
     try:
-        return float(model.goal_hint(copy.deepcopy(state)))
+        return copy.deepcopy(model)
+    except Exception:  # noqa: BLE001 -- LLM-authored object
+        return model
+
+
+def safe_goal_hint(model: WorldModelProtocol, state: Grid) -> float:
+    """goal_hint for use inside search: never raises, never returns a
+    non-finite value. A NaN in a beam's sort key makes the ordering
+    undefined (NaN compares false against everything), so it is mapped to
+    0.0 exactly like an exception."""
+    try:
+        value = float(model.goal_hint(copy.deepcopy(state)))
     except Exception:  # noqa: BLE001
         return 0.0
+    return value if math.isfinite(value) else 0.0
+
+
+#: Relative tolerance under which two goal_hint values count as equal.
+#: goal_hint is LLM-authored and has no defined scale -- the two real
+#: examples on record are cell-count RATIOS over 4096 cells, where one
+#: action moving five cells changes the value by ~0.0012. The original
+#: stall test compared the spread against an ABSOLUTE 0.05, which such a
+#: hint can only clear if ~205 cells differ between the best and worst
+#: candidate -- so a perfectly sensible objective stalled the planner on
+#: every step and the world model was never consulted. Deterministic code
+#: evaluated on different boards gives exactly equal floats when it does
+#: not distinguish them, so only genuine float noise needs absorbing here.
+HINT_REL_TOL = 1e-9
+
+
+def hints_tied(values: "list[float]", rel_tol: float = HINT_REL_TOL) -> bool:
+    """True iff `values` do not distinguish anything: fewer than two, or
+    max and min equal up to `rel_tol` of their own magnitude. Scale-free:
+    multiplying every value by any positive constant never changes the
+    answer, which an absolute epsilon cannot promise."""
+    if len(values) < 2:
+        return True
+    lo, hi = min(values), max(values)
+    return (hi - lo) <= rel_tol * max(abs(lo), abs(hi))
 
 
 WORLD_MODEL_SKELETON = '''\
@@ -209,6 +264,8 @@ class WorldModel:
         return state, 0, False
 
     def goal_hint(self, state):
-        # Higher = closer to a win. Return 0.0 if you have no idea yet.
+        # Higher = closer to a win. Only the ORDER of values matters, any
+        # scale is fine. Must NOT be constant: the search picks actions by
+        # comparing it, so a constant gives it nothing to choose between.
         return 0.0
 '''

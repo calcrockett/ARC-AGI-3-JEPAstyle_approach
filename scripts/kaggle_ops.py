@@ -1,0 +1,1641 @@
+"""Operate Kaggle from GitHub Actions: execute the ops in .github/kaggle-ops/request.json.
+
+The cloud dev container cannot reach kaggle.com; Actions runners can. Committing a new
+request.json on the ops branch runs .github/workflows/kaggle-ops.yml, which calls this script.
+Results go to the job log (each op prints a block; the last line is
+`KAGGLE_OPS_RESULT {json}`) and kernel outputs to a workflow artifact.
+
+Request: {"id": "<unique>", "ops": [op, ...]}, executed in order. Ops:
+  {"op": "status", "kernels": [...optional extra owner/slug]}
+                      (also prints the weekly GPU quota: GPU_QUOTA used=..h reserved=..h allowed=..h left=..h
+                       refresh=..., or GPU_QUOTA unavailable: <err>; a quota failure never fails the op)
+  {"op": "push_kernel", "dir": "kaggle_submission_.../notebook"}
+  {"op": "kernel_output", "kernel": "owner/slug", "grep": ["marker", ...], "artifact": true,
+   "show_lines": N,
+   "transcripts": {"games": ["sp80", ...] | "all", "max_lines_per_game": 60}}
+                      (grep only reports present/absent; show_lines prints up to N matching lines per marker from all *.log;
+                       transcripts prints, per game, a per-level timeline from that game's *_requests.jsonl, counts of
+                       StaleStateActionError / NameError / Traceback / [view] scrolled / GAME_OVER / RESET in the tool
+                       results and the first 2 / last 3 assistant turns of the level the game ended on; bounded, scrubbed;
+                       extras: excerpt_levels {game|"*": level}, samples {text: n}, grep_text {regex: n};
+                       list_files "<glob>" prints name, bytes and sha256 of matching output files plus one
+                       LIST_FILES {json} line; print_files ["rel/path", ...] (<= 10) prints small text files in full
+                       with bytes and sha256, a JSON file also as one PRINT_FILE_JSON line)
+  {"op": "list_kernels", "sort_by": "scoreDescending|dateCreated|voteCount|...", "page_size": 50,
+   "pages": 2, "search": "optional"}     (read-only: public kernels of the competition)
+  {"op": "pull_kernel", "kernel": "owner/slug", "max_lines": 200,
+   "cells": [16], "cell_lines": 40}   (read-only: downloads the notebook source, prints cells that
+   mention score/prompt/context/stream/audit/memory, or only the listed cell indexes)
+  {"op": "competition_pages", "grep": ["select", ...], "context": 2, "max_lines": 400, "page": "optional name"}
+                      (read-only: the competition's rules / overview / evaluation / data pages via kagglesdk
+                       list_competition_pages, tags stripped; prints each page name and size, then the lines matching
+                       the case-insensitive grep regexes with `context` lines around them, bounded by max_lines;
+                       full page text goes to the artifact dir)
+  {"op": "submit", "kernel": "owner/slug", "version": N, "message": "...",
+   "markers": [...], "counters": ["level_memory_summary.json", ...],
+   "require_zero": {"history_cache_summary.json": ["write_fallbacks", ...]},
+   "force_gate": false}
+
+Safety: a submit is refused if any submission is already dated today (UTC) -- there is no
+override for that -- and refused when the gate fails unless force_gate is true. A push is
+skipped when 2 of our GPU kernels are already running/queued (a first push rejected at the
+session limit never mounts its datasets). Mutating ops (push_kernel, submit) are skipped when
+the triggering push did not change request.json (REQUEST_CHANGED=false), so editing the
+workflow never replays a request.
+
+    python scripts/kaggle_ops.py [--request .github/kaggle-ops/request.json] [--out kaggle_ops_out]
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime as dt
+import hashlib
+import io
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import zipfile
+from collections import Counter
+from pathlib import Path
+from typing import Any, Callable
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import kaggle_submit_when_ready as ksr  # noqa: E402
+
+COMPETITION = ksr.COMPETITION
+OWNER = "calamitychasm"
+TEAM_PATTERNS = ("how bad can it go", "calamitychasm")
+REQUEST = ROOT / ".github" / "kaggle-ops" / "request.json"
+OPS = ("status", "push_kernel", "kernel_output", "submit", "list_kernels", "pull_kernel", "competition_pages")
+MUTATING = ("push_kernel", "submit")
+BUSY = ("RUNNING", "QUEUED", "CANCEL_REQUESTED")
+GPU_LIMIT = 2
+# Only the milestone-2 family can hold a GPU session; the old graph-explorer / hypothesis / serving
+# benchmark kernels are skipped (their status calls only fed Kaggle's rate limiter, run 37994686371).
+GPU_KERNEL_PREFIXES = ("arc3-m2-", "arc3-milestone2", "arc3-jad-", "arc3-mtp-")
+STATUS_SPACING_S = 0.5
+LIST_SORTS = ("hotness", "commentCount", "dateCreated", "dateRun", "relevance", "scoreAscending",
+              "scoreDescending", "viewCount", "voteCount")
+PULL_KEYWORDS = ("score", "prompt", "context", "stream", "audit", "memory")
+PULL_MAX_LINES = 200
+PULL_CELL_LINES = 40
+PAGES_MAX_LINES = 400
+PAGES_CONTEXT = 2
+PAGES_LINE_CHARS = 400
+PAGES_GREP = ("select", "final submission", "private", "public leaderboard", "rerun", "re-run", "best")
+RATE_LIMIT_BACKOFF_S = (5, 10, 20)
+_RATE_LIMITED = ("429", "too many requests", "rate limit", "rate-limit", "quota exceeded")
+
+
+class RequestError(ValueError):
+    pass
+
+
+# ---------------------------------------------------------------- request parsing
+
+def parse_request(raw: str) -> dict:
+    """Validate the request file. Raises RequestError with a readable reason."""
+    try:
+        req = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RequestError(f"request is not valid JSON: {exc}") from exc
+    if not isinstance(req, dict):
+        raise RequestError("request must be a JSON object")
+    rid = req.get("id")
+    if not isinstance(rid, str) or not rid.strip():
+        raise RequestError("request needs a non-empty string 'id'")
+    ops = req.get("ops")
+    if not isinstance(ops, list) or not ops:
+        raise RequestError("request needs a non-empty 'ops' list")
+    for i, op in enumerate(ops):
+        if not isinstance(op, dict) or op.get("op") not in OPS:
+            raise RequestError(f"ops[{i}]: 'op' must be one of {OPS}")
+        kind = op["op"]
+        if kind == "push_kernel":
+            _check_dir(op.get("dir"), i)
+        if kind in ("kernel_output", "submit"):
+            k = op.get("kernel")
+            if not isinstance(k, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", k):
+                raise RequestError(f"ops[{i}]: 'kernel' must look like owner/slug")
+        if kind == "submit":
+            v = op.get("version")
+            if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+                raise RequestError(f"ops[{i}]: 'version' must be a positive integer")
+            if not isinstance(op.get("message"), str) or not op["message"].strip():
+                raise RequestError(f"ops[{i}]: 'message' is required")
+            for key in ("markers", "counters"):
+                if not isinstance(op.get(key, []), list):
+                    raise RequestError(f"ops[{i}]: '{key}' must be a list")
+            if not isinstance(op.get("require_zero", {}), dict):
+                raise RequestError(f"ops[{i}]: 'require_zero' must be an object")
+            if not isinstance(op.get("force_gate", False), bool):
+                raise RequestError(f"ops[{i}]: 'force_gate' must be true/false")
+        if kind == "list_kernels":
+            _check_list_kernels(op, i)
+        if kind == "pull_kernel":
+            k = op.get("kernel")
+            if not isinstance(k, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", k):
+                raise RequestError(f"ops[{i}]: 'kernel' must look like owner/slug")
+            ml = op.get("max_lines", PULL_MAX_LINES)
+            if not isinstance(ml, int) or isinstance(ml, bool) or not 1 <= ml <= 1000:
+                raise RequestError(f"ops[{i}]: 'max_lines' must be an integer in 1..1000")
+            cl = op.get("cell_lines", PULL_CELL_LINES)
+            if not isinstance(cl, int) or isinstance(cl, bool) or not 1 <= cl <= 1000:
+                raise RequestError(f"ops[{i}]: 'cell_lines' must be an integer in 1..1000")
+            cells = op.get("cells", [])
+            if not isinstance(cells, list) or not all(isinstance(c, int) and not isinstance(c, bool) and c >= 0
+                                                      for c in cells):
+                raise RequestError(f"ops[{i}]: 'cells' must be a list of cell indexes")
+        if kind == "competition_pages":
+            _check_competition_pages(op, i)
+        if kind == "kernel_output" and not isinstance(op.get("grep", []), list):
+            raise RequestError(f"ops[{i}]: 'grep' must be a list")
+        if kind == "kernel_output" and op.get("transcripts") is not None:
+            _check_transcripts(op["transcripts"], i)
+        if kind == "kernel_output":
+            _check_output_files(op, i)
+    return req
+
+
+def _check_competition_pages(op: dict, i: int) -> None:
+    g = op.get("grep", [])
+    if not isinstance(g, list) or not all(isinstance(x, str) and x for x in g):
+        raise RequestError(f"ops[{i}]: 'grep' must be a list of non-empty regex strings")
+    for x in g:
+        try:
+            re.compile(x)
+        except re.error as exc:
+            raise RequestError(f"ops[{i}]: bad grep regex {x!r}: {exc}") from exc
+    for key, lo, hi in (("context", 0, 20), ("max_lines", 1, 2000)):
+        v = op.get(key, lo if key == "context" else hi)
+        if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+            raise RequestError(f"ops[{i}]: '{key}' must be an integer in {lo}..{hi}")
+    if op.get("page") is not None and not isinstance(op["page"], str):
+        raise RequestError(f"ops[{i}]: 'page' must be a page name string")
+
+
+def _check_list_kernels(op: dict, i: int) -> None:
+    if op.get("sort_by", "scoreDescending") not in LIST_SORTS:
+        raise RequestError(f"ops[{i}]: 'sort_by' must be one of {LIST_SORTS}")
+    for key, hi in (("page_size", 100), ("pages", 10)):
+        v = op.get(key, 1)
+        if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= hi:
+            raise RequestError(f"ops[{i}]: '{key}' must be an integer in 1..{hi}")
+    if op.get("search") is not None and not isinstance(op["search"], str):
+        raise RequestError(f"ops[{i}]: 'search' must be a string")
+
+
+def _check_transcripts(t: Any, i: int) -> None:
+    if not isinstance(t, dict):
+        raise RequestError(f"ops[{i}]: 'transcripts' must be an object")
+    g = t.get("games", "all")
+    if g != "all" and not (isinstance(g, list) and g and len(g) <= 60
+                           and all(isinstance(x, str) and re.fullmatch(r"[\w.-]{1,40}", x) for x in g)):
+        raise RequestError(f"ops[{i}]: transcripts.games must be \"all\" or a non-empty list of game ids")
+    for key, lo, hi in (("max_lines_per_game", 10, 500), ("turn_chars", 100, 2000), ("first_turns", 0, 10),
+                        ("last_turns", 0, 10), ("list_actions", 0, 100), ("sample_chars", 100, 4000)):
+        v = t.get(key)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+            raise RequestError(f"ops[{i}]: transcripts.{key} must be an integer in {lo}..{hi}")
+    el = t.get("excerpt_levels", {})
+    if not isinstance(el, dict) or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
+                                           and v >= 0 for k, v in el.items()):
+        raise RequestError(f"ops[{i}]: transcripts.excerpt_levels must map game id (or \"*\") to a level number")
+    for key, hi in (("samples", 5), ("grep_text", 8)):
+        d = t.get(key, {})
+        if not isinstance(d, dict) or len(d) > 6 or not all(
+                isinstance(k, str) and 1 <= len(k) <= 60 and isinstance(v, int) and not isinstance(v, bool)
+                and 1 <= v <= hi for k, v in d.items()):
+            raise RequestError(f"ops[{i}]: transcripts.{key} must map up to 6 short strings to counts in 1..{hi}")
+    c = t.get("count", [])
+    if not isinstance(c, list) or len(c) > 10 or not all(isinstance(x, str) and 1 <= len(x) <= 60 for x in c):
+        raise RequestError(f"ops[{i}]: transcripts.count must be a list of up to 10 short strings")
+
+
+def _safe_rel(x: Any) -> bool:
+    return (isinstance(x, str) and 1 <= len(x) <= 200 and not x.startswith(("/", "\\")) and ".." not in Path(x).parts
+            and ":" not in x)
+
+
+def _check_output_files(op: dict, i: int) -> None:
+    """kernel_output's read-only file options: list_files (a glob in the output) and print_files (paths in it)."""
+    lf = op.get("list_files")
+    if lf is not None and not _safe_rel(lf):
+        raise RequestError(f"ops[{i}]: 'list_files' must be a relative glob such as \"*_requests.jsonl\"")
+    pf = op.get("print_files")
+    if pf is not None and not (isinstance(pf, list) and 1 <= len(pf) <= 10 and all(_safe_rel(x) for x in pf)):
+        raise RequestError(f"ops[{i}]: 'print_files' must be a list of up to 10 relative paths in the output")
+
+
+def _check_dir(d: Any, i: int) -> None:
+    if not isinstance(d, str) or not d:
+        raise RequestError(f"ops[{i}]: 'dir' is required")
+    p = Path(d)
+    if p.is_absolute() or ".." in p.parts or not p.parts[0].startswith("kaggle_submission"):
+        raise RequestError(f"ops[{i}]: 'dir' must be a repo-relative kaggle_submission*/ path")
+
+
+# ---------------------------------------------------------------- credentials
+
+def setup_credentials(env=os.environ, home: Path | None = None) -> str | None:
+    """Return the credential source in use, or None. KAGGLE_JSON is written to
+    ~/.kaggle/kaggle.json (mode 600). Never prints a secret."""
+    home = home or Path.home()
+    kj = (env.get("KAGGLE_JSON") or "").strip()
+    if kj:
+        try:
+            d = json.loads(kj)
+        except json.JSONDecodeError:
+            print("KAGGLE_JSON is set but is not valid JSON; ignoring it")
+        else:
+            if d.get("key"):
+                print("::add-mask::" + str(d["key"]))
+            p = home / ".kaggle" / "kaggle.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(d), encoding="utf-8")
+            os.chmod(p, 0o600)
+            return "KAGGLE_JSON"
+    if (env.get("KAGGLE_USERNAME") or "").strip() and (env.get("KAGGLE_KEY") or "").strip():
+        return "KAGGLE_USERNAME+KAGGLE_KEY"
+    if (env.get("KAGGLE_API_TOKEN") or "").strip():
+        return "KAGGLE_API_TOKEN"
+    if (home / ".kaggle" / "kaggle.json").exists():
+        return "~/.kaggle/kaggle.json"
+    return None
+
+
+def secret_presence(env=os.environ) -> dict[str, bool]:
+    return {k: bool((env.get(k) or "").strip())
+            for k in ("KAGGLE_USERNAME", "KAGGLE_KEY", "KAGGLE_JSON", "KAGGLE_API_TOKEN")}
+
+
+# ---------------------------------------------------------------- pure helpers
+
+def enum_name(x: Any) -> str:
+    return str(x).split(".")[-1] if x is not None else ""
+
+
+def as_utc(d: Any) -> dt.datetime | None:
+    if d is None or d == "":
+        return None
+    if isinstance(d, str):
+        try:
+            d = dt.datetime.fromisoformat(d.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(d, dt.datetime):
+        return None
+    return d.replace(tzinfo=dt.timezone.utc) if d.tzinfo is None else d.astimezone(dt.timezone.utc)
+
+
+def submitted_today(subs: list, now: dt.datetime) -> list:
+    """Submissions dated on the current UTC day. Errored submissions count too: Kaggle
+    charges them against the daily quota."""
+    today = now.astimezone(dt.timezone.utc).date()
+    return [s for s in subs if (t := as_utc(getattr(s, "date", None))) is not None and t.date() == today]
+
+
+def percentile_rank(n: int, frac: float) -> int:
+    """The worst rank still inside the top `frac` of n teams (at least 1)."""
+    return max(1, min(n, math.ceil(n * frac - 1e-9)))
+
+
+def _num(x: Any) -> float | None:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def leaderboard_summary(rows: list[dict], team_patterns=TEAM_PATTERNS, top: int = 40) -> dict:
+    def rank(r):
+        try:
+            return int(r.get("Rank") or 0)
+        except ValueError:
+            return 0
+    if rows and all(rank(r) for r in rows):
+        rows = sorted(rows, key=rank)
+    else:  # no usable Rank column: order by score, best first
+        rows = sorted(rows, key=lambda r: -(_num(r.get("Score")) or float("-inf")))
+    n = len(rows)
+
+    def brief(r, i):
+        return {"rank": rank(r) or i + 1, "score": _num(r.get("Score")), "team": r.get("TeamName", ""),
+                "subs": r.get("SubmissionCount"), "last": r.get("LastSubmissionDate")}
+
+    out: dict = {"teams": n, "first": brief(rows[0], 0) if rows else None, "bars": {}, "ours": [], "top": []}
+    for label, frac in (("top1%", 0.01), ("top5%", 0.05), ("top10%", 0.10)):
+        if n:
+            i = percentile_rank(n, frac) - 1
+            out["bars"][label] = brief(rows[i], i)
+    for i, r in enumerate(rows):
+        hay = (r.get("TeamName", "") + " " + r.get("TeamMemberUserNames", "")).lower()
+        if any(p in hay for p in team_patterns):
+            out["ours"].append(brief(r, i))
+    out["top"] = [brief(r, i) for i, r in enumerate(rows[:top])]
+    return out
+
+
+def read_leaderboard_zip(path: Path) -> list[dict]:
+    with zipfile.ZipFile(path) as z:
+        name = next(n for n in z.namelist() if n.endswith(".csv"))
+        return list(csv.DictReader(io.TextIOWrapper(z.open(name), encoding="utf-8", newline="")))
+
+
+_NOT_PUSHED = ("permission", "denied", "not found", "404", "403", "does not exist", "cannot access")
+
+
+def _never_pushed(exc: Exception) -> bool:
+    """Status error that means 'this kernel does not exist / is not ours yet', not 'unknown state'."""
+    return any(t in f"{type(exc).__name__} {exc}".lower() for t in _NOT_PUSHED)
+
+
+def _rate_limited(exc: Exception) -> bool:
+    return any(t in f"{type(exc).__name__} {exc}".lower() for t in _RATE_LIMITED)
+
+
+def is_gpu_family(ref: str) -> bool:
+    return ref.split("/", 1)[-1].lower().startswith(GPU_KERNEL_PREFIXES)
+
+
+def claude_md_kernels(text: str) -> list[str]:
+    """Incumbent plus every kernel in the CURRENT STATUS kernel tables of CLAUDE.md."""
+    head = text.split("## HISTORY", 1)[0]
+    found = re.findall(r"^\|\s*kernel\s*\|\s*`(calamitychasm/[\w.-]+)`", head, re.M)
+    found += [f"{OWNER}/{s}" for s in re.findall(r"^\|\s*`(arc3-[\w.-]+)`\s*\|", head, re.M)]
+    return list(dict.fromkeys(found))
+
+
+def tracebacks(text: str) -> tuple[int, int]:
+    """(all tracebacks, tracebacks outside the known serving teardown)."""
+    total = outside = 0
+    for tb in re.finditer(r"Traceback \(most recent call last\):", text):
+        total += 1
+        if not ksr.TEARDOWN_OK.search(text[tb.start(): tb.start() + 1500]):
+            outside += 1
+    return total, outside
+
+
+def zero_problems(out: Path, require_zero: dict) -> list[str]:
+    problems = []
+    for name, fields in (require_zero or {}).items():
+        f = out / name
+        if not f.exists():
+            problems.append(f"require_zero file missing: {name}")
+            continue
+        c = json.loads(f.read_text(encoding="utf-8"))
+        for k in fields:
+            if c.get(k, None) != 0:
+                problems.append(f"{name}: {k} = {c.get(k)!r}, required 0")
+    return problems
+
+
+# ---------------------------------------------------------------- the runner
+
+def kernel_row(k: Any) -> dict:
+    """One listed kernel as a plain dict. kagglesdk getters return 0/None/"" for unset fields, so a
+    zero vote count is real-or-unset; a score is reported only if the object carries one (the
+    ApiKernelMetadata of kagglesdk 0.1.x has no score field, so this is usually None)."""
+    when = as_utc(getattr(k, "last_run_time", None))
+    score = None
+    for attr in ("best_public_score", "bestPublicScore", "public_score", "score"):
+        v = getattr(k, attr, None)
+        if v not in (None, "", 0, 0.0):
+            score = v
+            break
+    return {"ref": getattr(k, "ref", "") or "", "title": getattr(k, "title", "") or "",
+            "author": getattr(k, "author", "") or "",
+            "last_run": f"{when:%Y-%m-%d %H:%M}" if when else None,
+            "votes": getattr(k, "total_votes", None), "score": score,
+            "version": getattr(k, "current_version_number", None) or None}
+
+
+def notebook_cells(path: Path) -> list[tuple[str, str]]:
+    """(kind, source) for each cell of an .ipynb, or one 'code' cell for a plain script."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix != ".ipynb":
+        return [("md" if path.suffix in (".md", ".Rmd") else "code", text)]
+    try:
+        nb = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    cells = []
+    for c in nb.get("cells", []):
+        src = c.get("source", "")
+        cells.append(("md" if c.get("cell_type") == "markdown" else "code",
+                      "".join(src) if isinstance(src, list) else str(src)))
+    return cells
+
+
+def matching_cells(cells: list[tuple[str, str]], keywords=PULL_KEYWORDS,
+                   only: list[int] | None = None) -> list[tuple[int, str, str, list[str]]]:
+    out = []
+    for idx, (kind, src) in enumerate(cells):
+        if only:
+            if idx in only:
+                out.append((idx, kind, src, ["selected"]))
+            continue
+        low = src.lower()
+        hit = [w for w in keywords if w in low]
+        if hit:
+            out.append((idx, kind, src, hit))
+    return out
+
+
+
+_BLOCK_TAG_RE = re.compile(r"</?(?:p|div|br|li|ul|ol|h[1-6]|tr|table|section|pre|blockquote)\b[^>]*>", re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def page_lines(content: str) -> list[str]:
+    """A page's text as short lines: block tags become newlines, other tags are dropped, entities
+    unescaped, blank runs collapsed, and lines over PAGES_LINE_CHARS split at sentence ends."""
+    import html
+    text = _TAG_RE.sub("", _BLOCK_TAG_RE.sub("\n", content or ""))
+    out: list[str] = []
+    for raw in html.unescape(text).replace("\r", "").split("\n"):
+        ln = re.sub(r"[ \t]+", " ", raw).strip()
+        if not ln:
+            if out and out[-1]:
+                out.append("")
+            continue
+        while len(ln) > PAGES_LINE_CHARS:
+            cut = max(ln.rfind(". ", 0, PAGES_LINE_CHARS), ln.rfind("; ", 0, PAGES_LINE_CHARS))
+            cut = cut + 1 if cut > 80 else PAGES_LINE_CHARS
+            out.append(ln[:cut].strip())
+            ln = ln[cut:].strip()
+        out.append(ln)
+    return out
+
+
+def grep_context(lines: list[str], patterns: list[str], context: int) -> list[tuple[int, str, bool]]:
+    """(line index, line, is_match) for every line within `context` of a match, in order."""
+    res = [re.compile(p, re.I) for p in patterns]
+    hit = {n for n, ln in enumerate(lines) if any(r.search(ln) for r in res)}
+    keep = sorted({m for n in hit for m in range(max(0, n - context), min(len(lines), n + context + 1))})
+    return [(n, lines[n], n in hit) for n in keep]
+
+
+def default_cli(args: list[str], cwd: Path = ROOT) -> tuple[int, str]:
+    env = dict(os.environ, PYTHONUTF8="1")
+    res = subprocess.run(["kaggle", *args], capture_output=True, text=True, cwd=cwd, env=env)
+    return res.returncode, (res.stdout + res.stderr)
+
+
+class Runner:
+    def __init__(self, api, out_dir: Path, cli: Callable[[list[str]], tuple[int, str]] = default_cli,
+                 now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc),
+                 request_changed: bool = True, claude_md: Path = ROOT / "CLAUDE.md",
+                 sleep: Callable[[float], None] = time.sleep):
+        self.api, self.out_dir, self.cli, self.now = api, out_dir, cli, now
+        self.sleep = sleep
+        self.request_changed, self.claude_md = request_changed, claude_md
+        self._mine: list | None = None
+        self._versions: dict[str, tuple[int | None, str]] = {}
+
+    # -- shared lookups
+    def submissions(self) -> list:
+        return list(self.api.competition_submissions(COMPETITION, page_size=50) or [])
+
+    def my_kernels(self) -> list:
+        if self._mine is None:
+            got: list = []
+            for page in range(1, 6):
+                batch = list(self.api.kernels_list(mine=True, page=page, page_size=100) or [])
+                got += batch
+                if len(batch) < 100:
+                    break
+            self._mine = got
+        return self._mine
+
+    def _listed(self) -> list | None:
+        try:
+            return self.my_kernels()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def current_version(self, kernel: str) -> int | None:
+        """Latest version number, or None when Kaggle does not say (see ksr.kernel_version:
+        kagglesdk reports an unpopulated current_version_number as 0, never a real version)."""
+        key = kernel.lower()
+        if key not in self._versions:
+            self._versions[key] = ksr.kernel_version(self.api, kernel, self._listed())
+        return self._versions[key][0]
+
+    def status_of(self, kernel: str) -> tuple[str, str]:
+        st = self.api.kernels_status(kernel)
+        return enum_name(getattr(st, "status", "")), (getattr(st, "failure_message", "") or "")
+
+    def candidate_kernels(self, extra: list[str] | None = None) -> list[str]:
+        """Every kernel that could hold a GPU session: the incumbent plus the CLAUDE.md tables (the
+        same list the status op reports), any ``extra`` refs (the kernel being pushed), and every
+        ``arc3-m2-*`` / ``arc3-milestone2*`` kernel the listing knows about. Old non-m2 kernels are
+        not checked."""
+        try:
+            found = claude_md_kernels(self.claude_md.read_text(encoding="utf-8"))
+        except OSError:
+            found = []
+        listed = self._listed() or []
+        found += [r for r in (getattr(k, "ref", "") or "" for k in listed)
+                  if is_gpu_family(r)]
+        found += list(extra or [])
+        seen: dict[str, str] = {}
+        for ref in found:
+            seen.setdefault(ref.lower(), ref)
+        return list(seen.values())
+
+    def status_with_retry(self, kernel: str) -> tuple[str, str]:
+        """``status_of`` retried with backoff (RATE_LIMIT_BACKOFF_S) when Kaggle answers 429."""
+        for delay in (*RATE_LIMIT_BACKOFF_S, None):
+            try:
+                return self.status_of(kernel)
+            except Exception as exc:  # noqa: BLE001
+                if delay is None or not _rate_limited(exc):
+                    raise
+                print(f"  busy-check {kernel}: rate limited (429), retrying in {delay}s")
+                self.sleep(delay)
+        raise AssertionError("unreachable")
+
+    def busy_gpu_kernels(self, extra: list[str] | None = None) -> list[str]:
+        """Our GPU kernels currently running/queued, decided by ``kernels_status`` per kernel (the call
+        the status op uses). NOT by ``kernels_list`` fields: kagglesdk's ``enable_gpu`` getter returns
+        ``_enable_gpu or False`` and the list endpoint leaves it unset, so a filter on it dropped every
+        kernel (Actions run 37973474712 pushed with ``busy_before: []`` while turbo-tail was RUNNING).
+        A status error that is not permission-denied/not-found on a kernel that has been pushed (it is
+        in the listing, or the listing is unavailable) is counted busy, to be conservative.
+        Prints the evidence for every candidate."""
+        listing = self._listed()
+        pushed = None if listing is None else {(getattr(k, "ref", "") or "").lower() for k in listing}
+        busy = []
+        unknown = []
+        for n, ref in enumerate(self.candidate_kernels(extra)):
+            if n:
+                self.sleep(STATUS_SPACING_S)
+            try:
+                status, _ = self.status_with_retry(ref)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"{type(exc).__name__}: {exc}"
+                if _never_pushed(exc):
+                    print(f"  busy-check {ref}: not accessible / never pushed -> ignored ({msg[:90]})")
+                elif pushed is not None and ref.lower() not in pushed:
+                    print(f"  busy-check {ref}: status error, not in our listing -> ignored ({msg[:90]})")
+                else:
+                    print(f"  busy-check {ref}: status UNKNOWN ({msg[:90]}) -> counted busy (conservative)")
+                    busy.append(f"{ref} UNKNOWN")
+                    unknown.append(ref)
+                continue
+            print(f"  busy-check {ref}: {status}" + (" -> BUSY" if status in BUSY else ""))
+            if status in BUSY:
+                busy.append(f"{ref} {status}")
+        if unknown:
+            print(f"  busy-check: status still UNKNOWN after retries for {len(unknown)} kernel(s): {unknown}")
+        return busy
+
+    def gpu_quota(self) -> dict:
+        """Weekly GPU accelerator quota from the kernels API (kagglesdk
+        ``get_accelerator_quota_statistics``; the durations are ``timedelta``s). Returns hours:
+        {used_h, reserved_h, allowed_h, left_h, refresh_time}, left_h = allowed - used (as JustAdev742's
+        kaggle_quota.py). Raises on any failure; callers decide what that means."""
+        build = getattr(self.api, "build_kaggle_client", None)
+        if build is None:
+            raise RuntimeError("API object has no build_kaggle_client")
+        from kagglesdk.kernels.types.kernels_api_service import ApiGetAcceleratorQuotaStatisticsRequest
+        with build() as kaggle:
+            stats = kaggle.kernels.kernels_api_client.get_accelerator_quota_statistics(
+                ApiGetAcceleratorQuotaStatisticsRequest())
+        quota = getattr(stats, "gpu_quota", None)
+        if quota is None:
+            raise RuntimeError("response has no gpu_quota")
+
+        def hours(td) -> float:
+            return round((td.total_seconds() if hasattr(td, "total_seconds") else float(td or 0)) / 3600, 2)
+        used, allowed = hours(quota.time_used), hours(quota.total_time_allowed)
+        refresh = as_utc(getattr(stats, "quota_refresh_time", None))
+        return {"used_h": used, "reserved_h": hours(quota.time_reserved), "allowed_h": allowed,
+                "left_h": round(allowed - used, 2),
+                "refresh_time": f"{refresh:%Y-%m-%d %H:%M}Z" if refresh else None}
+
+    # -- ops
+    def op_status(self, op: dict) -> dict:
+        res: dict = {"op": "status", "result": "OK"}
+        print("== submissions (latest 25) ==")
+        try:
+            subs = self.submissions()
+            for s in subs[:25]:
+                t = as_utc(s.date)
+                when = f"{t:%Y-%m-%d %H:%M}Z" if t else str(s.date)
+                err = getattr(s, "error_description", None)
+                print(f"  {when}  ref {s.ref}  {enum_name(s.status):10s} public={s.public_score or '-'}  "
+                      f"{(s.description or '')[:70]}" + (f"  ERR: {err[:120]}" if err else ""))
+            today = submitted_today(subs, self.now())
+            print(f"  submitted today (UTC {self.now():%Y-%m-%d}): {len(today)}")
+            res["submitted_today"] = len(today)
+            res["latest_submission"] = {"ref": subs[0].ref, "status": enum_name(subs[0].status),
+                                        "score": subs[0].public_score} if subs else None
+        except Exception as exc:  # noqa: BLE001
+            print(f"  submissions error: {type(exc).__name__}: {exc}")
+            res["result"] = "PARTIAL"
+        print("== leaderboard ==")
+        try:
+            tmp = Path(tempfile.mkdtemp(prefix="lb_"))
+            self.api.competition_leaderboard_download(COMPETITION, str(tmp))
+            zips = list(tmp.glob("*.zip"))
+            rows = read_leaderboard_zip(zips[0]) if zips else list(csv.DictReader(next(tmp.glob("*.csv")).open(encoding="utf-8")))
+            lb = leaderboard_summary(rows)
+            print(f"  teams: {lb['teams']}  #1: {lb['first']}")
+            for label, r in lb["bars"].items():
+                print(f"  {label} bar: rank {r['rank']} score {r['score']} ({r['team']})")
+            for r in lb["ours"] or [{"team": "NOT FOUND"}]:
+                print(f"  OUR TEAM: {r}")
+            print("  top 40:")
+            for r in lb["top"]:
+                print(f"    {r['rank']:>5} {r['score']!s:>8}  {r['team'][:40]}  subs={r['subs']}")
+            res["leaderboard"] = {k: lb[k] for k in ("teams", "first", "bars", "ours")}
+        except Exception as exc:  # noqa: BLE001
+            print(f"  leaderboard error: {type(exc).__name__}: {exc}")
+            res["result"] = "PARTIAL"
+        print("== kernels ==")
+        try:
+            kernels = claude_md_kernels(self.claude_md.read_text(encoding="utf-8"))
+        except OSError:
+            kernels = []
+        kernels = list(dict.fromkeys(kernels + list(op.get("kernels") or [])))
+        res["kernels"] = {}
+        for k in kernels:
+            try:
+                status, fail = self.status_of(k)
+            except Exception as exc:  # noqa: BLE001
+                status, fail = f"status-error {type(exc).__name__}", str(exc)[:120]
+            v = self.current_version(k)
+            vs = f"v{v}" if v is not None else "v?"
+            print(f"  {k:55s} {vs:4s}  {status}" + (f"  ({fail[:120]})" if fail else ""))
+            res["kernels"][k] = f"{vs} {status}"
+        try:
+            q = self.gpu_quota()
+            res["gpu_quota"] = q
+            print(f"GPU_QUOTA used={q['used_h']}h reserved={q['reserved_h']}h allowed={q['allowed_h']}h "
+                  f"left={q['left_h']}h refresh={q['refresh_time']}")
+        except Exception as exc:  # noqa: BLE001  (informational; never fail the status op)
+            print(f"GPU_QUOTA unavailable: {type(exc).__name__}: {exc}"[:300])
+        return res
+
+    def op_push_kernel(self, op: dict) -> dict:
+        d = ROOT / op["dir"]
+        res: dict = {"op": "push_kernel", "dir": op["dir"]}
+        if not (d / "kernel-metadata.json").exists():
+            return {**res, "result": "ERROR", "reason": "no kernel-metadata.json in dir"}
+        try:
+            meta_id = json.loads((d / "kernel-metadata.json").read_text(encoding="utf-8")).get("id")
+        except (OSError, ValueError):
+            meta_id = None
+        busy = self.busy_gpu_kernels([meta_id] if meta_id else None)
+        print(f"  running/queued GPU kernels: {busy or 'none'}")
+        if len(busy) >= GPU_LIMIT:
+            return {**res, "result": "SKIPPED_GPU_BUSY", "busy": busy}
+        rc, out = self.cli(["kernels", "push", "-p", str(d)])
+        last = [ln for ln in out.strip().splitlines() if ln.strip()][-1:] or [""]
+        print("  " + "\n  ".join(out.strip().splitlines()[-8:]))
+        m = re.search(r"version (\d+)", last[0])
+        if "successfully pushed" in last[0].lower():
+            return {**res, "result": "PUSHED", "version": int(m.group(1)) if m else None, "busy_before": busy}
+        if "session count" in last[0].lower():
+            return {**res, "result": "SKIPPED_GPU_BUSY", "reason": last[0][:200]}
+        return {**res, "result": "ERROR", "reason": last[0][:300], "rc": rc}
+
+    def op_kernel_output(self, op: dict) -> dict:
+        k = op["kernel"]
+        res: dict = {"op": "kernel_output", "kernel": k}
+        status, fail = self.status_of(k)
+        res.update(status=status, version=self.current_version(k))
+        print(f"  status {status} version {res['version']}" + (f" failure: {fail[:200]}" if fail else ""))
+        dest = self.out_dir / re.sub(r"[^\w.-]+", "_", k)
+        dest.mkdir(parents=True, exist_ok=True)
+        self.api.kernels_output(k, path=str(dest), force=True)
+        res.update(digest(dest, op.get("grep") or []))
+        if op.get("transcripts") is not None:
+            try:
+                res["transcripts"] = transcripts_report(dest, op["transcripts"])
+            except Exception as exc:  # noqa: BLE001  (an excerpt failure must not lose the digest)
+                print(f"  transcripts FAILED: {type(exc).__name__}: {exc}"[:300])
+                res["transcripts"] = f"error {type(exc).__name__}: {exc}"[:200]
+        if op.get("show_lines"):
+            show_matches(dest, op.get("grep") or [], int(op["show_lines"]))
+        if op.get("list_files"):
+            res["list_files"] = list_output_files(dest, op["list_files"])
+        if op.get("print_files"):
+            res["print_files"] = print_output_files(dest, op["print_files"])
+        res["artifact_dir"] = str(dest)
+        if op.get("artifact", True) is False:
+            res["artifact_dir"] = None
+            for f in sorted(dest.rglob("*"), reverse=True):
+                f.unlink() if f.is_file() else f.rmdir()
+        res["result"] = "OK"
+        return res
+
+    def op_list_kernels(self, op: dict) -> dict:
+        sort_by = op.get("sort_by", "scoreDescending")
+        size, pages = op.get("page_size", 50), op.get("pages", 1)
+        res: dict = {"op": "list_kernels", "sort_by": sort_by, "competition": COMPETITION}
+        rows: list[dict] = []
+        for page in range(1, pages + 1):
+            kw: dict = dict(competition=COMPETITION, sort_by=sort_by, page=page, page_size=size)
+            if op.get("search"):
+                kw["search"] = op["search"]
+            batch = list(self.api.kernels_list(**kw) or [])
+            rows += [kernel_row(k) for k in batch if k is not None]
+            if len(batch) < size:
+                break
+        print(f"  {len(rows)} kernels, sort_by={sort_by}" + (f", search={op['search']!r}" if op.get("search") else ""))
+        print(f"  {'#':>3} {'last run (UTC)':16} {'votes':>5} {'score':>7}  ref | title | author")
+        for n, r in enumerate(rows, 1):
+            print(f"  {n:>3} {r['last_run'] or '?':16} {r['votes'] if r['votes'] is not None else '?':>5} "
+                  f"{str(r['score'] if r['score'] is not None else '-'):>7}  {r['ref']} | {r['title'][:70]} | {r['author']}")
+        res.update(count=len(rows), kernels=rows, result="OK")
+        return res
+
+    def op_pull_kernel(self, op: dict) -> dict:
+        k = op["kernel"]
+        budget = op.get("max_lines", PULL_MAX_LINES)
+        res: dict = {"op": "pull_kernel", "kernel": k}
+        dest = self.out_dir / ("pull_" + re.sub(r"[^\w.-]+", "_", k))
+        dest.mkdir(parents=True, exist_ok=True)
+        self.api.kernels_pull(k, path=str(dest), metadata=True, quiet=True)
+        files = sorted(p for p in dest.rglob("*") if p.is_file())
+        res["files"] = [str(p.relative_to(dest)) for p in files]
+        code = [p for p in files if p.suffix in (".ipynb", ".py", ".R", ".Rmd", ".md")]
+        print(f"  pulled {len(files)} files: {res['files'][:20]}")
+        shown, matched = 0, 0
+        for p in code:
+            cells = notebook_cells(p)
+            hits = matching_cells(cells, only=op.get("cells"))
+            matched += len(hits)
+            print(f"  == {p.name}: {len(cells)} cells, {len(hits)} mention {PULL_KEYWORDS}")
+            for idx, kind, src, words in hits:
+                if shown >= budget:
+                    break
+                lines = src.splitlines()[:op.get("cell_lines", PULL_CELL_LINES)]
+                lines = lines[:budget - shown]
+                shown += len(lines) + 1
+                print(f"  --- cell {idx} [{kind}] matches {','.join(words)}")
+                for ln in lines:
+                    print("    " + ln[:200])
+        res.update(matched_cells=matched, printed_lines=shown, result="OK")
+        return res
+
+    def op_competition_pages(self, op: dict) -> dict:
+        patterns = list(op.get("grep") or PAGES_GREP)
+        context = op.get("context", PAGES_CONTEXT)
+        budget = op.get("max_lines", PAGES_MAX_LINES)
+        res: dict = {"op": "competition_pages", "competition": COMPETITION, "grep": patterns}
+        pages = list(self.api.competition_list_pages(COMPETITION, page_name=op.get("page")) or [])
+        dest = self.out_dir / "competition_pages"
+        dest.mkdir(parents=True, exist_ok=True)
+        texts = [(str(getattr(p, "name", "") or f"page{n}"), page_lines(getattr(p, "content", "") or ""))
+                 for n, p in enumerate(pages)]
+        for name, lines in texts:
+            (dest / (re.sub(r"[^\w.-]+", "_", name) + ".txt")).write_text("\n".join(lines), encoding="utf-8")
+        print(f"  {len(texts)} pages: " + ", ".join(f"{n} ({len(ls)} lines)" for n, ls in texts))
+        print(f"  grep {patterns} context {context}, budget {budget} lines; full text in artifact competition_pages/")
+        used, found = 0, {}
+        for name, lines in texts:
+            rows = grep_context(lines, patterns, context)
+            found[name] = sum(1 for r in rows if r[2])
+            if not rows:
+                continue
+            if used >= budget:
+                continue
+            print(f"  ==== page {name!r}: {found[name]} matching lines")
+            used += 1
+            last = None
+            for n, ln, is_match in rows:
+                if used >= budget:
+                    print("  ... output budget reached")
+                    break
+                if last is not None and n != last + 1:
+                    print("    --")
+                    used += 1
+                print(f"    {n + 1:>4}{'>' if is_match else ' '} {ln}")
+                used += 1
+                last = n
+        res.update(pages=[n for n, _ in texts], matches=found, printed_lines=used, result="OK")
+        return res
+
+    def op_submit(self, op: dict, submitted_this_run: bool) -> dict:
+        k, v = op["kernel"], op["version"]
+        res: dict = {"op": "submit", "kernel": k, "version": v}
+        if submitted_this_run:
+            return {**res, "result": "SKIPPED_ALREADY_SUBMITTED_TODAY", "reason": "an earlier op in this run submitted"}
+        try:
+            subs = self.submissions()
+        except Exception as exc:  # noqa: BLE001
+            return {**res, "result": "SKIPPED_CANNOT_VERIFY_DAILY_LIMIT", "reason": f"{type(exc).__name__}: {exc}"[:200]}
+        today = submitted_today(subs, self.now())
+        if today:
+            s = today[0]
+            print(f"  already submitted today: ref {s.ref} {enum_name(s.status)} {(s.description or '')[:60]}")
+            return {**res, "result": "SKIPPED_ALREADY_SUBMITTED_TODAY", "today_refs": [str(t.ref) for t in today]}
+        verdict, problems, detail = ksr.version_check(self.api, k, v, self._listed())
+        res["version_check"] = verdict
+        if verdict == "VERSION_UNKNOWN":
+            warn = (f"VERSION_UNKNOWN: {detail}; requested v{v}. Gating on the latest check run's markers, "
+                    f"tracebacks, counters and game states only -- confirm by hand that it is v{v}'s run.")
+            print("  " + "!" * 70 + f"\n  {warn}\n  " + "!" * 70)
+            res["warnings"] = [warn]
+        else:
+            print(f"  {verdict}: {detail}")
+        dest = self.out_dir / ("gate_" + re.sub(r"[^\w.-]+", "_", k))
+        dest.mkdir(parents=True, exist_ok=True)
+        gate_problems, out = ksr.check_ready(self.api, k, list(op.get("markers") or []),
+                                             list(op.get("counters") or []), out=dest)
+        problems += gate_problems
+        if out is not None:
+            problems += zero_problems(out, op.get("require_zero") or {})
+            for name in op.get("counters") or []:
+                f = out / name
+                if f.exists():
+                    print(f"  counters {name}: {f.read_text(encoding='utf-8')[:600]}")
+        for p in problems:
+            print(f"  GATE: {p}")
+        res["gate_problems"] = problems
+        if problems and not op.get("force_gate", False):
+            return {**res, "result": "GATE_FAILED"}
+        if problems:
+            print("  force_gate=true: submitting despite the gate problems above")
+        try:
+            msg = self.api.competition_submit_cli(file_name="submission.parquet", message=op["message"],
+                                                  competition=COMPETITION, kernel=k, version=str(v))
+        except Exception as exc:  # noqa: BLE001
+            resp = getattr(exc, "response", None)
+            body = getattr(resp, "text", None) or repr(exc)
+            code = getattr(resp, "status_code", None)
+            print(f"  SUBMIT FAILED: HTTP {code}: {body[:800]}")
+            return {**res, "result": "ERROR", "http_status": code, "error_body": str(body)[:800]}
+        print(f"  submit response: {msg}")
+        try:
+            latest = self.submissions()[0]
+            res["ref"], res["status"] = str(latest.ref), enum_name(latest.status)
+            print(f"  latest submission: ref {latest.ref} {enum_name(latest.status)} {latest.description}")
+        except Exception:  # noqa: BLE001
+            pass
+        return {**res, "result": "SUBMITTED", "response": str(msg)[:300]}
+
+    def run(self, req: dict) -> list[dict]:
+        results = []
+        submitted = False
+        for i, op in enumerate(req["ops"]):
+            kind = op["op"]
+            print(f"\n######## op {i}: {json.dumps(op)[:300]}")
+            if kind in MUTATING and not self.request_changed:
+                r = {"op": kind, "result": "SKIPPED_REQUEST_UNCHANGED",
+                     "reason": "this run was not triggered by a change to request.json"}
+            else:
+                try:
+                    if kind == "status":
+                        r = self.op_status(op)
+                    elif kind == "push_kernel":
+                        r = self.op_push_kernel(op)
+                    elif kind == "kernel_output":
+                        r = self.op_kernel_output(op)
+                    elif kind == "list_kernels":
+                        r = self.op_list_kernels(op)
+                    elif kind == "pull_kernel":
+                        r = self.op_pull_kernel(op)
+                    elif kind == "competition_pages":
+                        r = self.op_competition_pages(op)
+                    else:
+                        r = self.op_submit(op, submitted)
+                        submitted = submitted or r.get("result") == "SUBMITTED"
+                except Exception as exc:  # noqa: BLE001
+                    r = {"op": kind, "result": "ERROR", "reason": f"{type(exc).__name__}: {exc}"[:400]}
+            print(f"  -> {r.get('result')}")
+            results.append(r)
+        return results
+
+
+SYS_RAM_RE = re.compile(r"\[sys\] RAM (\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)")
+ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?")
+MEM_PROBLEM_RES = {"not_enough_host_memory": re.compile(r"Not enough host memory"),
+                   "oom": re.compile(r"\bOOM\b"), "killed": re.compile(r"\bKilled\b")}
+
+
+def _log_lines(path: Path) -> list[tuple[str, float | None]]:
+    """(line, record time) pairs; Kaggle's notebook log is a JSON list of stream records with a
+    'time' (seconds since start). A plain-text log yields time None."""
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        recs = json.loads(raw)
+        return [(ln, e.get("time")) for e in recs for ln in str(e.get("data", "")).splitlines()]
+    except Exception:  # noqa: BLE001
+        return [(ln, None) for ln in raw.splitlines()]
+
+
+def sys_ram(lines: list[tuple[str, float | None]]) -> dict | None:
+    """Digest of the launcher's '[sys] RAM used/total | ...' census lines (GiB; MemAvailable =
+    total - used, as the launcher prints MemTotal-MemAvailable). None when there are none."""
+    pts = []
+    for ln, t in lines:
+        m = SYS_RAM_RE.search(ln)
+        if m:
+            used, total = float(m.group(1)), float(m.group(2))
+            ts = ISO_TS_RE.search(ln)
+            pts.append((total - used, total, ts.group(0) if ts else t))
+    if not pts:
+        return None
+    avail = sorted(p[0] for p in pts)
+    n = len(avail)
+    med = avail[n // 2] if n % 2 else (avail[n // 2 - 1] + avail[n // 2]) / 2
+    low = min(pts, key=lambda p: p[0])
+    return {"count": n, "min_gib": round(low[0], 1), "median_gib": round(med, 1),
+            "last_gib": round(pts[-1][0], 1), "total_gib": pts[-1][1],
+            "min_at": low[2], "all_ge_10": low[0] >= 10.0}
+
+
+def mem_problems(text: str) -> dict:
+    return {k: len(rx.findall(text)) for k, rx in MEM_PROBLEM_RES.items()}
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 24), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def list_output_files(out: Path, pattern: str) -> dict:
+    """Name, byte size and sha256 of every output file matching PATTERN (a glob relative to the output), printed one
+    per line and as one ``LIST_FILES {json}`` line (e.g. the request logs a later kernel pins by size)."""
+    root = out.resolve()
+    files = {}
+    for p in sorted(out.glob(pattern)):
+        if p.is_file() and p.resolve().is_relative_to(root):
+            files[str(p.relative_to(out))] = {"bytes": p.stat().st_size, "sha256": _file_sha256(p)}
+    print(f"  == list_files {pattern!r}: {len(files)} files, {sum(f['bytes'] for f in files.values()):,} bytes")
+    for name, f in files.items():
+        print(f"    {name} {f['bytes']} {f['sha256']}")
+    print("LIST_FILES " + json.dumps(files, separators=(",", ":")))
+    return {"pattern": pattern, "count": len(files), "bytes": sum(f["bytes"] for f in files.values())}
+
+
+PRINT_FILE_MAX_BYTES = 256_000
+
+
+def print_output_files(out: Path, paths: list[str]) -> dict:
+    """Print small text files of the output in full (size and sha256 first; a JSON file also as one
+    ``PRINT_FILE_JSON <path> {json}`` line), e.g. a manifest a later build pins by sha256."""
+    root = out.resolve()
+    result = {}
+    for rel in paths:
+        p = out / rel
+        if not p.is_file() or not p.resolve().is_relative_to(root):
+            print(f"  == print_files {rel}: not in the output")
+            result[rel] = None
+            continue
+        data = p.read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        result[rel] = {"bytes": len(data), "sha256": sha, "printed": len(data) <= PRINT_FILE_MAX_BYTES}
+        print(f"  == print_files {rel}: {len(data)} bytes, sha256 {sha}")
+        if len(data) > PRINT_FILE_MAX_BYTES:
+            print(f"  (not printed: over {PRINT_FILE_MAX_BYTES:,} bytes)")
+            continue
+        text = data.decode("utf-8", errors="replace")
+        print(text if text.endswith("\n") else text + "\n(no final newline)")
+        try:
+            print(f"PRINT_FILE_JSON {rel} " + json.dumps(json.loads(text), separators=(",", ":")))
+        except ValueError:
+            pass
+    return result
+
+
+def show_matches(out: Path, markers: list[str], limit: int) -> None:
+    """Print up to `limit` lines per marker from every top-level *.log (opt-in via the op's show_lines;
+    the same files mem_problems counts, so its counts and these lines agree)."""
+    lines = [(p.name, ln) for p in sorted(out.glob("*.log")) for ln, _ in _log_lines(p)]
+    for m in markers:
+        hits = [(n, ln) for n, ln in lines if m in ln]
+        print(f"  --- lines matching {m!r}: {len(hits)}")
+        for n, ln in hits[:limit]:
+            print(f"    [{n}] " + ln[:300])
+
+
+HARD_15 = ("bp35", "cd82", "cn04", "dc22", "g50t", "ka59", "lf52", "ls20", "m0r0", "s5i5", "sk48", "sp80",
+           "su15", "tn36", "wa30")
+EASY_10 = ("ar25", "ft09", "lp85", "r11l", "re86", "sb26", "sc25", "tr87", "tu93", "vc33")
+# Split from JustAdev742 docs/research/beat-tufa/intel-oct10.md section 2.3 (hard 15 / easy 10 of the public 25).
+WATCH_GAMES = ("vc33", "tn36", "tr87")
+SUMMARY_GAME_RE = re.compile(r"^\W*([a-z][a-z0-9]{3})\b.*?levels=([\d.]+)/")
+SUMMARY_SCORE_RE = re.compile(r"score[=:\s]+([\d.]+)")
+
+
+def per_game_rows(out: Path) -> list[dict]:
+    """Per-game {game, levels, score} from benchmark.json game_runs (levels_completed, final_score);
+    falls back to 'levels=X/Y' lines in summary.txt. Empty when neither exists."""
+    bench = out / "benchmark.json"
+    rows: list[dict] = []
+    if bench.exists():
+        try:
+            runs = json.loads(bench.read_text(encoding="utf-8")).get("game_runs", [])
+            for r in runs:
+                gid = r.get("game_id")
+                if not gid:
+                    continue
+                rows.append({"game": str(gid).split("-")[0], "levels": int(r.get("levels_completed") or 0),
+                             "score": round(float(r.get("final_score") or 0.0), 2)})
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            rows = []
+    if not rows and (out / "summary.txt").exists():
+        for ln in (out / "summary.txt").read_text(encoding="utf-8", errors="replace").splitlines():
+            m = SUMMARY_GAME_RE.search(ln)
+            if m:
+                sc = SUMMARY_SCORE_RE.search(ln)
+                rows.append({"game": m.group(1), "levels": int(float(m.group(2))),
+                             "score": round(float(sc.group(1)), 2) if sc else None})
+    return sorted(rows, key=lambda r: r["game"])
+
+
+def per_game_digest(out: Path) -> dict | None:
+    rows = per_game_rows(out)
+    if not rows:
+        return None
+    by = {r["game"]: r for r in rows}
+
+    def sub(names):
+        have = [by[g] for g in names if g in by]
+        return {"games": len(have), "missing": [g for g in names if g not in by],
+                "levels": sum(r["levels"] for r in have),
+                "score": round(sum(r["score"] or 0.0 for r in have), 2)}
+    return {"table": rows, "total_levels": sum(r["levels"] for r in rows),
+            "hard_15": sub(HARD_15), "easy_10": sub(EASY_10),
+            "watch": {g: by[g]["levels"] if g in by else None for g in WATCH_GAMES}}
+
+
+# ---------------------------------------------------------------- transcripts (opt-in kernel_output option)
+# Reads a game's `<game>...requests.jsonl` (event "response": the request `messages`, usually ending with the
+# model's reply, plus usage / action / analysis_step) and prints a bounded, scrubbed digest to the job log.
+# Layouts handled: flat `<game>_p0_requests.jsonl` (our m2 kernels), `<game>-<hash>_p0_requests.jsonl` and nested
+# directories (matched by any path part that starts with the game id). The record layout is probed, not assumed:
+# the header lines list the record keys and message roles, and a log with no `step N, level L` markers falls back
+# to one pooled "L?" bucket plus a sample of the first prompt, so a layout surprise is visible in one run.
+TX_TOTAL_LINES = 3000
+TX_LINE_CHARS = 700
+TX_COUNTS = (("StaleStateActionError", r"StaleStateActionError"), ("NameError", r"NameError"),
+             ("Traceback", r"Traceback"), ("[view] scrolled", r"\[view\] scrolled"),
+             ("GAME_OVER", r"GAME[_ ]OVER"), ("RESET", r"RESET"))
+TX_STATE_RE = re.compile(r"\bstep\s+(\d+)\s*[,;|]\s*level\s+(\d+)\b", re.I)
+TX_ACTION_RE = re.compile(r"\baction\(((?:[^()]|\([^()]*\))*)\)")
+TX_WIN_RE = re.compile(r"\bWIN\b")
+TX_TIME_KEYS = ("timestamp", "ts", "time", "created_at", "elapsed_s", "elapsed", "wall_time", "t")
+TX_REQUESTS_SUFFIX = re.compile(r"(_p\d+)?_?requests\.jsonl$")
+_TX_SCRUB = [
+    (re.compile(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=]+"), "[b64]"),
+    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "[uuid]"),
+    (re.compile(r"(?i)\b(?:sk|pk|rk|ghp|gho|ghs|ghu|github_pat|hf|xox[abp]|AKIA|AIza|KGAT)[-_][A-Za-z0-9_\-]{10,}"),
+     "[REDACTED]"),
+    (re.compile(r"(?i)\b(bearer)\s+\S+"), r"\1 [REDACTED]"),
+    (re.compile(r"(?i)\b(authorization)\b([:=\s]+)(?!bearer\b)\S+"), r"\1\2[REDACTED]"),
+    (re.compile(r"(?i)\b([a-z_]*(?:api[_-]?key|secret|token|passw(?:or)?d|credential)[a-z_]*|kaggle_key)(\"?\s*[:=]\s*)"
+                r"(\"[^\"]*\"|'[^']*'|\S+)"), r"\1\2[REDACTED]"),
+    (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "[REDACTED]"),
+    (re.compile(r"\b(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[A-Za-z])[A-Za-z0-9_\-]{32,}\b"), "[REDACTED]"),
+]
+
+
+def tx_scrub(text: Any) -> str:
+    """Remove base64 payloads and anything that looks like a credential (long tokens, key=value secrets, uuids)."""
+    s = text if isinstance(text, str) else str(text)
+    for pat, rep in _TX_SCRUB:
+        s = pat.sub(rep, s)
+    return s
+
+
+def _tx_flat(text: str, n: int, tail: bool = False) -> str:
+    s = re.sub(r"\s+", " ", tx_scrub(text)).strip()
+    if len(s) <= n:
+        return s
+    return ("..." + s[-max(n - 3, 0):]) if tail else (s[:max(n - 3, 0)] + "...")
+
+
+def _tx_blocks_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, str):
+                parts.append(b)
+            elif isinstance(b, dict):
+                if b.get("type") in ("image_url", "image", "input_image"):
+                    parts.append("[image]")
+                elif isinstance(b.get("text"), str):
+                    parts.append(b["text"])
+                elif "content" in b and b.get("type") != "tool_use":
+                    parts.append(_tx_blocks_text(b["content"]))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _tx_args_text(args: Any) -> str:
+    v = args
+    if isinstance(args, str):
+        try:
+            v = json.loads(args)
+        except ValueError:
+            return args
+    if isinstance(v, dict):
+        return "\n".join(x if isinstance(x, str) else json.dumps(x, default=str) for x in v.values())
+    return "" if v is None else str(v)
+
+
+def _tx_calls(m: dict) -> list[str]:
+    out = []
+    for tc in m.get("tool_calls") or []:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc["function"] if isinstance(tc.get("function"), dict) else tc
+        out.append(_tx_args_text(fn.get("arguments", fn.get("input"))))
+    if isinstance(m.get("content"), list):
+        out += [_tx_args_text(b.get("input")) for b in m["content"]
+                if isinstance(b, dict) and b.get("type") == "tool_use"]
+    return out
+
+
+def _tx_info(m: dict) -> dict:
+    """One message -> {kind: opener|tool|assistant|other, text, calls, reasoning, key}. Images are never read."""
+    role = str(m.get("role"))
+    text = _tx_blocks_text(m.get("content"))
+    calls = _tx_calls(m) if role == "assistant" else []
+    reasoning = ""
+    if role == "assistant":
+        r = m.get("reasoning_content") or m.get("reasoning")
+        reasoning = r if isinstance(r, str) else _tx_blocks_text(r)
+    blocks = m.get("content") if isinstance(m.get("content"), list) else []
+    is_tool = role in ("tool", "function") or (role == "user" and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks))
+    kind = "tool" if is_tool else "assistant" if role == "assistant" else "opener" if role == "user" else "other"
+    h = hashlib.sha1()
+    for part in (role, text, "\x00".join(calls), reasoning, str(m.get("tool_call_id") or "")):
+        h.update(part.encode("utf-8", "replace"))
+        h.update(b"\x01")
+    return {"kind": kind, "text": text, "calls": calls, "reasoning": reasoning, "key": h.digest()}
+
+
+def _tx_state(text: str) -> tuple[int, int, str] | None:
+    """The last `step N, level L` marker of a message: (step, level, the line it sits on)."""
+    last = None
+    for last in TX_STATE_RE.finditer(text):
+        pass
+    if last is None:
+        return None
+    a = text.rfind("\n", 0, last.start()) + 1
+    b = text.find("\n", last.end())
+    return int(last.group(1)), int(last.group(2)), text[a:(b if b >= 0 else len(text))]
+
+
+def _tx_new_start(seq: list, keys: list) -> int | None:
+    """Index in `keys` where the messages not yet in `seq` begin. Every request repeats the (trimmed) history, so
+    the last known message is looked up in `keys` and the run of equal messages before it is measured backwards
+    (the best-matching occurrence wins, so repeated identical tool results do not confuse it).
+    None when the last known message is not in `keys` at all."""
+    if not seq:
+        return 0
+    best, best_len = None, 0
+    for p in range(len(keys) - 1, -1, -1):
+        if keys[p] != seq[-1]:
+            continue
+        n = 1
+        while p - n >= 0 and n < len(seq) and keys[p - n] == seq[-1 - n]:
+            n += 1
+        if n > best_len:
+            best, best_len = p + 1, n
+        if best_len >= len(seq):
+            break
+    return best
+
+
+def _tx_fit(parts: list[tuple[str, str, bool]], total: int) -> str:
+    """Join labelled parts (label, text, keep_tail) into about `total` characters: the budget is shared evenly and
+    what short parts do not use goes to the longer ones."""
+    parts = [(lab, re.sub(r"\s+", " ", tx_scrub(t)).strip(), tail) for lab, t, tail in parts if t and t.strip()]
+    order = sorted(range(len(parts)), key=lambda i: len(parts[i][1]))
+    left, share = total, {}
+    for n, i in enumerate(order):
+        share[i] = min(len(parts[i][1]), max(left // (len(order) - n), 20))
+        left -= share[i]
+    out = []
+    for i, (lab, t, tail) in enumerate(parts):
+        n = share[i]
+        if len(t) > n:
+            t = ("..." + t[-max(n - 3, 0):]) if tail else (t[:max(n - 3, 0)] + "...")
+        out.append(f"{lab}: {t}")
+    return " | ".join(out)
+
+
+def tx_scan_file(path: Path, cfg: dict) -> dict:
+    """Stream one requests.jsonl: per-level stats, tool-result counts, assistant turns. Memory is bounded: only
+    short clips of assistant turns are kept; tool results are counted and dropped."""
+    counters = [(lab, re.compile(pat)) for lab, pat in TX_COUNTS] + \
+               [(x, re.compile(re.escape(x))) for x in cfg.get("count", [])]
+    n_act = int(cfg.get("list_actions", 20))
+    levels: dict[Any, dict] = {}
+
+    def lv(level):
+        return levels.setdefault(level, {"reqs": 0, "comp": 0, "calls": 0, "acts": 0, "a_min": None, "a_max": None,
+                                         "steps": [None, None], "first": None, "last": None, "t": [None, None],
+                                         "counts": Counter(), "win": 0, "act_args": []})
+    tot = {lab: [0, 0, 0] for lab, _ in counters}      # per label: total, tool results containing it, max in one
+    sample_pats = [(lab, re.compile(re.escape(lab)), n) for lab, n in (cfg.get("samples") or {}).items()]
+    grep_pats = [(lab, re.compile(lab, re.I), n) for lab, n in (cfg.get("grep_text") or {}).items()]
+    samples: dict[str, list] = {lab: [] for lab, _, _ in sample_pats}
+    greps: dict[str, list] = {lab: [] for lab, _, _ in grep_pats}
+    last_code = ""
+    seq: list = []
+    turns: list[dict] = []
+    cur: dict = {"level": None}
+    info: dict = {"records": 0, "bytes": path.stat().st_size, "keys": None, "roles": None, "dups": 0,
+                  "markers": 0, "sample_first": None, "bad_lines": 0}
+    prev_level = None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        if '"event": "response"' not in line and '"event":"response"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            info["bad_lines"] += 1
+            continue
+        if not isinstance(rec, dict):
+            continue
+        msgs = [m for m in (rec.get("messages") or []) if isinstance(m, dict)]
+        extra = rec.get("message") or rec.get("response")
+        if not extra and isinstance(rec.get("choices"), list) and rec["choices"] and isinstance(rec["choices"][0], dict):
+            extra = rec["choices"][0].get("message")
+        if isinstance(extra, dict) and extra.get("role") == "assistant" and (
+                not msgs or _tx_info(extra)["key"] != _tx_info(msgs[-1])["key"]):
+            msgs = msgs + [extra]          # layouts that log the reply beside the request, not inside it
+        infos = [_tx_info(m) for m in msgs if m.get("role") != "system"]
+        info["records"] += 1
+        if info["keys"] is None:
+            info["keys"] = sorted(rec)
+            info["roles"] = dict(Counter(str(m.get("role")) for m in msgs))
+            first_user = next((i for i in infos if i["kind"] == "opener"), None)
+            info["sample_first"] = _tx_flat(first_user["text"], 300) if first_user else None
+        keys = [i["key"] for i in infos]
+        start = _tx_new_start(seq, keys)
+        if start is None:               # no overlap with what was seen: take only messages never seen before
+            seen = set(seq)
+            new = [i for i in infos if i["key"] not in seen]
+            info["dups"] += 1
+        else:
+            new = infos[start:]
+        seq.extend(i["key"] for i in new)
+        if len(seq) > 4000:
+            del seq[:len(seq) - 2000]
+        for it in new:
+            st = _tx_state(it["text"]) if it["kind"] in ("opener", "tool") else None
+            if it["kind"] == "tool":        # counted against the level the call was made in, before any new marker
+                for lab, pat in counters:
+                    n = len(pat.findall(it["text"]))
+                    if n:
+                        lv(cur["level"])["counts"][lab] += n
+                        tot[lab][0] += n
+                        tot[lab][1] += 1
+                        tot[lab][2] = max(tot[lab][2], n)
+                lv(cur["level"])["win"] += len(TX_WIN_RE.findall(it["text"]))
+                for lab, pat, n in sample_pats:
+                    m = pat.search(it["text"])
+                    if m and len(samples[lab]) < n:
+                        a = max(m.start() - 150, 0)
+                        samples[lab].append({"level": cur["level"], "rec": info["records"],
+                                             "step": lv(cur["level"])["steps"][1], "n_in_result": len(pat.findall(it["text"])),
+                                             "text": it["text"][a:m.end() + int(cfg.get("sample_chars", 250))],
+                                             "code": last_code[-300:],
+                                             "except": "except" in last_code})
+            if st:
+                info["markers"] += 1
+                cur["level"] = st[1]
+                L = lv(st[1])
+                L["steps"] = [st[0] if L["steps"][0] is None else min(L["steps"][0], st[0]),
+                              st[0] if L["steps"][1] is None else max(L["steps"][1], st[0])]
+                L["first"] = L["first"] or st[2]
+                L["last"] = st[2]
+            if it["kind"] == "assistant":
+                L = lv(cur["level"])
+                last_code = "\n".join(it["calls"])
+                body = it["reasoning"] + "\n" + it["text"]
+                for lab, pat, n in grep_pats:
+                    m = pat.search(body)
+                    if m and len(greps[lab]) < n:
+                        greps[lab].append({"level": cur["level"], "rec": info["records"], "step": L["steps"][1],
+                                           "text": body[max(m.start() - 160, 0):m.end() + 200]})
+                L["calls"] += len(it["calls"])
+                for code in it["calls"]:
+                    for mm in TX_ACTION_RE.finditer(code):
+                        L["acts"] += 1
+                        if len(L["act_args"]) < n_act:
+                            L["act_args"].append(_tx_flat(mm.group(1), 40))
+                turns.append({"level": cur["level"], "rec": info["records"], "reasoning": it["reasoning"][-900:],
+                              "text": it["text"][:900], "code": "\n".join(it["calls"])[:900],
+                              "step": L["steps"][1]})
+        # the request's own level: the last marker anywhere in its messages
+        level = prev_level
+        for it in reversed(infos):
+            st = _tx_state(it["text"]) if it["kind"] in ("opener", "tool") else None
+            if st:
+                level = st[1]
+                break
+        prev_level = level
+        L = lv(level)
+        L["reqs"] += 1
+        L["comp"] += int((rec.get("usage") or {}).get("completion_tokens") or 0)
+        a = rec.get("action")
+        if isinstance(a, int) and not isinstance(a, bool):
+            L["a_min"] = a if L["a_min"] is None else min(L["a_min"], a)
+            L["a_max"] = a if L["a_max"] is None else max(L["a_max"], a)
+        for k in TX_TIME_KEYS:
+            if rec.get(k) is not None:
+                tv = str(rec[k])[:26]
+                L["t"] = [L["t"][0] or tv, tv]
+                break
+    info.update(levels=levels, totals=tot, turns=turns, ended=prev_level, samples=samples, greps=greps)
+    return info
+
+
+def _tx_level_key(level) -> tuple:
+    return (1, 0) if level is None else (0, level)
+
+
+def tx_game_lines(game: str, path: Path, root: Path, cfg: dict) -> tuple[list[str], list[str], list[str], dict]:
+    """(header, timeline, excerpt, summary) for one requests file. Unbounded; the caller applies the line budget."""
+    n_first, n_last = int(cfg.get("first_turns", 2)), int(cfg.get("last_turns", 3))
+    chars = int(cfg.get("turn_chars", 400))
+    inf = tx_scan_file(path, cfg)
+    lv = inf["levels"]
+    rel = path.relative_to(root) if path.is_relative_to(root) else path
+    head = [f"==== {game}: {rel} ({inf['bytes'] / 1e6:.1f} MB, {inf['records']} response records"
+            + (f", {inf['bad_lines']} unreadable lines" if inf["bad_lines"] else "") + ")",
+            f"  record keys {inf['keys']}; message roles in the first record {inf['roles']}",
+            "  tool-result counts: " + "  ".join(
+                f"{lab}={t[0]}" + (f" (in {t[1]} results, max {t[2]}/result)" if t[0] else "")
+                for lab, t in inf["totals"].items())]
+    if not inf["markers"]:
+        head.append("  NO 'step N, level L' state markers found: every request is pooled as level '?'. "
+                    f"First user message: {inf['sample_first']}")
+    elif inf["dups"]:
+        head.append(f"  note: {inf['dups']} records shared no message with the previous one "
+                    "(only unseen messages were counted)")
+    top = max((k for k in lv if k is not None), default=None)
+    timeline = ["  per level: requests, completion tokens | tool calls, action() occurrences, action counter | "
+                "steps | flagged tool results | outcome | first/last state line"]
+    for level in sorted(lv, key=_tx_level_key):
+        s = lv[level]
+        name = "?" if level is None else str(level)
+        if level is None:
+            outcome = "unattributed"
+        elif level != top:
+            outcome = "cleared (a later level was reached)"
+        else:
+            outcome = "ENDED HERE, not cleared" + (f" (WIN seen x{s['win']})" if s["win"] else "")
+        bits = [f"L{name}: {s['reqs']} req, {s['comp']:,} tok",
+                f"{s['calls']} calls, {s['acts']} action()"
+                + (f", counter {s['a_min']}-{s['a_max']}" if s["a_min"] is not None else ""),
+                f"steps {s['steps'][0]}-{s['steps'][1]}" if s["steps"][0] is not None else "steps ?",
+                ", ".join(f"{k} {v}" for k, v in s["counts"].items()) or "none flagged",
+                outcome]
+        if s["t"][0] is not None:
+            bits.append(f"t {s['t'][0]} .. {s['t'][1]}")
+        if s["first"]:
+            bits.append(f"first [{_tx_flat(s['first'], 110)}] last [{_tx_flat(s['last'], 110)}]")
+        timeline.append("  " + " | ".join(bits))
+        if s["act_args"]:
+            timeline.append(f"      action() args (first {len(s['act_args'])}): " + "; ".join(s["act_args"]))
+    tail: list[str] = []
+    ended = inf["ended"] if inf["ended"] is not None else top
+    forced = (cfg.get("excerpt_levels") or {}).get(game, (cfg.get("excerpt_levels") or {}).get("*"))
+    if forced is not None:
+        ended = forced
+    mine = [t for t in inf["turns"] if t["level"] == ended]
+    if not inf["turns"]:
+        tail.append("  no assistant turns found in the request messages")
+    else:
+        pick = mine if len(mine) <= n_first + n_last else mine[:n_first] + (mine[-n_last:] if n_last else [])
+        tail.append(f"  {'excerpt of level' if forced is not None else 'game ended on level'} "
+                    f"{'?' if ended is None else ended}: {len(mine)} assistant turns there, "
+                    f"showing the first {n_first} and last {n_last}")
+        for t in pick:
+            body = _tx_fit([("R", t["reasoning"], True), ("T", t["text"], False), ("CALL", t["code"], False)], chars)
+            tail.append(f"   [rec {t['rec']}, step {t['step']}] {body or '(empty turn)'}")
+    for lab, items in inf["samples"].items():
+        tail.append(f"  first {len(items)} tool results containing {lab!r}:")
+        for x in items:
+            tail.append(f"   [L{x['level']} rec {x['rec']} step {x['step']}, {x['n_in_result']}x in this result, prior code had "
+                        f"except={x['except']}] result: {_tx_flat(x['text'], 150 + int(cfg.get('sample_chars', 250)))}")
+            tail.append(f"      prior code tail: {_tx_flat(x['code'], 240, tail=True)}")
+        if not items:
+            tail.append("   (none)")
+    for lab, items in inf["greps"].items():
+        tail.append(f"  assistant text (reasoning + reply) matching /{lab}/ (first {len(items)}):")
+        for x in items:
+            tail.append(f"   [L{x['level']} rec {x['rec']} step {x['step']}] {_tx_flat(x['text'], 360)}")
+        if not items:
+            tail.append("   (no match)")
+    summary = {"records": inf["records"], "markers": inf["markers"], "ended_level": ended,
+               "levels": {("?" if k is None else str(k)): {"reqs": v["reqs"], "tok": v["comp"], "calls": v["calls"],
+                                                          "action_calls": v["acts"], "counts": dict(v["counts"])}
+                          for k, v in lv.items()},
+               "counts": {lab: t[0] for lab, t in inf["totals"].items()}}
+    return head, timeline, tail, summary
+
+
+def _tx_fit_budget(head: list[str], timeline: list[str], tail: list[str], budget: int) -> list[str]:
+    """Keep the header, counts and the ended-level excerpt; spend what is left on the timeline (newest levels
+    last, since the game ended on the last one)."""
+    room = max(budget - len(head) - len(tail), 3)
+    if len(timeline) > room:
+        keep = room - 2
+        timeline = [timeline[0], f"  ... {len(timeline) - 1 - keep} earlier timeline lines omitted (max_lines_per_game)"] \
+            + timeline[len(timeline) - keep:]
+    out = head + timeline + tail
+    if len(out) > budget:
+        out = out[:budget - 1] + [f"  ... truncated at {budget} lines"]
+    return out
+
+
+def tx_find_files(root: Path, game: str) -> list[Path]:
+    """requests files of `game`: any path part equal to the id or starting with it followed by a non-alphanumeric."""
+    g = game.lower()
+    hits = []
+    for p in sorted(root.rglob("*requests.jsonl")):
+        if not p.is_file():
+            continue
+        parts = [x.lower() for x in p.relative_to(root).parts]
+        parts[-1] = TX_REQUESTS_SUFFIX.sub("", parts[-1])
+        if any(x == g or (x.startswith(g) and not x[len(g)].isalnum()) for x in parts):
+            hits.append(p)
+    return hits
+
+
+def transcripts_report(out: Path, cfg: dict) -> dict:
+    """Print the transcript digest for the requested games; returns a compact summary for the result JSON."""
+    files = sorted(p for p in out.rglob("*requests.jsonl") if p.is_file())
+    games = cfg.get("games", "all")
+    per_game = int(cfg.get("max_lines_per_game", 60))
+    print(f"  == transcripts: {len(files)} requests.jsonl files in the output; games {games}; "
+          f"<= {per_game} lines per game, <= {TX_TOTAL_LINES} lines in all")
+    if not files:
+        print("  no *requests.jsonl in this kernel output (was save_request_logs on?)")
+        return {"files": 0}
+    if games == "all":
+        plan = [(TX_REQUESTS_SUFFIX.sub("", p.name), [p]) for p in files]
+    else:
+        plan = [(g, tx_find_files(out, g)) for g in games]
+    printed, summary = 0, {"files": len(files), "games": {}}
+    for game, paths in plan:
+        if printed >= TX_TOTAL_LINES:
+            print(f"  ... line cap {TX_TOTAL_LINES} reached; games not shown: "
+                  f"{[g for g, _ in plan if g not in summary['games']]}")
+            break
+        if not paths:
+            print(f"  == {game}: no matching requests file. Files: "
+                  + ", ".join(str(p.relative_to(out)) for p in files[:30]) + (" ..." if len(files) > 30 else ""))
+            summary["games"][game] = None
+            printed += 1
+            continue
+        for path in paths:
+            head, timeline, tail, small = tx_game_lines(game, path, out, cfg)
+            lines = _tx_fit_budget(head, timeline, tail, min(per_game, TX_TOTAL_LINES - printed))
+            cap = max(TX_LINE_CHARS, 400 + int(cfg.get("sample_chars", 0)))
+            for ln in lines:
+                print("  " + ln[:cap])
+            printed += len(lines)
+            summary["games"][game if len(paths) == 1 else f"{game}:{path.name}"] = small
+            if printed >= TX_TOTAL_LINES:
+                break
+    summary["lines_printed"] = printed
+    return summary
+
+
+def digest(out: Path, markers: list[str]) -> dict:
+    """Concise summary of a downloaded kernel output directory."""
+    d: dict = {"files": len([p for p in out.rglob("*") if p.is_file()])}
+    nb = ksr.notebook_log(out)
+    text = ksr.log_text(nb) if nb else ""
+    d["notebook_log"] = nb.name if nb else None
+    d["markers"] = {m: (m in text) for m in markers}
+    d["tracebacks"], d["tracebacks_outside_teardown"] = tracebacks(text)
+    d["sys_ram"] = sys_ram(_log_lines(nb)) if nb else None
+    d["mem_problems"] = mem_problems("\n".join(ksr.log_text(p) for p in sorted(out.glob("*.log"))))
+    bench = out / "benchmark.json"
+    if bench.exists():
+        try:
+            runs = json.loads(bench.read_text(encoding="utf-8")).get("game_runs", [])
+            d["game_states"] = dict(Counter(str(r.get("state")) for r in runs))
+        except (json.JSONDecodeError, AttributeError):
+            d["game_states"] = "unreadable"
+    d["per_game"] = per_game_digest(out)
+    d["counters"] = {}
+    for f in sorted(out.glob("*_summary.json")):
+        try:
+            d["counters"][f.name] = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            d["counters"][f.name] = "unreadable"
+    if (out / "summary.txt").exists():
+        try:
+            import m2_speed_report as rep
+            m = rep.analyse(out.name, out)
+            d["speed"] = {k: m.get(k) for k in ("gen_tok_s", "decode_med", "decode_p90", "running_med",
+                                                 "accept_med", "cache_pct", "kv_peak", "mamba_peak", "retracts",
+                                                 "kv_pool", "levels", "mean_score", "actions", "duration",
+                                                 "prefix_hit", "preempts", "restarts")}
+            d["speed"]["by_running"] = m.get("by_running")
+        except Exception as exc:  # noqa: BLE001
+            d["speed"] = f"error {type(exc).__name__}: {exc}"[:200]
+    if any(out.glob("*_requests.jsonl")):
+        try:
+            import m2_speed_report as rep
+            d["request_log"] = rep.request_log_metrics(out)
+        except Exception as exc:  # noqa: BLE001
+            d["request_log"] = f"error {type(exc).__name__}: {exc}"[:200]
+    tail = [ln for ln in text.strip().splitlines() if ln.strip()][-15:]
+    print(f"  files {d['files']}, notebook log {d['notebook_log']}")
+    print(f"  markers: {d['markers']}")
+    print(f"  tracebacks: {d['tracebacks']} ({d['tracebacks_outside_teardown']} outside teardown)")
+    sr = d["sys_ram"]
+    if sr:
+        print(f"  sys_ram: {sr['count']} census lines, MemAvailable GiB min {sr['min_gib']} (at {sr['min_at']}) "
+              f"/ median {sr['median_gib']} / last {sr['last_gib']} of {sr['total_gib']}; "
+              f">=10 GiB throughout: {sr['all_ge_10']}")
+    else:
+        print("  sys_ram: no '[sys] RAM' census lines")
+    print(f"  mem problems: {d['mem_problems']}")
+    print(f"  game states: {d.get('game_states')}")
+    pg = d["per_game"]
+    if pg:
+        print("  per_game (game levels score):")
+        for r in pg["table"]:
+            print(f"    {r['game']:<6} {r['levels']:>3} {r['score'] if r['score'] is not None else '-':>8}")
+        print(f"  per_game total levels {pg['total_levels']}; hard_15 {pg['hard_15']}; easy_10 {pg['easy_10']}; "
+              f"watch {pg['watch']}")
+    else:
+        print("  per_game: no benchmark.json game_runs or summary.txt levels lines")
+    for name, c in d["counters"].items():
+        print(f"  {name}: {json.dumps(c)[:800]}")
+    if "speed" in d:
+        print(f"  speed: {json.dumps(d['speed'])[:900]}")
+    if "request_log" in d:
+        print(f"  request log: {json.dumps(d['request_log'])[:600]}")
+    print("  notebook log tail:\n    " + "\n    ".join(t[:200] for t in tail))
+    return d
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--request", default=str(REQUEST))
+    ap.add_argument("--out", default=str(ROOT / "kaggle_ops_out"))
+    args = ap.parse_args(argv)
+    try:
+        req = parse_request(Path(args.request).read_text(encoding="utf-8"))
+    except (OSError, RequestError) as exc:
+        print(f"BAD REQUEST: {exc}")
+        print("KAGGLE_OPS_RESULT " + json.dumps({"id": None, "result": "BAD_REQUEST", "reason": str(exc)}))
+        return 1
+    print(f"request id: {req['id']} ({len(req['ops'])} ops)")
+    changed = os.environ.get("REQUEST_CHANGED", "true").lower() != "false"
+    print(f"request changed in the triggering push: {changed}")
+    source = setup_credentials()
+    if source is None:
+        missing = [k for k, v in secret_presence().items() if not v]
+        print("NO_CREDENTIALS: no Kaggle credentials found. Add repository secrets "
+              "KAGGLE_USERNAME + KAGGLE_KEY, or KAGGLE_JSON (the kaggle.json contents), or KAGGLE_API_TOKEN. "
+              f"Unset: {', '.join(missing)}")
+        print("KAGGLE_OPS_RESULT " + json.dumps({"id": req["id"], "result": "NO_CREDENTIALS",
+                                                  "secrets": secret_presence()}))
+        return 0
+    print(f"credentials from {source}")
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    api = KaggleApi()
+    try:
+        api.authenticate()
+    except SystemExit:
+        print("KAGGLE_OPS_RESULT " + json.dumps({"id": req["id"], "result": "AUTH_FAILED"}))
+        return 1
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    results = Runner(api, out, request_changed=changed).run(req)
+    summary = {"id": req["id"], "at": f"{dt.datetime.now(dt.timezone.utc):%Y-%m-%dT%H:%M:%SZ}", "ops": results}
+    (out / "result.json").write_text(json.dumps(summary, indent=1, default=str), encoding="utf-8")
+    print("\nKAGGLE_OPS_RESULT " + json.dumps(summary, default=str))
+    return 1 if any(r.get("result") == "ERROR" for r in results) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

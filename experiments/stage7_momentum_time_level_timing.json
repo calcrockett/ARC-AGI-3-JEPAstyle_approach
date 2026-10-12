@@ -1,0 +1,2078 @@
+[
+{
+"run": "anim",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+6,
+14,
+22,
+23
+],
+"final_turn": 28,
+"number_of_levels": 8
+},
+{
+"run": "anim",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [
+13
+],
+"final_turn": 20,
+"number_of_levels": 9
+},
+{
+"run": "anim",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+19
+],
+"final_turn": 28,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [
+8
+],
+"final_turn": 12,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [],
+"final_turn": 30,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+2,
+4,
+6,
+10
+],
+"final_turn": 14,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "g50t-5849a774",
+"level_up_turns": [
+18
+],
+"final_turn": 24,
+"number_of_levels": 7
+},
+{
+"run": "anim",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [
+13,
+26
+],
+"final_turn": 41,
+"number_of_levels": 7
+},
+{
+"run": "anim",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+5,
+31
+],
+"final_turn": 32,
+"number_of_levels": 10
+},
+{
+"run": "anim",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+4,
+7,
+11,
+16,
+20
+],
+"final_turn": 24,
+"number_of_levels": 8
+},
+{
+"run": "anim",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+20
+],
+"final_turn": 21,
+"number_of_levels": 7
+},
+{
+"run": "anim",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+9
+],
+"final_turn": 18,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+4,
+8
+],
+"final_turn": 10,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+6,
+11,
+16,
+21
+],
+"final_turn": 23,
+"number_of_levels": 8
+},
+{
+"run": "anim",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+10,
+21
+],
+"final_turn": 34,
+"number_of_levels": 8
+},
+{
+"run": "anim",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+5
+],
+"final_turn": 32,
+"number_of_levels": 8
+},
+{
+"run": "anim",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [],
+"final_turn": 23,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 29,
+"number_of_levels": 8
+},
+{
+"run": "anim",
+"game_id": "sp80-589a99af",
+"level_up_turns": [],
+"final_turn": 26,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+8
+],
+"final_turn": 27,
+"number_of_levels": 9
+},
+{
+"run": "anim",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [],
+"final_turn": 23,
+"number_of_levels": 7
+},
+{
+"run": "anim",
+"game_id": "tr87-cd924810",
+"level_up_turns": [
+5
+],
+"final_turn": 8,
+"number_of_levels": 6
+},
+{
+"run": "anim",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+4,
+12,
+14,
+18
+],
+"final_turn": 19,
+"number_of_levels": 9
+},
+{
+"run": "anim",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+6,
+9,
+14
+],
+"final_turn": 30,
+"number_of_levels": 7
+},
+{
+"run": "anim",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+18
+],
+"final_turn": 35,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+3,
+11
+],
+"final_turn": 36,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [
+9
+],
+"final_turn": 25,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+12
+],
+"final_turn": 40,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [
+8
+],
+"final_turn": 14,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [
+19
+],
+"final_turn": 25,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+3,
+4,
+7
+],
+"final_turn": 14,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "g50t-5849a774",
+"level_up_turns": [
+13
+],
+"final_turn": 29,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [
+10,
+28
+],
+"final_turn": 32,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+11
+],
+"final_turn": 32,
+"number_of_levels": 10
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+4,
+6,
+8,
+12,
+18
+],
+"final_turn": 21,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+7
+],
+"final_turn": 17,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+7
+],
+"final_turn": 14,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+4
+],
+"final_turn": 33,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+5,
+10,
+14
+],
+"final_turn": 27,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+8
+],
+"final_turn": 46,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+5,
+18,
+20,
+22,
+24,
+26
+],
+"final_turn": 30,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [
+20
+],
+"final_turn": 32,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 37,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "sp80-589a99af",
+"level_up_turns": [
+21
+],
+"final_turn": 34,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+6,
+22,
+30
+],
+"final_turn": 34,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+10
+],
+"final_turn": 32,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "tr87-cd924810",
+"level_up_turns": [
+9,
+11,
+14
+],
+"final_turn": 18,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+3,
+9,
+13
+],
+"final_turn": 23,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+4,
+11,
+15
+],
+"final_turn": 31,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-baseline",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+11,
+39
+],
+"final_turn": 44,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+4,
+13
+],
+"final_turn": 51,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [],
+"final_turn": 18,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [],
+"final_turn": 38,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [],
+"final_turn": 11,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [],
+"final_turn": 41,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+3
+],
+"final_turn": 39,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "g50t-5849a774",
+"level_up_turns": [
+10
+],
+"final_turn": 45,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [],
+"final_turn": 64,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+8
+],
+"final_turn": 28,
+"number_of_levels": 10
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+3
+],
+"final_turn": 10,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+5
+],
+"final_turn": 25,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+6
+],
+"final_turn": 33,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+22
+],
+"final_turn": 35,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+5,
+30
+],
+"final_turn": 36,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+5
+],
+"final_turn": 46,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+7
+],
+"final_turn": 40,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [],
+"final_turn": 58,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 26,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "sp80-589a99af",
+"level_up_turns": [],
+"final_turn": 58,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+8
+],
+"final_turn": 66,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [],
+"final_turn": 18,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "tr87-cd924810",
+"level_up_turns": [],
+"final_turn": 7,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+2,
+8
+],
+"final_turn": 27,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+5,
+56
+],
+"final_turn": 58,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-ctx16k",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [],
+"final_turn": 68,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+3,
+9
+],
+"final_turn": 14,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [],
+"final_turn": 12,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+10
+],
+"final_turn": 21,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [
+6
+],
+"final_turn": 12,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [
+9
+],
+"final_turn": 19,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+2,
+4,
+6,
+9
+],
+"final_turn": 13,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "g50t-5849a774",
+"level_up_turns": [],
+"final_turn": 10,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [],
+"final_turn": 19,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+7
+],
+"final_turn": 22,
+"number_of_levels": 10
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+4
+],
+"final_turn": 9,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+8
+],
+"final_turn": 13,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+11
+],
+"final_turn": 13,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+4
+],
+"final_turn": 9,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+4,
+7,
+9
+],
+"final_turn": 16,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+6,
+11
+],
+"final_turn": 19,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+6,
+13,
+15,
+19,
+21
+],
+"final_turn": 23,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [],
+"final_turn": 10,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 21,
+"number_of_levels": 8
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "sp80-589a99af",
+"level_up_turns": [],
+"final_turn": 28,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+6
+],
+"final_turn": 15,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+10,
+14
+],
+"final_turn": 22,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "tr87-cd924810",
+"level_up_turns": [],
+"final_turn": 4,
+"number_of_levels": 6
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+5,
+11
+],
+"final_turn": 13,
+"number_of_levels": 9
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+4,
+7
+],
+"final_turn": 19,
+"number_of_levels": 7
+},
+{
+"run": "arc3-duck-nvfp4-dedupe",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+18
+],
+"final_turn": 20,
+"number_of_levels": 9
+},
+{
+"run": "avo_out",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+4,
+12
+],
+"final_turn": 25,
+"number_of_levels": 8
+},
+{
+"run": "avo_out",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [
+18
+],
+"final_turn": 26,
+"number_of_levels": 9
+},
+{
+"run": "avo_out",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+32
+],
+"final_turn": 36,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [
+21
+],
+"final_turn": 24,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [],
+"final_turn": 30,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+3,
+5,
+8,
+12
+],
+"final_turn": 22,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "g50t-5849a774",
+"level_up_turns": [
+17
+],
+"final_turn": 19,
+"number_of_levels": 7
+},
+{
+"run": "avo_out",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [
+9,
+18
+],
+"final_turn": 34,
+"number_of_levels": 7
+},
+{
+"run": "avo_out",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+11
+],
+"final_turn": 28,
+"number_of_levels": 10
+},
+{
+"run": "avo_out",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+4,
+13
+],
+"final_turn": 17,
+"number_of_levels": 8
+},
+{
+"run": "avo_out",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+8
+],
+"final_turn": 22,
+"number_of_levels": 7
+},
+{
+"run": "avo_out",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+13
+],
+"final_turn": 20,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+5
+],
+"final_turn": 32,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+4,
+9,
+14,
+25
+],
+"final_turn": 29,
+"number_of_levels": 8
+},
+{
+"run": "avo_out",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+8
+],
+"final_turn": 34,
+"number_of_levels": 8
+},
+{
+"run": "avo_out",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+5
+],
+"final_turn": 32,
+"number_of_levels": 8
+},
+{
+"run": "avo_out",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [],
+"final_turn": 28,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 37,
+"number_of_levels": 8
+},
+{
+"run": "avo_out",
+"game_id": "sp80-589a99af",
+"level_up_turns": [
+11
+],
+"final_turn": 28,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+9,
+27
+],
+"final_turn": 31,
+"number_of_levels": 9
+},
+{
+"run": "avo_out",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+14,
+19
+],
+"final_turn": 29,
+"number_of_levels": 7
+},
+{
+"run": "avo_out",
+"game_id": "tr87-cd924810",
+"level_up_turns": [],
+"final_turn": 16,
+"number_of_levels": 6
+},
+{
+"run": "avo_out",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+6,
+12
+],
+"final_turn": 37,
+"number_of_levels": 9
+},
+{
+"run": "avo_out",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+6,
+10,
+23
+],
+"final_turn": 36,
+"number_of_levels": 7
+},
+{
+"run": "avo_out",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+15
+],
+"final_turn": 41,
+"number_of_levels": 9
+},
+{
+"run": "hud_out",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+4,
+14
+],
+"final_turn": 29,
+"number_of_levels": 8
+},
+{
+"run": "hud_out",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [
+10
+],
+"final_turn": 14,
+"number_of_levels": 9
+},
+{
+"run": "hud_out",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+24
+],
+"final_turn": 37,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [
+5
+],
+"final_turn": 17,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [
+17
+],
+"final_turn": 29,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+3,
+6,
+7
+],
+"final_turn": 11,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "g50t-5849a774",
+"level_up_turns": [
+10
+],
+"final_turn": 18,
+"number_of_levels": 7
+},
+{
+"run": "hud_out",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [
+9,
+22
+],
+"final_turn": 23,
+"number_of_levels": 7
+},
+{
+"run": "hud_out",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+4
+],
+"final_turn": 22,
+"number_of_levels": 10
+},
+{
+"run": "hud_out",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+3,
+7,
+9,
+14,
+18
+],
+"final_turn": 21,
+"number_of_levels": 8
+},
+{
+"run": "hud_out",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+8
+],
+"final_turn": 14,
+"number_of_levels": 7
+},
+{
+"run": "hud_out",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+7,
+11
+],
+"final_turn": 13,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+6
+],
+"final_turn": 34,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+6,
+12
+],
+"final_turn": 20,
+"number_of_levels": 8
+},
+{
+"run": "hud_out",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+29
+],
+"final_turn": 38,
+"number_of_levels": 8
+},
+{
+"run": "hud_out",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+5,
+12
+],
+"final_turn": 17,
+"number_of_levels": 8
+},
+{
+"run": "hud_out",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [
+16,
+19
+],
+"final_turn": 24,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 18,
+"number_of_levels": 8
+},
+{
+"run": "hud_out",
+"game_id": "sp80-589a99af",
+"level_up_turns": [
+16
+],
+"final_turn": 22,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+10
+],
+"final_turn": 28,
+"number_of_levels": 9
+},
+{
+"run": "hud_out",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+14
+],
+"final_turn": 23,
+"number_of_levels": 7
+},
+{
+"run": "hud_out",
+"game_id": "tr87-cd924810",
+"level_up_turns": [
+7,
+9,
+11,
+12
+],
+"final_turn": 20,
+"number_of_levels": 6
+},
+{
+"run": "hud_out",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+3,
+12
+],
+"final_turn": 14,
+"number_of_levels": 9
+},
+{
+"run": "hud_out",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+4,
+9,
+12
+],
+"final_turn": 37,
+"number_of_levels": 7
+},
+{
+"run": "hud_out",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+22
+],
+"final_turn": 39,
+"number_of_levels": 9
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+5
+],
+"final_turn": 20,
+"number_of_levels": 8
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [
+17
+],
+"final_turn": 19,
+"number_of_levels": 9
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+27
+],
+"final_turn": 35,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [],
+"final_turn": 45,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [
+19
+],
+"final_turn": 27,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+7,
+14
+],
+"final_turn": 17,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "g50t-5849a774",
+"level_up_turns": [],
+"final_turn": 17,
+"number_of_levels": 7
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [],
+"final_turn": 9,
+"number_of_levels": 7
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [],
+"final_turn": 23,
+"number_of_levels": 10
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+8,
+16
+],
+"final_turn": 17,
+"number_of_levels": 8
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+6
+],
+"final_turn": 11,
+"number_of_levels": 7
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [],
+"final_turn": 44,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "r11l-495a7899",
+"level_up_turns": [],
+"final_turn": 22,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+8
+],
+"final_turn": 23,
+"number_of_levels": 8
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+6,
+18
+],
+"final_turn": 23,
+"number_of_levels": 8
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+4
+],
+"final_turn": 18,
+"number_of_levels": 8
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [
+21,
+28
+],
+"final_turn": 47,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 24,
+"number_of_levels": 8
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "sp80-589a99af",
+"level_up_turns": [
+6
+],
+"final_turn": 17,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+15
+],
+"final_turn": 29,
+"number_of_levels": 9
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+12,
+19
+],
+"final_turn": 29,
+"number_of_levels": 7
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "tr87-cd924810",
+"level_up_turns": [
+7
+],
+"final_turn": 10,
+"number_of_levels": 6
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+5,
+11
+],
+"final_turn": 15,
+"number_of_levels": 9
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+4,
+7
+],
+"final_turn": 21,
+"number_of_levels": 7
+},
+{
+"run": "lb-9-arc3-duck-v12-with-qwen-3-8-27b",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [],
+"final_turn": 22,
+"number_of_levels": 9
+},
+{
+"run": "out_wg",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+4
+],
+"final_turn": 25,
+"number_of_levels": 8
+},
+{
+"run": "out_wg",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [
+17
+],
+"final_turn": 35,
+"number_of_levels": 9
+},
+{
+"run": "out_wg",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+16,
+21
+],
+"final_turn": 32,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [],
+"final_turn": 16,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [
+15
+],
+"final_turn": 33,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+3,
+5,
+7,
+11
+],
+"final_turn": 12,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "g50t-5849a774",
+"level_up_turns": [
+16
+],
+"final_turn": 19,
+"number_of_levels": 7
+},
+{
+"run": "out_wg",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [
+15,
+24
+],
+"final_turn": 30,
+"number_of_levels": 7
+},
+{
+"run": "out_wg",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+6
+],
+"final_turn": 31,
+"number_of_levels": 10
+},
+{
+"run": "out_wg",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+3,
+8,
+11,
+14,
+17
+],
+"final_turn": 19,
+"number_of_levels": 8
+},
+{
+"run": "out_wg",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+9
+],
+"final_turn": 14,
+"number_of_levels": 7
+},
+{
+"run": "out_wg",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+10
+],
+"final_turn": 18,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+8,
+14,
+15
+],
+"final_turn": 20,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+7,
+12
+],
+"final_turn": 25,
+"number_of_levels": 8
+},
+{
+"run": "out_wg",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+7
+],
+"final_turn": 18,
+"number_of_levels": 8
+},
+{
+"run": "out_wg",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+6
+],
+"final_turn": 19,
+"number_of_levels": 8
+},
+{
+"run": "out_wg",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [
+18,
+23
+],
+"final_turn": 28,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 42,
+"number_of_levels": 8
+},
+{
+"run": "out_wg",
+"game_id": "sp80-589a99af",
+"level_up_turns": [
+7
+],
+"final_turn": 12,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+6
+],
+"final_turn": 27,
+"number_of_levels": 9
+},
+{
+"run": "out_wg",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+7
+],
+"final_turn": 13,
+"number_of_levels": 7
+},
+{
+"run": "out_wg",
+"game_id": "tr87-cd924810",
+"level_up_turns": [
+7,
+9,
+11,
+13
+],
+"final_turn": 18,
+"number_of_levels": 6
+},
+{
+"run": "out_wg",
+"game_id": "tu93-0768757b",
+"level_up_turns": [],
+"final_turn": 19,
+"number_of_levels": 9
+},
+{
+"run": "out_wg",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+6,
+10,
+13
+],
+"final_turn": 24,
+"number_of_levels": 7
+},
+{
+"run": "out_wg",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+26
+],
+"final_turn": 34,
+"number_of_levels": 9
+},
+{
+"run": "anim_rs",
+"game_id": "ar25-0c556536",
+"level_up_turns": [
+3,
+9
+],
+"final_turn": 25,
+"number_of_levels": 8
+},
+{
+"run": "anim_rs",
+"game_id": "bp35-0a0ad940",
+"level_up_turns": [],
+"final_turn": 25,
+"number_of_levels": 9
+},
+{
+"run": "anim_rs",
+"game_id": "cd82-fb555c5d",
+"level_up_turns": [
+10,
+26
+],
+"final_turn": 29,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "cn04-2fe56bfb",
+"level_up_turns": [
+11
+],
+"final_turn": 24,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "dc22-fdcac232",
+"level_up_turns": [
+12,
+30
+],
+"final_turn": 31,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "ft09-0d8bbf25",
+"level_up_turns": [
+2,
+4,
+7,
+11
+],
+"final_turn": 17,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "g50t-5849a774",
+"level_up_turns": [],
+"final_turn": 17,
+"number_of_levels": 7
+},
+{
+"run": "anim_rs",
+"game_id": "ka59-38d34dbb",
+"level_up_turns": [
+8,
+26
+],
+"final_turn": 33,
+"number_of_levels": 7
+},
+{
+"run": "anim_rs",
+"game_id": "lf52-271a04aa",
+"level_up_turns": [
+6
+],
+"final_turn": 26,
+"number_of_levels": 10
+},
+{
+"run": "anim_rs",
+"game_id": "lp85-305b61c3",
+"level_up_turns": [
+4
+],
+"final_turn": 26,
+"number_of_levels": 8
+},
+{
+"run": "anim_rs",
+"game_id": "ls20-9607627b",
+"level_up_turns": [
+7
+],
+"final_turn": 18,
+"number_of_levels": 7
+},
+{
+"run": "anim_rs",
+"game_id": "m0r0-492f87ba",
+"level_up_turns": [
+2,
+10
+],
+"final_turn": 14,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "r11l-495a7899",
+"level_up_turns": [
+5,
+9
+],
+"final_turn": 12,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "re86-8af5384d",
+"level_up_turns": [
+5
+],
+"final_turn": 25,
+"number_of_levels": 8
+},
+{
+"run": "anim_rs",
+"game_id": "s5i5-18d95033",
+"level_up_turns": [
+8,
+22
+],
+"final_turn": 28,
+"number_of_levels": 8
+},
+{
+"run": "anim_rs",
+"game_id": "sb26-7fbdac44",
+"level_up_turns": [
+10
+],
+"final_turn": 19,
+"number_of_levels": 8
+},
+{
+"run": "anim_rs",
+"game_id": "sc25-635fd71a",
+"level_up_turns": [
+17,
+19
+],
+"final_turn": 30,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "sk48-d8078629",
+"level_up_turns": [],
+"final_turn": 29,
+"number_of_levels": 8
+},
+{
+"run": "anim_rs",
+"game_id": "sp80-589a99af",
+"level_up_turns": [
+5
+],
+"final_turn": 11,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "su15-1944f8ab",
+"level_up_turns": [
+9,
+22,
+27
+],
+"final_turn": 34,
+"number_of_levels": 9
+},
+{
+"run": "anim_rs",
+"game_id": "tn36-ef4dde99",
+"level_up_turns": [
+9
+],
+"final_turn": 20,
+"number_of_levels": 7
+},
+{
+"run": "anim_rs",
+"game_id": "tr87-cd924810",
+"level_up_turns": [],
+"final_turn": 4,
+"number_of_levels": 6
+},
+{
+"run": "anim_rs",
+"game_id": "tu93-0768757b",
+"level_up_turns": [
+4,
+8,
+10,
+14,
+17
+],
+"final_turn": 20,
+"number_of_levels": 9
+},
+{
+"run": "anim_rs",
+"game_id": "vc33-5430563c",
+"level_up_turns": [
+6,
+9
+],
+"final_turn": 25,
+"number_of_levels": 7
+},
+{
+"run": "anim_rs",
+"game_id": "wa30-ee6fef47",
+"level_up_turns": [
+16
+],
+"final_turn": 36,
+"number_of_levels": 9
+}
+]

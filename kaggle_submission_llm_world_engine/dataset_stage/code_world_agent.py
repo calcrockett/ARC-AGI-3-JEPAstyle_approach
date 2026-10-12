@@ -41,11 +41,15 @@ if str(_REPO_ROOT) not in sys.path:
 
 from llm_engine.action_head import suggest_action  # noqa: E402
 from llm_engine.budget import LLMBudget  # noqa: E402
-from llm_engine.drafting import draft_world_model, repair_world_model  # noqa: E402
+from llm_engine.drafting import draft_world_model, repair_world_model, revise_goal_hint  # noqa: E402
 from llm_engine.llm_client import make_client  # noqa: E402
 from llm_engine.opening_probes import opening_probe_plan  # noqa: E402
 from llm_engine.persistence import save_revision  # noqa: E402
 from llm_engine.planner import next_action  # noqa: E402
+from llm_engine.replay import observed_states, peak_escape  # noqa: E402
+from llm_engine.planner import candidate_actions  # noqa: E402
+from llm_engine.types import FalsifiedGoal, allowed_action_names  # noqa: E402
+from llm_engine.world_model import hints_tied, safe_goal_hint  # noqa: E402
 from llm_engine.types import ALL_ACTIONS, Action as EngineAction, GameTranscript, Transition  # noqa: E402
 from llm_engine.world_model import WorldModelProtocol, safe_predict  # noqa: E402
 
@@ -82,6 +86,21 @@ class CodeWorldAgent(Agent):
     # re-draft from scratch -- see _handle_new_transition.
     MAX_CONSECUTIVE_REPAIR_FAILURES = 2
 
+    # Goal falsification (2026-09-27). On kernel v6 the planner drove ls20
+    # to the exact maximum of its model's goal_hint -- "the 5x5 area at
+    # x=34, y=40 (where the object started)" -- and stayed there; no level.
+    # Reaching the peak of a goal with no level-up is evidence the goal is
+    # wrong. A consulted move is "at a peak" when no legal move improves
+    # goal_hint over staying put (replay.peak_escape, edge band held equal
+    # so a step counter cannot hide a peak). Peaks on GOAL_PEAK_HITS of the
+    # last GOAL_WINDOW_MOVES consulted moves falsify the goal: parking is
+    # 6/6, oscillating around the peak (0 -> -1 -> 0) is every other move.
+    # History-free on purpose -- an absolute "no new best" rule never fires
+    # on dc22's objective, whose counter term rises every move.
+    GOAL_WINDOW_MOVES = 6
+    GOAL_PEAK_HITS = 3
+    MAX_GOAL_REVISIONS_PER_LEVEL = 3
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
@@ -89,6 +108,18 @@ class CodeWorldAgent(Agent):
         # usable even when the rest of construction throws.
         self._rng = random.Random()
         self._init_failed = False
+        #: How often a consulted world model actually decided the action.
+        #: "planned" / "calls" is the fraction of steps the model drove;
+        #: "stalled" / "calls" is the fraction where search could not
+        #: distinguish actions at all. Counted, so a run reports whether
+        #: the model was USED, not just whether it was installed.
+        self.plan_stats = {"calls": 0, "stalled": 0, "planned": 0}
+        #: Goal falsification counters, reported by the run.
+        self.goal_stats = {"falsified": 0, "revised": 0, "revision_failed": 0}
+        #: Divergences that were hidden-state artifacts, fixed without an LLM call.
+        self.state_resyncs = 0
+        self._goal_revisions_this_level = 0
+        self._reset_goal_tracking()
 
         self.transcript = GameTranscript(game_id=self.game_id)
         self._probe_plan = opening_probe_plan()
@@ -103,6 +134,9 @@ class CodeWorldAgent(Agent):
         self._pending_levels_before: int = 0
         self._last_draft_attempt_len = -1
         self._consecutive_repair_failures = 0
+        #: Level boundaries crossed. Counted so a run can report whether
+        #: the per-level reset ever fired, rather than assuming it did.
+        self.levels_seen = 0
 
         self.coder_budget = LLMBudget(max_calls_per_game=self.CODER_LLM_CALL_BUDGET)
         self.action_budget = LLMBudget(max_calls_per_game=self.ACTION_LLM_CALL_BUDGET)
@@ -212,25 +246,139 @@ class CodeWorldAgent(Agent):
     # -- internals ---------------------------------------------------
 
     def _choose_engine_action(self, current_grid: Any, available_actions: list[int]) -> EngineAction:
-        if self._probe_index < len(self._probe_plan):
+        # Kept on the transcript so the replay gate checks goal_hint against
+        # the moves this game accepts. Re-set every step: a level reset
+        # replaces the transcript, and availability can change.
+        if available_actions:
+            self.transcript.available_actions = list(available_actions)
+
+        # Probes the game does not accept are skipped, not played: in a
+        # click-only game they were six wasted actions recorded as
+        # transitions in which nothing happens.
+        while self._probe_index < len(self._probe_plan):
             action = self._probe_plan[self._probe_index]
             self._probe_index += 1
-            return action
+            if self._is_available(action, available_actions):
+                return action
 
         if self.model is None:
             self._maybe_draft_model()
 
+        if self._goal_falsified and self.model is not None:
+            self._maybe_revise_goal()
+
         chosen: Optional[EngineAction] = None
-        if self.model is not None:
-            chosen, plan_result = next_action(self.model, current_grid, depth=self.PLAN_DEPTH, beam_width=self.PLAN_BEAM_WIDTH)
-            if plan_result.stalled or chosen is None or not self._is_available(chosen, available_actions):
+        if self.model is not None and not self._goal_falsified:
+            chosen, plan_result = next_action(
+                self.model, current_grid, depth=self.PLAN_DEPTH, beam_width=self.PLAN_BEAM_WIDTH,
+                available_actions=available_actions,
+            )
+            self.plan_stats["calls"] += 1
+            # Every consulted move counts, stalled or not: at a peak where all
+            # moves score equally lower the first-ply hints tie and the search
+            # reports a stall -- which is exactly the parked-on-the-goal case.
+            version_before = self.model_version
+            self._track_goal(current_grid, available_actions)
+            if self._goal_falsified or self.model_version != version_before:
+                # Just falsified (and possibly already revised): this pick
+                # came from the falsified goal -- do not play it.
+                chosen = None
+            if plan_result.stalled:
+                self.plan_stats["stalled"] += 1
+                # A stalled search did not distinguish between actions, so
+                # its pick is an arbitrary tie-winner, not a decision. It
+                # used to be played whenever the action head had nothing
+                # to offer (always, with ACTION_LLM_CALL_BUDGET=0) -- with
+                # a fixed candidate order that was ACTION1, every step.
+                chosen = None
+            if chosen is None or not self._is_available(chosen, available_actions):
                 fallback = self._try_action_head(current_grid, available_actions)
                 if fallback is not None:
                     chosen = fallback
+            elif not plan_result.stalled:
+                self.plan_stats["planned"] += 1
 
         if chosen is None or not self._is_available(chosen, available_actions):
             chosen = self._fallback_action(available_actions)
         return chosen
+
+    # -- goal falsification --------------------------------------------
+
+    def _reset_goal_tracking(self) -> None:
+        self._goal_window: list[bool] = []
+        self._goal_start: Optional[float] = None
+        self._goal_peak_board: Any = None
+        self._goal_peak_step: Optional[int] = None
+        self._goal_peak_value: Optional[float] = None
+        self._goal_falsified = False
+        self._goal_falsified_at_len = -1
+
+    def _track_goal(self, current_grid: Any, available_actions: list[int]) -> None:
+        """Called on every move at which the model is consulted. Falsify the
+        goal once the agent sits at (or oscillates around) its peak."""
+        value = safe_goal_hint(self.model, current_grid)  # type: ignore[arg-type]
+        if self._goal_start is None:
+            self._goal_start = value
+        candidates = candidate_actions(allowed_action_names(available_actions))
+        at_peak = peak_escape(self.model, current_grid, candidates) is False  # type: ignore[arg-type]
+        if at_peak:
+            self._goal_peak_board = current_grid
+            n = len(self.transcript)
+            self._goal_peak_step = n - 1 if n else None
+            self._goal_peak_value = value
+        self._goal_window.append(at_peak)
+        if len(self._goal_window) > self.GOAL_WINDOW_MOVES:
+            self._goal_window.pop(0)
+        if len(self._goal_window) < self.GOAL_WINDOW_MOVES:
+            return
+        if sum(self._goal_window) < self.GOAL_PEAK_HITS:
+            return
+        self.transcript.falsified_goals.append(FalsifiedGoal(
+            board=self._goal_peak_board, step=self._goal_peak_step,
+            value=self._goal_peak_value, start_value=self._goal_start,  # type: ignore[arg-type]
+            stalled_moves=len(self._goal_window),
+        ))
+        self.goal_stats["falsified"] += 1
+        logger.info(
+            "%s: goal falsified -- at its peak on %d of the last %d moves (goal_hint %r), no level",
+            self.game_id, sum(self._goal_window), len(self._goal_window), self._goal_peak_value,
+        )
+        self._goal_window = []
+        self._goal_falsified = True
+        self._goal_falsified_at_len = -1  # allow an immediate revision
+        self._maybe_revise_goal()
+
+    def _maybe_revise_goal(self) -> None:
+        """Ask for a different goal. On failure the falsified plan is not
+        followed (random exploration instead) and revision is retried once
+        new evidence has accumulated."""
+        if self.coder_client is None or not self.coder_budget.has_budget():
+            return
+        if self._goal_revisions_this_level >= self.MAX_GOAL_REVISIONS_PER_LEVEL:
+            return
+        if self._goal_falsified_at_len >= 0 and (
+            len(self.transcript) - self._goal_falsified_at_len < self.REDRAFT_AFTER_NEW_TRANSITIONS
+        ):
+            return
+        self._goal_falsified_at_len = len(self.transcript)
+        self._goal_revisions_this_level += 1
+        outcome = revise_goal_hint(
+            self.coder_client, self.transcript, self.model_source,  # type: ignore[arg-type]
+            max_attempts=self.REPAIR_MAX_ATTEMPTS,
+        )
+        if outcome.attempts > 0:
+            self.coder_budget.record("goal-revision")
+        if outcome.ok and outcome.world_model is not None and outcome.source and outcome.attempts > 0:
+            self.model_version += 1
+            self.model = outcome.world_model
+            self.model_source = outcome.source
+            save_revision(self.game_id, self.model_version, self.model_source, note="goal-revision")
+            self.goal_stats["revised"] += 1
+            self._reset_goal_tracking()
+            logger.info("%s: goal revised, now v%d", self.game_id, self.model_version)
+            return
+        self.goal_stats["revision_failed"] += 1
+        logger.info("%s: goal revision failed; exploring instead of following the falsified plan", self.game_id)
 
     def _try_action_head(self, current_grid: Any, available_actions: list[int]) -> Optional[EngineAction]:
         if self.action_client is None or not self.action_budget.has_budget():
@@ -295,6 +443,14 @@ class CodeWorldAgent(Agent):
         """
         if self.coder_client is None or not self.coder_budget.has_budget():
             return
+        # Nothing has changed yet: there is no rule to infer and no way to
+        # check a goal_hint, so a draft here can only install a model that
+        # was never tested (lp85, 2026-09-26: "nothing ever changes",
+        # admitted on one distinct board, then stalled 112/112). Wait for
+        # evidence; the draft-length marker is untouched so the first
+        # change triggers a draft immediately.
+        if len(observed_states(self.transcript)) < 2:
+            return
         # Re-drafting on identical evidence just repeats the same failure.
         if len(self.transcript) - self._last_draft_attempt_len < self.REDRAFT_AFTER_NEW_TRANSITIONS:
             return
@@ -308,6 +464,7 @@ class CodeWorldAgent(Agent):
             self.model = outcome.world_model
             self.model_source = outcome.source
             save_revision(self.game_id, self.model_version, self.model_source, note="draft")
+            self._reset_goal_tracking()
             logger.info(
                 "%s: draft passed replay after %d attempt(s), now v%d",
                 self.game_id, outcome.attempts, self.model_version,
@@ -327,7 +484,49 @@ class CodeWorldAgent(Agent):
             self.game_id, outcome.attempts,
         )
 
+    def _start_new_level(self) -> None:
+        """Reset the transcript and model at a level boundary.
+
+        `WorldModel` is documented as "a Python simulator for ONE level",
+        but the transcript was never segmented: every transition was
+        appended for the whole game, and `draft_world_model` requires a
+        candidate to reproduce all of it.
+
+        A level-clearing transition's `frame_after` is the NEXT level's
+        opening layout -- measured on a real run, 693-1054 of 4096 cells
+        rewritten, against a median of 109 for an ordinary move. No
+        inferred rule produces a fresh layout, and the drafting prompt
+        forbids hardcoding grids. The only candidate that could satisfy
+        it would emit that grid as a literal, which does not fit: one
+        64x64 board is ~4,240-6,360 tokens against a 4,096-token reply
+        budget.
+
+        So before this fix, clearing a single level made the replay gate
+        **permanently unsatisfiable for the rest of that game** -- drafting
+        could never succeed again, on exactly the games that were going
+        well. The old model is dropped too, since a model fitted to the
+        previous level is wrong for a fresh layout.
+
+        See experiments/stage7_codeworld_backtest.md section 3.1.
+        """
+        self.transcript = GameTranscript(game_id=self.game_id)
+        self.model = None
+        self.model_source = None
+        self._last_draft_attempt_len = -1
+        self._consecutive_repair_failures = 0
+        self.levels_seen = getattr(self, "levels_seen", 0) + 1
+        self._goal_revisions_this_level = 0
+        self._reset_goal_tracking()
+        logger.info(
+            "%s: level boundary -- transcript and model reset (level %d)",
+            self.game_id, self.levels_seen + 1,
+        )
+
     def _handle_new_transition(self, t: Transition) -> None:
+        if t.levels_delta > 0:
+            self._start_new_level()
+            return
+
         self.transcript.append(t)
         if self.model is None or self.model_source is None:
             return
@@ -347,14 +546,27 @@ class CodeWorldAgent(Agent):
             return
 
         logger.info("%s: prediction diverged at transition #%d, repairing", self.game_id, len(self.transcript) - 1)
-        self.coder_budget.record("repair")
         outcome = repair_world_model(self.coder_client, self.transcript, self.model_source, max_attempts=self.REPAIR_MAX_ATTEMPTS)
+        if outcome.ok and outcome.world_model is not None and outcome.attempts == 0:
+            # A freshly loaded copy of the SAME source reproduces the whole
+            # transcript: the divergence came from the installed instance's
+            # hidden state, not from the rule. Resync to the fresh instance
+            # (replay has advanced it through every real transition). No
+            # LLM call was made, so no budget is charged and no revision is
+            # recorded. Kernel v7: ls20 spent 7 of its 8 budget units here.
+            self.model = outcome.world_model
+            self.state_resyncs += 1
+            self._consecutive_repair_failures = 0
+            logger.info("%s: hidden-state resync (no LLM call)", self.game_id)
+            return
+        self.coder_budget.record("repair")
         if outcome.ok and outcome.world_model is not None and outcome.source:
             self._consecutive_repair_failures = 0
             self.model_version += 1
             self.model = outcome.world_model
             self.model_source = outcome.source
             save_revision(self.game_id, self.model_version, self.model_source, note="repair")
+            self._reset_goal_tracking()
             logger.info("%s: repair succeeded, now v%d", self.game_id, self.model_version)
             return
 

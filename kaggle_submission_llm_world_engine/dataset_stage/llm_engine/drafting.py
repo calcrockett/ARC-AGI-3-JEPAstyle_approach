@@ -13,7 +13,7 @@ from typing import Optional
 
 from .diff import format_diff, format_grid
 from .llm_client import LLMClient, extract_code
-from .replay import ReplayResult, describe_failure, replay
+from .replay import ReplayResult, describe_rejection, replay
 from .types import GameTranscript
 from .world_model import LoadResult, WorldModelProtocol, load_world_model
 
@@ -60,28 +60,116 @@ class WorldModel:
         ...
 
     def goal_hint(self, state):
-        # float: higher = closer to a win condition
+        # float: higher = closer to a win condition (see below)
         ...
 ```
+
+goal_hint is not decoration -- it is what the agent PLAYS with. Once your model \
+is accepted, a search tries each action in your simulator and picks the one whose \
+predicted next board has the HIGHEST goal_hint. predict() has to be right; \
+goal_hint() has to be useful. So:
+
+  - goal_hint must NOT be constant, and it must tell ACTIONS apart: it is checked \
+by predicting where each action leads from boards in the transcript, and if it \
+scores every pair of different outcomes the same, your model is rejected however \
+good predict() is -- the search would have nothing to choose between.
+  - Do NOT score a step counter, timer, or bar/strip along the edge of the board. \
+Those change on every step, but the same way whatever action you take, so they \
+cannot guide the search. Score the part of the board your actions change \
+DIFFERENTLY.
+  - If your actions MOVE things, do not just count colours: a moved object has \
+exactly the same colour counts, so every move scores the same. Measure positions \
+-- e.g. minus the distance from the object you move to where it seems to need to go.
+  - Only the ORDER of its values matters, never the scale. A raw count, a negative \
+distance or a sum are all fine; there is no need to normalise.
+  - Make it reward progress toward what you think the win condition is: for example \
+minus the distance from the thing the actions move to a target it seems to be \
+heading for, the number of cells already matching a pattern that looks like a goal, \
+or minus the number of objects left to clear. If the transcript shows \
+levels_completed increasing, the board just before that step is your best evidence \
+of what winning looks like.
 """
 
 
-def _render_transcript(transcript: GameTranscript, max_transitions: int = 40) -> str:
-    lines = []
-    shown = transcript.transitions[-max_transitions:]
-    if len(transcript.transitions) > max_transitions:
-        lines.append(f"[... {len(transcript.transitions) - max_transitions} earlier transitions omitted ...]")
-    for i, t in enumerate(shown):
-        idx = len(transcript.transitions) - len(shown) + i
-        lines.append(
-            f"--- transition #{idx} ---\n"
-            f"action: {t.action}\n"
-            f"before (layer 0):\n{format_grid(t.frame_before)}\n"
-            f"diff after action: {format_diff(t.frame_before, t.frame_after)}\n"
-            f"levels_completed: {t.levels_completed_before} -> {t.levels_completed_after}\n"
-            f"state_after: {t.state_after}"
-        )
-    return "\n\n".join(lines)
+#: Hard ceiling on the rendered transcript, in characters. The served
+#: model has a 32,768-token context shared with its reply; at ~3 chars per
+#: token for digit-heavy text, 36k chars (~12k tokens) leaves ample room
+#: for a 16k-token answer. Enforced, not hoped for.
+MAX_TRANSCRIPT_CHARS = 36_000
+
+
+def _render_transcript(
+    transcript: GameTranscript,
+    max_transitions: int = 40,
+    max_chars: int = MAX_TRANSCRIPT_CHARS,
+) -> str:
+    """Render the transcript as one opening grid plus per-step diffs.
+
+    Rewritten 2026-09-22. The original emitted `format_grid(t.frame_before)`
+    for EVERY transition shown, up to 40 of them. A 64x64 grid is 64 lines
+    of 64 characters, so real prompts reached **281,603 characters (~94k
+    tokens) against a 32,768-token context**, and the server rejected them
+    outright in ~0.1s. Measured on a real 12-game run: **93 of 109 LLM
+    calls failed that way** -- 85% of the coder budget never reached the
+    model at all. The resulting "0 replay passes" looked exactly like a
+    capability ceiling and was nothing of the kind.
+
+    It was also pure redundancy: consecutive `frame_before` grids differ
+    only by the previous step's diff, which is already printed beside them.
+    One opening grid plus the diffs is **lossless** -- every intermediate
+    grid can be reconstructed by applying them in order -- at roughly a
+    fifth of the size.
+
+    `max_chars` is then a hard backstop: a long enough game would overflow
+    any per-step encoding, so the oldest steps are dropped until it fits
+    and the omission is stated in the text.
+    """
+    transitions = transcript.transitions
+    if not transitions:
+        return "(no transitions observed yet)"
+
+    def render(window: list) -> str:
+        omitted = len(transitions) - len(window)
+        head = []
+        if omitted > 0:
+            head.append(
+                f"[... {omitted} earlier step(s) omitted; the grid below is the "
+                f"state at step {omitted}, not the start of the level ...]"
+            )
+        head += [
+            f"{len(window)} observed step(s).",
+            "",
+            "Grid at the first step shown (layer 0), one row per line, "
+            "one hex digit per cell:",
+            format_grid(window[0].frame_before),
+            "",
+            "Then each step gives the action and the cells it changed, as "
+            "(layer,x,y): old->new. Apply them in order to follow the board.",
+            "",
+        ]
+        for i, t in enumerate(window):
+            parts = [f"step {omitted + i}: {t.action} -> {format_diff(t.frame_before, t.frame_after)}"]
+            if t.levels_completed_after != t.levels_completed_before:
+                parts.append(
+                    f"levels_completed {t.levels_completed_before}->{t.levels_completed_after}"
+                )
+            if t.state_after != "NOT_FINISHED":
+                parts.append(f"state={t.state_after}")
+            head.append("  ".join(parts))
+        return "\n".join(head)
+
+    window = transitions[-max_transitions:]
+    text = render(window)
+    # Drop the oldest shown steps until the budget is met. Halving the
+    # overshoot rather than stepping one at a time keeps this cheap on the
+    # long transcripts that motivated the cap.
+    while len(text) > max_chars and len(window) > 1:
+        keep = max(1, int(len(window) / max(len(text) / max_chars, 1.1)))
+        if keep >= len(window):
+            keep = len(window) - 1
+        window = window[-keep:]
+        text = render(window)
+    return text
 
 
 # A complete WorldModel for a 64x64 game is not a short function. The
@@ -182,14 +270,17 @@ def draft_world_model(
             return DraftOutcome(ok=True, source=source, world_model=load.world_model, attempts=attempt, replay_result=result)
 
         logger.info(
-            "draft attempt %d: replay failed (%d/%d), first failure at #%d",
-            attempt, result.pass_count, result.total, result.first_failure.index,  # type: ignore[union-attr]
+            "draft attempt %d: rejected -- predict %d/%d%s; goal_hint %s",
+            attempt, result.pass_count, result.total,
+            "" if result.first_failure is None else f", first failure at #{result.first_failure.index}",
+            "ok" if result.goal_hint.ok else f"REJECTED ({result.goal_hint.problem})",
         )
         user_prompt = _retry_prompt(
             transcript,
             source,
-            "it loaded but does not reproduce the transcript. "
-            + describe_failure(transcript, result.first_failure),  # type: ignore[arg-type]
+            ("it loaded but does not reproduce the transcript. " if not result.predict_passed
+             else "it loaded, but was rejected. ")
+            + describe_rejection(transcript, result),
         )
 
     logger.warning(
@@ -208,11 +299,33 @@ def draft_world_model(
     )
 
 
+def revise_goal_hint(
+    client: LLMClient,
+    transcript: GameTranscript,
+    current_source: str,
+    max_attempts: int = 3,
+) -> DraftOutcome:
+    """The agent reached the peak of the model's goal_hint and no level
+    followed (recorded in `transcript.falsified_goals`). Ask for a
+    different goal. predict() is known good -- it is what got the agent
+    there -- so the prompt says to keep it; the replay gate still checks
+    both halves, and rejects a goal_hint that would park on a falsified
+    board again."""
+    return repair_world_model(
+        client, transcript, current_source, max_attempts=max_attempts,
+        intro=(
+            "its predict() works -- keep it -- but its goal_hint led the agent to a "
+            "board that is not a win. "
+        ),
+    )
+
+
 def repair_world_model(
     client: LLMClient,
     transcript: GameTranscript,
     current_source: str,
     max_attempts: int = 3,
+    intro: str = "it worked until now, but no longer passes on the latest observation. ",
 ) -> DraftOutcome:
     """Online repair loop (architecture.md step 5): called when a
     known-good model's prediction diverged from a *new* real observation
@@ -236,8 +349,8 @@ def repair_world_model(
     user_prompt = _retry_prompt(
         transcript,
         current_source,
-        "it worked until now, but just failed to predict a new observation. "
-        + describe_failure(transcript, result.first_failure)  # type: ignore[arg-type]
+        intro
+        + describe_rejection(transcript, result)
         + " Patch it so it handles this new case WITHOUT breaking any earlier "
         "transitions -- your patch will be replayed against the full history above.",
     )
@@ -263,8 +376,9 @@ def repair_world_model(
         user_prompt = _retry_prompt(
             transcript,
             source,
-            "it still does not reproduce the transcript. "
-            + describe_failure(transcript, replay_result.first_failure),  # type: ignore[arg-type]
+            ("it still does not reproduce the transcript. " if not replay_result.predict_passed
+             else "it reproduces the transcript but was rejected. ")
+            + describe_rejection(transcript, replay_result),
         )
 
     logger.warning("repair failed after %d attempts for game %s; keeping last known-good model", max_attempts, transcript.game_id)

@@ -14,12 +14,792 @@ refinement rather than an LLM. Side project / portfolio piece and a JEPA
 learning vehicle -- see `plan.md`'s "Framing & goals" for what "success"
 means here (not leaderboard-topping).
 
-## CURRENT STATUS (2026-09-07) -- strategic reset; read this before anything below
+**As of 2026-10-09 the scored entry is no longer the JEPA agent**: it is a
+fork of the public Milestone-2 LLM solution plus our level-memory patch (see
+CURRENT STATUS). The JEPA/GraphExplorer work below is retained as history.
 
-**Everything from "## Status" down to the Gotchas section is still accurate as a
-record of what was tried, but it is no longer the plan.** Three findings
-established on 2026-09-07 supersede it. Full analysis:
-`experiments/stage7_strategy_reset.md`; backlog is now tracked in GitHub Issues.
+## CURRENT STATUS (2026-10-09) -- read this first; supersedes every status section below
+
+**Everything below this section is history.** Sections 1-9 of the dated log
+(the 2026-09-07 "strategic reset" through the 2026-09-21 "CURRENT STANDING")
+are **superseded** and several of their numbers are stale (top-10% bar,
+"best score 3.79", "incumbent = anim"). Sections 10-14 are accurate dated
+records that this section summarises. Detail lives in `experiments/`.
+
+### Incumbent: milestone-2 fork + solved-level memory ("m2 + level memory")
+
+| field | value |
+|---|---|
+| kernel | `calamitychasm/arc3-m2-level-memory` **v1** (private, GPU, no internet) |
+| source dir | `kaggle_submission_m2_level_memory/notebook/` (`arc3-m2-level-memory.ipynb` + `kernel-metadata.json`) |
+| machine | `machine_shape: NvidiaRtxPro6000`, `enable_gpu: true` |
+| dataset sources | `dfranzen/pennyroyal-v253` (SGLang fork), `dfranzen/taaf-kaggle-source-bundle-copy` |
+| model sources | `dfranzen/intel-qwen3.8-flash-next-w4a16-autoround/Transformers/default/1`, `dfranzen/albucino-qwen3-8-flash-next-drafter/Transformers/default/1` |
+| competition source | `arc-prize-2026-arc-agi-3` |
+| lineage | verbatim fork of `dfranzen/arc-agi-3-milestone-2-solution` (Apache-2.0; our fork kernel `calamitychasm/arc3-milestone2-fork` v1, source in `kaggle_submission_milestone2_fork/upstream/`) plus `kaggle_submission_milestone2_fork/level_memory/level_memory.py` (sirikilohit's M85 port, installed at runtime on the patched `ToolAgent`; every upstream cell identical except the run cell, which only gains a counter dump, plus one install cell) |
+| what it is | W4A16 Qwen3.8-Flash-Next + MTP drafter on an SGLang fork, 128K context, an 8,400-line harness patch, harness-side priority gate (all ~110 games, 10 active streams ranked by expected level value) |
+
+**Scores (n=4, byte-identical resubmits of v1): 33.29, 28.18, 31.03, 29.38;
+mean 30.47, sd 2.21.** Versus the unmodified fork's draw distribution (hundreds
+of public copies: mean 25.77, sd 3.93) the effect is +4.7 (95% CI +0.8..+8.6),
+one-sided p = 0.008 on the known-sigma test (t-test on our own spread: p ~ 0.012).
+Treat 33.29 as a high draw selected for reporting; **30.5 +/- 2.2 is the level
+we hold**, not 33. See `experiments/stage7_m2_level_memory.md`.
+
+**Control finding (2026-10-09): the level-memory effect is real against a proper control.** Faithful copies of
+Franzen's notebook by another team (jvilladuque), hidden-set draws 2026-10-03..08, n=6: 25.01, 25.17, 23.39,
+27.15, 27.63, 25.97 -> **mean 25.7, sd 1.6**. Against our level-memory n=4 (mean 30.47) that is **+4.8, Welch
+t ~ 3.7 (df ~ 5)** -- it replaces the "hundreds of public copies" comparison (a noisier, selected population)
+as the baseline for the incumbent's effect. Also: **no team has verified a hidden-set gain from serving
+speedups.** JustAdev742's REAP + acceptance 0.5 public-25 runs are 56.00 and 42.89 (mean 49.4 vs Franzen
+~46.5), but public-25 is not a ranking instrument, and their hidden draw (submission 56980485) was still
+pending as of 2026-10-09 03:53 UTC. **If it lands <= ~28, treat acceptance 0.5 as suspect and prefer
+`arc3-m2-turbo-lossless`** (same serving stack, acceptance left at 1.0).
+
+**Resubmit procedure** (needs a machine that can reach kaggle.com and has
+`~/.kaggle` credentials -- see the environment note below):
+
+1. Quota is **1 submission per UTC day**; slot opens 00:00 UTC. Unused slots are
+   lost. Arm from `date -u`, never from an assumed clock.
+2. The kernel's check run (non-submission mode, 10 public games x 25 min) must be
+   COMPLETE for the version you submit. `kaggle kernels status calamitychasm/arc3-m2-level-memory`.
+   Push a kernel only when a GPU slot is free (2-session limit; see Gotchas) --
+   `scripts/kaggle_push_queue.py` checks.
+3. Gated submit (no AI needed; the gate reads the check-run log: markers present,
+   no traceback outside serving teardown, every game won/gave_up/cancelled,
+   counters JSON `errors == 0`):
+   ```
+   python scripts/kaggle_submit_when_ready.py --kernel calamitychasm/arc3-m2-level-memory \
+     --version 1 --message "m2 level memory draw N" \
+     --marker "LEVEL_MEMORY installed" --marker "priority gate active" \
+     --marker "harness patch applied successfully" --counters level_memory_summary.json
+   # kernels built with a variant also need: --marker "INPUT_RESOLVED" (the v1 incumbent prints no such line)
+   # add --arm "YYYY-MM-DD HH:MM" (UTC) to schedule it as a one-shot Windows task
+   ```
+   Or by hand: `kaggle competitions submit -c arc-prize-2026-arc-agi-3 -k calamitychasm/arc3-m2-level-memory -v 1 -f submission.parquet -m "..."`.
+4. Scores land ~9 h later. `scripts/kaggle_watch.py` (Windows task `ARC3KaggleWatch`,
+   every 10 min) writes `logs/kaggle_watch_latest.txt`; or
+   `kaggle competitions submissions -c arc-prize-2026-arc-agi-3 --csv`.
+
+Automation on the dev box (Windows Task Scheduler, survives any chat):
+`ARC3KaggleWatch`, `ARC3PushQueue`, one-shot `ARC3Submit_*`.
+The 2026-09-13 / 09-19 lost slots taught that a scheduled submitter dies with
+a sleeping machine -- confirm the dev box is awake and the task fired.
+
+### Submission ledger since 2026-09-21
+
+(For 2026-07-16..09-21 see the ledger in section 3 below and section 9; the best
+of those was 3.79 / anim 3.43, 3.79, 3.37, 3.02.)
+
+| date | ref | kernel / config | score |
+|---|---|---|---:|
+| 2026-09-22 | -- | anim graft draw 5 | 2.66 |
+| 2026-09-24 | -- | NVFP4 baseline draw 5 (period-effect check) | 2.48 |
+| ~2026-09-25..27 | -- | anim graft draw 6 (exact date not recorded in repo) | 3.28 |
+| 2026-09-28 | 56631362 | anim + momentum time (`stage7-momentum-time`) | 4.37 |
+| 2026-09-29 | 56655708 | sheetu12b + momentum (`stage7-sheet-momentum`) | 3.89 |
+| 2026-09-30 | 56713526 | sheetu12b + momentum, byte-identical | 4.38 |
+| 2026-10-01 | 56750615 | sheetu12b + momentum, byte-identical | 4.58 |
+| 2026-10-02 | 56763055 | **milestone-2 fork, verbatim** (`arc3-milestone2-fork` v1) | **24.99** |
+| 2026-10-03 | 56789553 | **m2 + level memory** (`arc3-m2-level-memory` v1) | **33.29** |
+| 2026-10-04 | 56809165 | m2 + level memory, byte-identical | 28.18 |
+| 2026-10-05 | 56842120 | m2 + level memory, byte-identical | 31.03 |
+| 2026-10-06 | 56864478 | m2 + level memory, byte-identical | 29.38 |
+| 2026-10-09 | 57017233 | m2 + level memory v1, draw 5 (submitted via GitHub Actions kaggle-ops, `force_gate` because of the v0 version-lookup bug, since fixed in e98bed7) | **25.21** |
+| 2026-10-10 | -- | arm A turbo-tail v1 draw 1: **NOT SUBMITTED** (kaggle-ops `daily-1010`, run 38017360617: gate passed, Kaggle returned 400 `Your team already has 1 pending submissions`, blocked by 57017233, still PENDING 02:33 UTC; no force, no incumbent fallback) | -- |
+| 2026-10-10 | 57029829 | arm A turbo-tail v1 draw 1, retried 03:37 UTC after 57017233 scored (kaggle-ops `daily-1010-r2`, run 38021143287; gate passed, `VERSION_OK`, no force) | **26.59** (COMPLETE, read 13:02 UTC via kaggle-ops `status-1010c`, run 38054153609; confirmed COMPLETE 26.59 again 2026-10-12 00:10 UTC) |
+| 2026-10-11 | -- | arm B turbo-lossless-tail draw 1: **NOT SUBMITTED** (slot lost to a session restart; verified by `daily-1012-s` status: nothing dated 10-11, nothing PENDING). B has n=0. | -- |
+| 2026-10-12 | 57089293 | **arm C jad-exp081 v2 draw 1** (kaggle-ops `jad81-submit-1`, run 38187111540, submitted 00:13 UTC; `VERSION_OK`, gate clean, no force; v2 check run PASS 789.9 tok/s / 111 levels / 48.03) | **20.70** (COMPLETE, read 11:39 UTC via kaggle-ops `read-1012-h16`, run 38243454868; n=1, 5.0 below the incumbent mean 29.42 and 13.3 below JustAdev742's own exp-081 draw 34.04: the draw-1 "low" rule fires) |
+
+Notes: the jump 4.58 -> 24.99 came from swapping in the public milestone-2
+solution (serving stack: 94% prefix-cache reuse vs 0%, ~590 vs ~250 generated
+tok/s, 128K vs 32K context), not from anything of ours. Our own contribution
+is the level-memory patch (+4.7). **2026-10-07 and 2026-10-08 had NO submissions
+(verified via the Kaggle API on 2026-10-09) -- those two slots are lost.** Rank after 33.29 was **10**
+(on 2026-10-03; see the 2026-10-09 API-verified snapshot below).
+
+### Submission schedule (from 2026-10-10)
+
+One slot per UTC day. Read this before each daily submit. Verify the day's slot is empty first
+(`SKIPPED_ALREADY_SUBMITTED_TODAY` otherwise).
+
+**Adopted 2026-10-12 (`experiments/stage7_milestone2_improvements.md` section 16, 16.7): the C family takes every slot from 10-13.** The
+explore/exploit split and the drop rule below are superseded. Arm B, the incumbent and arm A get **no slots** unless the standing rule
+under "Decision rules" fires. Already submitted: 10-10 A (26.59), 10-12 C v2 draw 1 (57089293, **scored 20.70**); 10-11 was lost.
+
+**The bundle kernel `calamitychasm/arc3-jad-exp081-ulm` (C+U+LM: arm C v2 + C1/C2 patches + level memory) is built (2026-10-12, section 16.8)
+and its check run was **pushed 11:39 UTC as v1 (kaggle-ops `read-1012-h16`, run 38243454868, `PUSHED`, no GPU kernel busy before it)**; it is NOT yet checked.** Its check run (section 16.5: 25 x 121 min, pass / kill / near-pass lines there) has not run. Do not submit it until a
+check run has PASSED for the version you submit; until then, and if its check run is killed or only near-passes, use C+U v1 in its
+slots. The C+U row, the C+LM row and section 12.5 hold their own check-run results (C+U passed: 114 levels / 50.26; C+LM passed).
+
+| date | kernel (version) | submit request | note |
+|---|---|---|---|
+| 10-10 | A turbo-tail v1 | done | 26.59 (57029829) |
+| 10-11 | -- | -- | **LOST** (session restart) |
+| 10-12 | C jad-exp081 v2 | done | draw 1, ref 57089293, **20.70** |
+| 10-13 | **C v2** (`arc3-jad-exp081`, **version 2**) -- the low-draw swap FIRED (C draw 1 = 20.70 < 28) | **`jad81-submit-2`** (kernel `calamitychasm/arc3-jad-exp081`, `version` 2, message `m2 jad exp081 draw 2`; the `jad81-submit-1` example with the id and draw number bumped) | a clean second read of the base; C verbatim n=2 (n=3 on 10-19, n=4 on 10-25) |
+| 10-14 | **C+U v1** (`arc3-jad-exp081-u`) -- swapped from C v2 by the same rule | **`jadu-submit-1`** (kernel `calamitychasm/arc3-jad-exp081-u`, `version` 1, message `m2 jad exp081 u draw 1`) | first hidden draw of the passed variant; pools into mu_C. |
+| 10-15 .. 11-02 | **bundle C+U+LM v1** (`arc3-jad-exp081-ulm`) **only if its check run passed**, else **C+U v1** | `jadulm-submit-N` (bundle) / `jadu-submit-N` (C+U) | the bundle from 10-15 (the MC assumed 10-16); the bundle's check run must have PASSED for that version first |
+| 10-18 | bundle (or C+U) | | checkpoint 1: re-run the standing rule |
+| 10-19 | **C v2** | `jad81-submit-N` | C verbatim n=3, the selection-eligible fallback |
+| 10-24 | bundle (or C+U) | | last date for a serving swap (C+hic16 or C+draft), see below |
+| 10-25 | **C v2** | `jad81-submit-N` | C verbatim n=4; checkpoint 2: re-run the standing rule |
+| 11-02 | bundle (or C+U) | | submit at 00:00 UTC; scored by ~09:00; final selection by 12:00 UTC |
+
+Every other date from 10-15 to 11-02 is the bundle (or C+U) -- about 16-17 bundle draws, 4 C verbatim (with 10-12), 1-2 C+U, 0 incumbent / A / B.
+Use the version each kernel's check run used: **C v2; C+U, C+LM and the bundle v1.** Bump the request `id` and the message draw number
+(`N` = that kernel's own draw count) every time. Pre-checks every day: no PENDING submission, the day's slot empty.
+
+**Draw-1 result (read 2026-10-12 11:39 UTC): C v2 draw 1 = 20.70 (57089293), x < 28, so the "Low" rule applies: 10-13 = C v2 (`jad81-submit-2`, version 2), 10-14 = C+U v1 (`jadu-submit-1`).** It is the lowest hidden draw of any Franzen-family kernel we have run (A 26.59, incumbent 25.21-33.29, copies 23.4-27.6). n=1, so the family is not abandoned; rough 16.2-style update (main prior N(31.8, 2.2), per-draw sd 3, no JustAdev742 draw) gives a posterior near 27.9, and about 28.8 with their 34.04 at half weight (sigma 4.2); both are below the 28.4 "stay on the table" line of the standing rule, but that rule only applies from 10-15 and needs the pooled C-family draws, so 10-13 and 10-14 decide it. The bundle's check run is in flight (see its row); the 10-13 submit must wait for no PENDING submission (57089293 is COMPLETE, so none) and the day's slot being empty.
+
+**Decision rules (section 16.6; the posterior method is in 16.2 and 16.6).**
+1. **After C draw 1 (57089293, x) scores**, with the main prior N(31.8, 2.2):
+   - **High, x >= 33**: run the table unchanged. If the bundle's check run has passed in time, it may start on 10-14 (C v2 then moves to 10-15).
+   - **Mid, 28 <= x < 33**: run the table unchanged (one draw cannot overturn the prior; P(C > incumbent) stays >= 0.68).
+   - **Low, x < 28**: do not abandon the family on n=1. **Swap 10-13 and 10-14**: C v2 on 10-13 (a clean second read of the base), then C+U v1 on 10-14.
+     From then on the standing rule decides.
+2. **Standing rule, re-evaluated after every C-family score from 10-15 on (and always on 10-18 and 10-25).** Compute the pooled **C-family
+   posterior** for the C base: start from the main prior N(31.8, 2.2); update on every C-family draw (C, C+U, C+LM, bundle) after
+   subtracting that variant's prior effect mean (C+U +0.7, C+LM +1.5, bundle +1.9 = +0.7 +1.5 -0.3, hic16 +0.6) and widening each
+   draw's variance by the effect spreads (the linear-Gaussian joint model of 16.2, per-draw sd 3). Add JustAdev742's exp-081-family hidden
+   draws (exp-085) at half weight (sigma 4.2). Then:
+   - **posterior >= 28.4** (incumbent mean 29.42 minus 1): stay on the table.
+   - **27.4 <= posterior < 28.4 with >= 3 C-family draws**: alternate the bundle (or C+U) and the incumbent, incumbent on odd days.
+   - **posterior < 27.4 with >= 4 C-family draws**: incumbent only (`inc-submit-N`).
+   - Worked examples (16.6): draws 28, 26, 27 give 28.8 (stay); 25, 25, 26 give 27.8 (alternate).
+3. **Serving swap, once.** C+hic16 (`arc3-jad-exp081-hic16`) or C+draft (the MTP drafter, section 15) may replace the bundle kernel **once, no later than 10-24**,
+   and **only after passing its own check run** (C+hic16: section 14.3; the swapped kernel must also be rebuilt on the bundle and pass a
+   swap check run, section 16.5). The swapped kernel's draws pool with the bundle's as "same harness, faster serving", but it needs n >= 2 of
+   its own before one of its draws may be selected.
+   **The C+draft swap kernel is pre-built** (`arc3-jad-exp081-ulm-draft` = the bundle + C+D's edits, never pushed; row and examples below):
+   push it (`jadulmd-push-1`) only once both the bundle and C+D check runs have passed, then read its swap check run against the gate in its row.
+
+Incumbent so far (n=5): 33.29, 28.18, 31.03, 29.38, 25.21 (mean 29.42, sd 3.03); draw 5 (57017233) scored 25.21, the lowest draw yet.
+If JustAdev742's hidden draw (56980485) lands <= ~28, prefer B over A.
+**It landed: 27.97** (JustAdev742 `docs/status.md`, read 2026-10-10; n=1) -> prefer B over A.
+Arm A (turbo-tail) draw 1 = **26.59** (57029829, n=1; 2.8 below the incumbent mean 29.42, inside the incumbent's own range 25.21-33.29; nothing separable yet).
+Arm C (jad-exp081 v2, `arc3-jad-exp081`) hidden draws so far (n=1): **20.70** (57089293, 2026-10-12), mean 20.70, sd undefined; JustAdev742's own exp-081-family draws (theirs, n=1, `docs/research_log.md` @ `ccb7214`, still their head on 2026-10-12): exp-081 34.04 (57026621, 10-10); same-family base without the harness bundle: exp-074t 27.97, exp-083 26.04; D' copy 28.87; exp-085 not yet drawn there. They are a separate kernel build, pooled only at half weight in the standing rule. Arm C's public-25 to hidden ratio is 0.43 (48.03 -> 20.70) against their 0.51-0.68. Nothing separable at n=1; draw 2 is 10-13 (`jad81-submit-2`).
+**Update 2026-10-12 00:15 UTC (the arm-B 10-13/15/17 plan in this paragraph is SUPERSEDED by the section-16 schedule above; the C facts stand):** the 10-11 B slot was lost to a session restart (B n=0, A n=1, C n=1 pending). Arm C's v2 check run PASSED (789.9 tok/s, accept 3.12, 111 levels, 48.03), so per the arm C row C took arm A's remaining explore slots 10-12, 10-14, 10-16 (A is dropped from the explore schedule at n=1, 26.59); B keeps 10-13, 10-15, 10-17. C draw 1 = ref 57089293, PENDING since 00:13 UTC. **C uses kernel `calamitychasm/arc3-jad-exp081` version 2 and the `jad81-submit-1` example under "Examples for arc3-jad-exp081 (arm C)" below (bump the id to `jad81-submit-N` and the message draw number each time); it prints no `INPUT_RESOLVED` and has no counters.** Next: 10-13 arm B (`ttl-submit-1`; only after 57089293 scores, ~09:00 UTC, since Kaggle allows 1 PENDING submission per team). The drop rule needs n >= 4 per arm, so it cannot fire yet; the "from 10-18, exploit" comparison will have B n <= 3 (10-13/15/17), so decide then whether B gets extra draws first.
+
+**Final selection (section 16.6, adopted 2026-10-12).** Select BOTH slots explicitly before 2026-11-02 23:59 UTC (aim for 11-02 12:00 UTC,
+after the 11-02 draw has scored); do not rely on auto-selection.
+1. Compute the posterior (16.2 model) for every kernel with n >= 3.
+2. If the leading family's posterior is >= 0.5 above the best other family's: select the **two highest public draws within the leading
+   family** (`best2`), among that family's kernels whose posterior is within 1.0 of the leader's. Normally that is the bundle's top two, or the
+   bundle's top plus C verbatim's top.
+3. If the top two families are within 0.5 of each other: select the **top public draw of each** (`each2`).
+4. Never select a kernel with n < 3, or a serving-swapped kernel with n < 2 of its own.
+Reasons and caveats:
+- Each run plays all ~110 games, so the public and private halves (55 + 55 games) are likely scored in the same run. Primary source
+  (competition page `data-description`, read 2026-10-12 via kaggle-ops `competition_pages`, run 38218243798): "Competition evaluation
+  uses a **separate, private set of 110 games** that your agent has never seen. Half of these are used for the Public Leaderboard score,
+  and the other half for the Private Leaderboard score." The pages do not say whether this is one notebook run or two; one run is the
+  natural reading (Code Requirements: one notebook <= 9 h, "Submission file will be automatically generated").
+- Best-of vs average of the 2 selected submissions is **NOT stated on any page** (checked all 9: rules, Description, Evaluation, Timeline,
+  data-description, Prizes, Code Requirements, abstract, Upgraded accelerators). What `rules` does say: "b. You may select up to two (2) Final
+  Submissions for judging." (section 2); "A 'Final Submission' is the Submission selected by the user, or automatically selected by Kaggle in
+  the event not selected by the user, that is/are used for final placement on the competition leaderboard." (18.c); "The potential winner(s)
+  are determined solely by the leaderboard ranking on the Private Leaderboard" and the Private Leaderboard is "a ranked display of
+  Participants' Submission scores against the private test set" (7.a, 18.e). "Ranked display of Submission scores" per submission is
+  consistent with Kaggle's usual best-of-selected, but that is Kaggle's convention, not a quoted rule: still an assumption.
+- Monte Carlo (section 16.4): `best2` beats `each2` by 0.02-0.09 P(top 1%) at bar 35 and is never more than 0.02 worse; if public and
+  private correlate (rho >= 0.3) the top public draws of the kernel drawn most beat random draws, and at rho = 0 they cost almost nothing.
+- Expected P(top 1%) for the section-16 schedule at private bar 35: 0.55 / 0.67 / 0.78 at rho 0 / 0.3 / 0.6 (main prior), 0.38 / 0.51 / 0.62 under the
+  skeptical prior. The private bar is 0-2 below the public one (16.3).
+
+Leaderboard 02:33 UTC 2026-10-10 (kaggle-ops status): 4,078 teams; top-1% bar 33.37 (rank 41); we are rank 44 at 33.29; top-5% 31.00 (rank 204); top-10% 29.53 (rank 408); #1 59.17. 57017233 scored 25.21 (COMPLETE by 03:37 UTC); re-read at 03:37 UTC: 4,078 teams, we are rank 45 at 33.29, top-1% bar 33.37 (rank 41), top-5% 31.00, top-10% 29.53.
+Re-read 13:02 UTC 2026-10-10 (kaggle-ops `status-1010c`): 4,095 teams; #1 Yi-Chia Chen 62.96, #2 Tufa Labs 56.52, #3 mtg 44.32; top-1% bar 33.42 (rank 41), top-5% 31.05 (rank 205), top-10% 29.61 (rank 410); we are rank 46 at 33.29 (best draw). Kernels: hic16 (both arms), tail, lossless-tail, level-memory, vllm-s14 COMPLETE v1; `dprime` and `dprime-ff` not pushed (`kernels.get` denied, as expected).
+
+Re-read 00:10 UTC 2026-10-12 (kaggle-ops `daily-1012-s`): 4,176 teams; #1 Yi-Chia Chen 62.96, #2 Tufa Labs 56.52, #3 mtg 45.00 (#4 Majkel1337 42.66, #5 the last dance 42.55); top-1% bar 33.60 (rank 42, Peter Findley), top-5% 31.31 (rank 209), top-10% 29.95 (rank 418); we are **rank 57 at 33.29** (best draw; was rank 46 on 10-10, 33.29 is now 0.31 below the top-1% bar). Submissions: 57029829 COMPLETE 26.59, nothing dated 10-11, nothing PENDING until 57089293 was submitted at 00:13 UTC. Kernels: all tail/hic16/dprime-ff/level-memory/vllm-s14 COMPLETE v1, `arc3-jad-exp081` COMPLETE v2.
+
+Re-read 11:39 UTC 2026-10-12 (kaggle-ops `read-1012-h16`, run 38243454868): 4,201 teams; #1 Yi-Chia Chen 67.49 (unchanged), #2 Tufa Labs 56.52, #3 mtg 45.00, #4 Majkel1337 42.66, #5 the last dance 42.55; top-1% bar 33.66 (rank 43, Shubham Sahu2003), top-5% 31.36 (rank 211, KSSAYUKSS), top-10% 30.03 (rank 421, jiahao xue); we are **rank 60 at 33.29** (was 57 at 06:38; 0.37 below the top-1% bar; 49 submissions). Submissions: 57089293 COMPLETE 20.70 (does not change our best); 57029829 COMPLETE 26.59; nothing PENDING, 1 submission today. Kernels: `arc3-jad-exp081-hic16` v1 and `arc3-mtp-session-a` v1 COMPLETE; `arc3-jad-exp081-ulm` pushed v1 in that run.
+
+Re-read 06:38 UTC 2026-10-12 (kaggle-ops `read-1012-lmu`, run 38213052774): 4,193 teams; **#1 Yi-Chia Chen 67.49** (was 62.96 at 00:10 UTC; last submission 2026-10-11 20:28), #2 Tufa Labs 56.52, #3 mtg 45.00, #4 Majkel1337 42.66, #5 the last dance 42.55; top-1% bar 33.60 (rank 42, Peter Findley, unchanged), top-5% 31.34 (rank 210, Abu Kayyisah Basyid), top-10% 29.98 (rank 420, carbonapi); we are **rank 57 at 33.29** (unchanged; 0.31 below the top-1% bar; 48 submissions). Submissions: 57089293 still PENDING (submitted 00:13 UTC, 1 submission today); 57029829 COMPLETE 26.59. Kernels: `arc3-jad-exp081-lm` v1 and `arc3-jad-exp081-u` v1 COMPLETE; `arc3-jad-exp081-hic16` not yet pushed at that read, pushed v1 at 06:42 UTC (`jadh16-push-1`, run 38213793259) with no GPU kernel running or queued before it.
+
+**Kaggle allows only 1 PENDING submission per team** (400 `FAILED_PRECONDITION`, seen 2026-10-10). A submission lands ~9 h after it is made, so the next one can go only after the previous scores; 57017233 (made 10-09 18:21Z) should score ~03:20Z. Check `status` shows no PENDING before arming a daily draw; a late-evening submission delays the next day's.
+
+Submit as early after 00:00 UTC as possible: only one submission may be pending and scoring takes ~9 h, so a late submission blocks the next day's slot.
+
+Submit requests (one per commit, new `id` every time, bump the draw number `N` in `message`; `version` **2 for C**, **1 for C+U, C+LM, the bundle**, A, B and the incumbent):
+- Arm C (10-12 done; **10-13** after the low draw 1 = 20.70, then 10-19, 10-25): the `jad81-submit-1` example under "Examples for arc3-jad-exp081 (arm C)" below, **`version` 2** (not 1), ids `jad81-submit-N`, message `m2 jad exp081 draw N`.
+- **Arm C+U (10-14 after the low-draw swap, and the bundle's slots until the bundle passes or if it fails): the `jadu-submit-1` example under "Examples for arc3-jad-exp081-u (arm C+U)" below, `kernel` `calamitychasm/arc3-jad-exp081-u`, `version` 1, ids `jadu-submit-N`, message format `m2 jad exp081 u draw N`** (e.g. `m2 jad exp081 u draw 1`); markers include `our harness patches applied successfully: 8`, `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1`; counters `untried_summary.json`, `stale_latch_summary.json` with the `require_zero` in that example.
+- **Bundle C+U+LM (10-15 on, after its check run passes): `jadulm-submit-1`, `kernel` `calamitychasm/arc3-jad-exp081-ulm`, `version` 1, ids `jadulm-submit-N`, message `m2 jad exp081 ulm draw N`.** The exact request is the `jadulm-submit-1` example under "Examples for arc3-jad-exp081-ulm (bundle C+UL)" below: arm C's six markers with `...successfully: 8`, plus `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1` and `LEVEL_MEMORY installed`; counters `level_memory_summary.json`, `untried_summary.json`, `stale_latch_summary.json`; `require_zero` LM `errors`, untried `errors` / `tracker_errors` / `i2_lines`, latch `errors` / `stale_refused_after_released`. Do not submit it before its check run has passed (section 16.8).
+- Arm A (not scheduled; n=1): the `tt-submit-1` example under "Examples for the tail kernels" below (kernel `calamitychasm/arc3-m2-turbo-tail`).
+- Arm B (not scheduled; n=0): the same request with `calamitychasm/arc3-m2-turbo-lossless-tail`, ids `ttl-*`, and no `SPEC_ACCEPT 0.5` marker.
+- Incumbent (not scheduled unless the standing rule fires; no `INPUT_RESOLVED`, no variant counters):
+  ```json
+  {"id": "inc-submit-N", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-level-memory", "version": 1,
+    "message": "m2 level memory draw N",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active", "harness patch applied successfully"],
+    "counters": ["level_memory_summary.json"]}]}
+  ```
+
+### Standing rule for any rebuilt kernel version (2026-10-10)
+
+From the boot-time / slow-storage audit (`experiments/stage7_m2_speed.md`, section "Boot-time / slow-storage robustness audit (2026-10-10)"):
+
+1. Set `ARC3_HTTP_RETRY_INITIAL_SECONDS` to **2400** (was 900) in cell 5. With 900, a server that becomes ready after ~32 min
+   permanently loses the 10-14 gate-slot games (about -3 to -4 pts); the grace covers only each agent's first request, so it
+   costs nothing when boot is normal. Kaggle slow-storage sessions (JustAdev742 lesson 0038) reach ~27-29 min boots.
+2. Add `DEADLINE at`, `READY after` and `analyzer failed` to every check run's `kernel_output` grep.
+3. Do NOT push a new version of a kernel that a scheduled submit request pins to `version` 1 (the submit op refuses when the
+   latest version differs). The change rides only on new kernels, or on a deliberate re-versioning with the schedule's submit
+   requests updated to match.
+
+### Leaderboard snapshot (2026-10-02, updated 2026-10-08) and calibration
+
+**2026-10-09 ~18:20 UTC, VERIFIED via the Kaggle API (supersedes the unverified 10-08 figures below):**
+4,057 teams; #1 Yi-Chia Chen **59.17**, #2 Tufa Labs **56.52**, #3 mtg 44.32. Bars: **top 1% = rank 41 at
+33.37**, top 5% = rank 203 at 30.91, top 10% = rank 406 at 29.41. **Our team is rank 44 at 33.29** (best
+draw), i.e. **0.08 below the top-1% bar**. The board ranks each team's best public score, while the final
+private ranking uses the 2 selected submissions (our mean is ~30.5), so rank 44 flatters us.
+
+**2026-10-08 (Kaggle leaderboard CSV 16:33 UTC, as reported by JustAdev742's
+`docs/research/beat-tufa/intel-oct8.md`; not verified by us):** #1 Tufa Labs
+**55.89**, #2 Yi-Chia Chen **55.77**, #3 Majkel1337 42.66, #10 37.07 (_hans);
+21 teams >= 34.30, 288 teams >= 30; #25 ~33.8, #100 ~31.8. With ~3,970 teams the
+**top 1% (~rank 36) is ~33**. Our best draw 33.29 now sits at **~rank 25-30**
+(it was rank 10 on 2026-10-03); our mean 30.5 is below the top-300 line.
+
+2026-10-02: #1 **52.51** (Tufa Labs), #49 28.66, #99 27.36, of **3,564 teams**. Our rank
+after 24.99 was 249 (top ~7%); after 33.29 on 2026-10-03, **rank 10**.
+Unverified search-snippet figures, ~2026-10-04..06: #1 Tufa 55.89, #2 48.59,
+#10 36.16, #15 35.44; estimated top-1% bar ~31-34; dfranzen's own kernel best
+34.30. The
+leaderboard is refreshed by other teams' draws daily; re-read it before
+quoting a rank. Public-25 free runs are not a ranking instrument (SE +/-2.46
+on the old stack); hidden-set submissions are, and the noise floor of the
+unmodified notebook is sd 3.93, so **one draw resolves only ~8-point effects;
+a +2.6 change needs ~9 draws per arm.** Prefer changes whose effect can be
+measured without a submission (throughput, startup), and judge prompt/harness
+changes as bundles on mechanism (`experiments/stage7_milestone2_improvements.md`).
+
+### Deadlines
+
+- **Entry / team-merger deadline: 2026-10-26.**
+- **Final submission deadline: 2026-11-02 23:59 UTC.**
+- (All dates also in `rules.md`; all deadlines 11:59 PM UTC.)
+- **Up to 2 final submissions may be selected** for the private-set scoring.
+  Select deliberately: with sd ~2-4 per draw, pick on draw count and mechanism,
+  not on the single highest draw (winner's curse).
+- At 1 submission per UTC day, from 2026-10-09 to 2026-11-02 there are about
+  25 slots left. Do not waste any.
+
+### Built 2026-10-09, awaiting the dev box (in priority order)
+
+**Check runs PASSED 2026-10-09 (read ~21:35 UTC via kaggle-ops request `tail-eval-1009b`, workflow run 37994047836):**
+both `arc3-m2-turbo-tail` v1 and `arc3-m2-turbo-lossless-tail` v1 pass; both GPU slots are free. Both: all markers present,
+0 tracebacks, 25/25 `gave_up` (time-boxed), 2 retractions, 0 repeated assistant turns, history_cache zero-counters all 0,
+timeout_fix / level_memory errors 0. One public-25 run cannot rank candidates; the per-game figures (REAP-448 reportedly
+cost vc33 / tn36 / tr87 in JustAdev742's notes) are only in the artifact and were not checked.
+
+| kernel | gen tok/s (target) | tokens/request | public-25 | other |
+|---|---|---|---|---|
+| `arc3-m2-turbo-tail` (A) | **772.4** (+34% vs 577.8; target 664.5) | 1779 (+3.6% vs 1718) | 31 levels, mean_score 6.62 | `SPEC_ACCEPT 0.5`, `REAP448 applied kept=448`, `PRIORITY_TAIL installed`, `14 concurrent streams` present; payload_delta 1005 vs payload_full 738 (only ~1.4x, so "delta >> full" is weakly met); KV peak 0.93, accept median 3.02, prefix cache 92.6% |
+| `arc3-m2-turbo-lossless-tail` (B) | **657.4** (+13.8%; target 640, thin margin) | 1579 (-8.1%, inside +-10%) | 36 levels, mean_score 8.17 | payload_delta 996 vs payload_full 714; KV peak 0.92, accept median 2.66 |
+
+Next: submit per "Submission schedule (from 2026-10-10)" below. Submission 57017233 (draw 5, incumbent) scored 25.21; 57029829 (arm A draw 1) scored 26.59.
+
+All committed on this branch, never run on Kaggle (this cloud box cannot reach it). Slugs are
+`calamitychasm/...`; notebook dir is `kaggle_submission_<slug with - -> _>/notebook/`; every variant is
+the incumbent plus the stated change only. Pass/kill criteria are in the linked md (check run = 25 or 10
+public games x 25 min, gated by `kaggle_submit_when_ready.py`); status of all: **built, never run**.
+
+| kernel | notebook dir | change vs incumbent | evidence / expected effect | check-run pass / kill (detail) |
+|---|---|---|---|---|
+| `arc3-m2-turbo-tail` | `kaggle_submission_m2_turbo_tail` | **check run PASSED 2026-10-09 (772.4 tok/s, +34%; public-25 31 levels / 6.62)**; **primary challenger (arm A)**: turbo + **priority-gate fix** (`ARC3_PRIORITY_HUMAN_ACTIONS=60` + last-level future bonus 0 -> 5, set at runtime in an install cell; marker `PRIORITY_TAIL installed`) | simulated +0.4..+3.9% RHAE, median ~+2.2% (~+0.7 LB pts), **zero throughput cost** (`experiments/stage7_milestone2_improvements.md` section 4, `scripts/sim_m2_priority_gate.py`); turbo evidence as the turbo row | turbo's criteria plus `PRIORITY_TAIL installed` (builder `kernel_markers()` output) |
+| `arc3-m2-turbo-lossless-tail` | `kaggle_submission_m2_turbo_lossless_tail` | **check run PASSED 2026-10-09 (657.4 tok/s, +13.8%; public-25 36 levels / 8.17)**; **hedge (arm B)**: turbo-lossless + the same priority-gate fix | as above on the lossless turbo base | turbo-lossless's criteria plus `PRIORITY_TAIL installed` |
+| `arc3-m2-turbo-lossless-tail-audit` | `kaggle_submission_m2_turbo_lossless_tail_audit` | turbo-lossless-tail + **lordhansolo's strategy-audit prompt** (`--strategy-audit`; verbatim text, 3 harness references reworded; appended to the turn opener once a game has generated 56K tokens on one level since its start / the last audit); marker `STRATEGY_AUDIT installed`, counters `strategy_audit_summary.json` | weak: a component of lordhansolo's M2 notebook (LB 23.84, n=1, never ablated); hidden-set counter-evidence that added advice text hurt at 37K context (rellik13); **status: built, never run; not scheduled for slots** (`stage7_milestone2_improvements.md` section 5) | turbo-lossless-tail's criteria + `STRATEGY_AUDIT installed`, `errors` 0, `audits_confirmed` >= 1, `voluntary_resets_after_audit` <= confirmed/4, tok/s within -5% of B's 657.4, tokens/request within +-10% of B's 1579 (section 5.3) **Check run done 2026-10-09: 663.4 tok/s, 1547 tok/req, 39 levels / 9.25 public-25, 0 errors, but only 1 audit fired in 25 games (threshold 56K tokens), 0 audited levels cleared; not scheduled.** |
+| `arc3-m2-turbo-lossless-tail-re-medium` | `kaggle_submission_m2_turbo_lossless_tail_re_medium` | **built, never run**: arm B + **reasoning effort "medium" on every request** (`--reasoning-effort medium`; wraps `ToolAgent._harness_template_kwargs` at runtime so `chat_template_kwargs` carry `reasoning_effort: medium` instead of the served template's default xhigh, whose system-prompt line says "think carefully ... consider plausible alternatives"); markers `REASONING_EFFORT medium installed`, `REASONING_EFFORT_TEMPLATE supports=True` (renders the served template), `REASONING_EFFORT_SERVER received=True` (live-server probe: prompt shorter with the kwarg); counters `reasoning_effort_summary.json`; `kernel_output`'s request_log digest now reports `reasoning_effort_sent`, `completion_tokens_p90`, `completion_token_share_long` | juliancamilovilla on Franzen's stack at ~25 slot-min/game, n=1 per arm: hard-15 levels 17 -> 32 (9 up, 1 down), easy-10 47.5 -> 41; p90 completion 5.4k -> 3.4k. Against: JustAdev742's exp-037 null at full length (older harness). Their full-length test exp-082 (our serving stack) pending 2026-10-10. Not in the explore schedule (`stage7_milestone2_improvements.md` section 6) | B's markers + the 3 above; summary `errors` 0, `set` == `calls`; every logged response `medium`; tokens/request <= 1500 (B 1579; expect ~-25%), tok/s >= 624.5; outcome: advance if levels >= 42 and hard-15 >= B's + 6 and mean_score >= 8.17, kill if levels <= 33 or hard-15 not above B's or exp-082 hard-15 <= 50, else repeat (section 6.3) **Check run done 2026-10-10 (run 38027035237): KILL** (hard-15 14 not above B's 15; 34 levels; mean_score 7.23). Mechanism OK (all 3 REASONING_EFFORT markers, server delta 38 tokens, `set`==`calls`==2356, errors 0, every request `medium`, 0 tracebacks, 25/25 gave_up) but the effect is small: **tokens/request 1469 (-7%, B 1579; expected -25%)**, p90 3500, long-share 0.112; **624.49 gen tok/s (0.01 under the 624.5 bar, B 657.4)**; hard-15 14 / easy-10 20 (B 15 / 21); tr87 0, tn36 2, vc33 3. Not scheduled. exp-082 hard-15 29 (<= 50): line closed. |
+| `arc3-m2-turbo-tail-hic16` | `kaggle_submission_m2_turbo_tail_hic16` | **built, never run**: turbo-tail (arm A) + **32 GB system-RAM KV tier** (`--enable-hierarchical-cache --hicache-size 32`, write_through, kernel io; the spd *hic flags) + **16 streams** (Mamba cache 96); builder `--turbo --prio-tail --hicache-gb` (default 32 GB / 16 streams, cap 40 GB); markers `HICACHE_TIER attached hicache_attached=True` (from SGLang's own serve.log line, checked after boot and again post-run) and `STREAMS max_running_requests=16 cuda_graph_bs=` | FP4 KV is not possible here (QSA has no FP4 read path, `stage7_m2_speed.md` "FP4 KV cache on this stack"), so the tier is the route to more streams: turbo-tail's KV peak 0.93 of 1.48M at 14 streams = ~98K tokens/stream, so 16 streams need ~1.57M (6% over the device pool) and the tier adds ~1.75M host tokens; sirikilohit ran 16 streams + a 48 GB tier on this fork. **Host tier never run on our stack** (incl. `m96s12hic`) | gen tok/s **>= 834.2** (+8% over turbo-tail's 772.4), kill < 772.4; `hicache_attached=True`; `MemAvailable` >= 10 GiB in every `[sys]` census line; retractions <= 2x turbo-tail's; tokens/request within +-10% of 1779; 0 repeated assistant turns; turbo-tail's other guards (`stage7_m2_speed.md`, "Turbo-tail-hic16") **Check run done 2026-10-09 (read 2026-10-10): near-pass (831.6 vs 834.2 bar), not a KILL.** 831.6 gen tok/s (+7.7% vs 772.4; 2.6 short of the 834.2 bar), `hicache_attached=True` (post-run), 16 streams, retracts 2, KV peak 0.99 (pool 1,427,968), accept median 3.06, tokens/request 1736 (-2.4%), 0 repeated turns, 0 tracebacks, 25/25 gave_up, no `Not enough host memory`, histcache/timeout_fix/level_memory counters clean; 43 levels, mean_score 12.83 (public-25; turbo-tail 31 / 6.62). RAM census (read 2026-10-10): 15 `[sys] RAM` lines, MemAvailable min 29.9 GiB / median 32.1 / last 31.4 of 176.9 (passes the >= 10 GiB criterion). The 13 `OOM` hits in serve.log are all SGLang's advisory "Triton kernel ... device-loaded after serving started (free device mem: 0.84-0.96 GiB). Pre-load it during engine init to avoid CUDA OOM" (benign: no allocation failure, no OOM retraction, no kill); the one `retract` hit is a `server_args` echo. Note the thin device headroom (0.84 GiB free at lazy kernel load). **Verdict: near-pass, not adopted under the pre-registered rule; candidate to replace arm A only if arm A's hidden draws hold up and a second check run confirms >= +8%.** |
+| `arc3-m2-turbo-lossless-tail-hic16` | `kaggle_submission_m2_turbo_lossless_tail_hic16` | **built 2026-10-10, check run pushed (kaggle-ops `ttlh16-push-1`)**: arm B (turbo-lossless-tail) + the same **32 GB system-RAM KV tier + 16 streams** (Mamba 96) as turbo-tail-hic16; builder `--turbo-lossless --prio-tail --hicache-gb`; differs from arm B only in the streams/tier lines (setup cell, launcher, header, run-cell counter dump) and from turbo-tail-hic16 only by the missing lossy acceptance (`SPEC_ACCEPT_*` stay 1.0, no `SPEC_ACCEPT 0.5` marker); markers as turbo-tail-hic16 minus `SPEC_ACCEPT 0.5` | on arm A the same change measured 831.6 vs 772.4 gen tok/s (+7.7%), KV peak 0.99, MemAvailable min 29.9 GiB, 2 retractions, tokens/request -2.4%; B is the preferred arm (JustAdev742 hidden draw 27.97). Expected ~+7-8% generated tokens on B; the score effect is not measurable by draws, so adoption rides on throughput (`experiments/stage7_milestone2_improvements.md` section 7.4) | **pass**: gen tok/s >= **710** (+8% over B's 657.4), `hicache_attached=True`, 16 streams, `MemAvailable` >= 10 GiB in every `[sys]` census line, retractions <= 4, tokens/request 1421-1737 (B 1579 +-10%), 0 repeated assistant turns, 25/25 gave_up, 0 tracebacks, histcache / timeout_fix / level_memory counters clean. **Kill**: < 657.4 tok/s, tier not attached, a host-memory error (`Not enough host memory`), or levels <= 29 / hard-15 <= 9 (B 36 / 15). 657.4-710: near-pass, rerun once before any adoption. Not scheduled for slots until it passes. **Check run done 2026-10-10 (read 12:34 UTC, kaggle-ops run 38052339085): NEAR-PASS, rerun once before any adoption (not a KILL).** 667.97 gen tok/s (+1.6% vs B's 657.4; 42 short of the 710 bar; far below the +7.7% arm A gained from the same tier), `hicache_attached=True` (post-run; the after-boot check logged `HICACHE_TIER NOT CONFIRMED: no hicache_attached line in serve.log`), 16 streams (`running_med` 16), retracts 2 (<= 4), KV peak 0.99 (pool 1,427,968), accept median 2.62, prefix cache 92.6%, tokens/request 1769.6 (window 1421-1737: +2% over the top, B 1579 +12%), p90 3967, 0 repeated assistant turns, 0 tracebacks, 25/25 gave_up, no `Not enough host memory`, all markers present (`READY after` and `analyzer failed` absent), histcache/timeout_fix/level_memory counters clean (errors 0; histcache write_fallbacks / payload_plain / view_misses / loads_stale 0). RAM census: 15 `[sys] RAM` lines, MemAvailable min 29.5 GiB / median 33.5 / last 31.2 of 176.9. 13 `oom` hits in serve.log (same advisory Triton lazy-load pattern as turbo-tail-hic16, `killed` 0). `DEADLINE at 721s` printed once. **31 levels, mean_score 6.88 (B 36 / 8.17; kill line levels <= 29 / hard-15 <= 9 not hit): hard-15 10 (B 15), easy-10 21 (B 21); vc33 3, tn36 1, tr87 0.** Verdict: tier works mechanically (RAM headroom fine) but yields no measurable throughput gain on B; the lower levels are public-25 noise (SE +-2.46) and tokens/request is just over the window. Do not adopt on this run; a second check run would be needed to confirm >= 710, otherwise keep arm B as is. Not scheduled for slots. **Decision 2026-10-10: not rerun, dropped — +1.6% over B is far below the 710 bar and a rerun cannot plausibly close a 6% gap; levels 31 / hard-15 10 also below B.** |
+| `arc3-m2-turbo-lossless-dprime` | `kaggle_submission_m2_turbo_lossless_dprime` | **built 2026-10-10, never pushed**: arm B's stack (turbo-lossless + level memory + histcache + timeout fix) with **D′** (shiiin9 / AFF AI CLUB's slot priority, module verbatim, Apache-2.0; `kaggle_submission_milestone2_fork/dprime/`) **in place of** PRIORITY_TAIL: priority A·M·C + B·φ (B 16/14/10/0, pace M from mean tokens per cleared level, fade over the last 40%), never-started games priced by the formula instead of queued first; only addition a call/error counter (`dprime_summary.json`); boot grace `ARC3_HTTP_RETRY_INITIAL_SECONDS` 2400; builder `--turbo-lossless --dprime`; marker `PRIORITY_DPRIME installed` | hidden: D′ unchanged 31.54 (author, published because of it) and 28.87 (JustAdev742, unselected) vs same-period Franzen copies n=8 mean 25.87: +4.3, p ~0.08 (σ 3.93); without the 31.54: +3.0, z 0.7. Replay: D′ ≥ our tail fix in all 10 worlds (+0.0..+2.1 LB), +0.2..+3.1 over upstream, same at 14 × 47 tok/s; tail tweaks on top add ~0; D′ never starts 2-9 of 110 games in token-scarce worlds (fresh-first D′ keeps ~90% of the gain, the hedge). Proposed: take **arm A's** remaining explore slots after the check run passes (`stage7_milestone2_improvements.md` section 8) | **pass**: all of B's markers minus `PRIORITY_TAIL installed` plus `PRIORITY_DPRIME installed`; `dprime_summary.json` errors 0, calls > 0, `fresh_replaced` == 25; 0 tracebacks; histcache/timeout_fix/level_memory clean; gen tok/s >= 624.5 (−5% of 657.4); retractions <= 4; tokens/request 1421-1737; games with 0 actions <= 8 (sim expects ~5-6 at 25 games × 25 min × 14 slots; each must be a never-admitted game, no error). **Kill**: > 11 games with 0 actions, a dead game thread, D′ errors > 0, tok/s < 624.5, or levels <= 26 / hard-15 <= 8 (catastrophe only; public-25 is not comparable to B because D′ starves waiting games in the short check run). Also grep `DEADLINE at`, `READY after`, `analyzer failed`. |
+| `arc3-m2-turbo-lossless-dprime-ff` | `kaggle_submission_m2_turbo_lossless_dprime_ff` | **built 2026-10-10, not pushed; hedge for the dprime check run's starvation criterion**: the dprime kernel plus a wrapper of `_PriorityGate.acquire` that queues never-started games in upstream's band (above every priced game, dispatch order) so none is starved; D′ module installed verbatim (sha256 pin unchanged), formula untouched; builder `--turbo-lossless --dprime-fresh-first`; markers dprime's plus `DPRIME_FRESH_FIRST installed`; `dprime_summary.json` gains `fresh_first_admissions` | replay (`stage7_milestone2_improvements.md` section 8.7): 0 starved in every world (D′ up to 8.4 of 110; 6.0 of 25 at check shape, ff 0.05); ff − D′ median −0.04 LB, worst −0.38 (siggame0.3, 14 slots), keeps 85-100% of D′'s gain, +0.3..+1.9 over the tail fix where D′ beats it | same as the dprime row but **0 games with 0 actions** (any such game is a wrapper defect) and `fresh_first_admissions` == 25 / `fresh_replaced` == 0 in place of `fresh_replaced` == 25. Push only if the dprime check run trips its starvation line (> 8 games with 0 actions), via `push_kernel` dir `kaggle_submission_m2_turbo_lossless_dprime_ff/notebook` (ids `tldff-*`; kernel/markers/grep as the `tld-*` examples with this slug and `DPRIME_FRESH_FIRST installed` added). **Check run done 2026-10-10 (read 17:32 UTC, kaggle-ops `tldff-out-1`, run 38072065034): KILL on the registered line (not a catastrophe in the mechanism).** All markers present incl. `DPRIME_FRESH_FIRST installed floor 1000000`, `PRIORITY_DPRIME installed`, `#OURS_FORM ok version=d_prime`, `INPUT_RESOLVED` x3 (+ `INPUT_MISSING` / `READY after` / `analyzer failed` absent), `DEADLINE at 722s` printed once, 0 tracebacks, 25/25 gave_up, D' `errors` 0, `fresh_first_admissions` 25 / `fresh_replaced` 0, histcache / timeout_fix / level_memory counters clean (errors 0; write_fallbacks / payload_plain / view_misses / loads_stale 0), retracts 2 (<= 4), tokens/request 1668.6 (window 1421-1737 ok), 0 repeated assistant turns, accept median 2.65, KV peak 0.86, MemAvailable min 64.7 GiB, oom/killed 0. **Kill lines hit: gen tok/s 446.3 (bar >= 624.5; B 657.4; decode_med 833 but 17% of samples at running 1-3 in the tail) and levels 24 (<= 26; mean_score 5.46, B 36 / 8.17).** hard-15 9 (kill <= 8, not hit; B 15), easy-10 15 (B 21); vc33 3, tn36 1, tr87 0. **Caveat: `dprime_summary.json` `calls` = 0** -- D' pricing was never invoked in this 25 x 25 min shape (every game was admitted by the fresh-first wrapper), so this run tests only the wrapper's startup, not the D' formula, and levels are comparable to B only as a catastrophe check. 'Games with 0 actions' is not in the digest (only levels per game) and was not measured. Not scheduled; the throughput miss would need a rerun to separate from check-run noise before dropping the D' line entirely. |
+| `arc3-jad-exp081` | `kaggle_submission_jad_exp081` | **arm C, built 2026-10-10**: a **verbatim fork of JustAdev742's exp-081** (`scottmahony/arc3-dprime-r14a05-harness4-percept-full`), made by THEIR builder vendored unmodified (`kaggle_submission_jad_exp081/vendor/`, repo @ `c7a462b`, Apache-2.0; wrapper `scripts/_build_jad_exp081_kernel.py`) with exp-081's flags: D′ base + REAP-448 + 14 streams / Mamba 84 + MTP acceptance 0.5/0.5 + ARC FR-Spec map + source patches ours-01 (sandbox timeout) / 02 budget meter / 04 search helper / 03b win ledger / 05 level scratch mem / 08b perception, RESET not exposed. Deviations: kernel id, `ARC3_HTTP_RETRY_INITIAL_SECONDS` 2400 (theirs 900), Save & Run fail-fast limit 55 min (their c7a462b builder; exp-081 was built with 35), a fork note in markdown cell 0; rebuilt against their 2026-10-09 builder the diff is exactly those 3 cells. Inputs: the same public dfranzen datasets/models as our arms, no kernel sources (exp-084's private draft not used). Mount layouts: their `--input-fallback` covers datasets/competition only; the two `/kaggle/input/models/...` paths have no fallback (risk, as for every Franzen-family notebook incl. our incumbent). No level memory / history cache / tail; prints no `INPUT_RESOLVED` | their hidden draw 34.04 (n=1; vs same-serving draws without the bundle 27.97 / 26.59, ~+6, ~1.1 sd); full-length public-25 50.00 / 113 levels, 803 output tok/s, accept 3.14 (`stage7_milestone2_improvements.md` section 9) | **check-run shape: all 25 public games x 121 min/game** (`--full25 121`, ~2.3 GPU-h; their full-length shape, NOT our 25 x 25 min), so the score/levels lines below assume it. **Pass**: notebook markers `harness patch applied successfully`, `our harness patches applied successfully: 6`, `#OURS_FORM ok version=d_prime`, `priority gate active: 14 concurrent streams`, `48 layers x 448 experts, router sha256 for every layer` (REAP; serve.log should also show `ARC3 REAP: kept 448 of 512 ... router sha256 verified`), `ours: FR-Spec map hot_tokens_64k_arc.pt written`; 0 tracebacks outside teardown, every game terminal; `[view] scrolled` in bp35 and lf52; `view_offset` or `logical_grid()` used >= 1; output tok/s >= 763, accept 3.0-3.3, repeated assistant turns <= 1, retractions <= 4; score >= 39.7 and levels >= 95. **Kill**: any patch-apply / REAP / FR-map assert, a traceback from an `ours_*` module, tok/s < 723, > 2 repeated turns, score < 35 or levels < 90. Near-pass (tok/s 723-763 or levels 90-95): rerun once. If it passes, C takes arm A's remaining explore slots (10-12, 10-14, 10-16); B keeps its slots (section 9.4) **Check run done 2026-10-10 (read 17:35 UTC, kaggle-ops `jad81-out-1`, run 38072197706; full-length shape 25 x 121 min, 2h 01m 47s): NEAR-PASS, rerun once (per the 723-763 tok/s band).** Passes: markers `harness patch applied successfully`, `our harness patches applied successfully: 6`, `#OURS_FORM ok version=d_prime` (`#OURS_FRESH replaced=25`), `priority gate active: 14 concurrent streams`, `48 layers x 448 experts, router sha256 for every layer`, `ours: FR-Spec map hot_tokens_64k_arc.pt written` (65536 ids), `server watchdog on`, `inputs mounted after 0 s`; 0 tracebacks; no `READY after` / `analyzer failed`; `DEADLINE at 722s` once; every game terminal (18 gave_up, 7 won); accept median 3.14 (3.0-3.3); retracts 2 (<= 4); 0 repeated assistant turns; **107 levels (>= 95), mean_score 49.21 (>= 39.7; their own 50.00 / 113)**; hard-15 44 levels, easy-10 63; vc33 4, tn36 6, tr87 6 (REAP-448 did not cost them here). Not met: **gen tok/s 728.7 (pass >= 763, kill < 723: lands 5.7 above the kill line, in the near-pass band)**; the pooled figure includes the low-concurrency tail (by_running 2-5 streams carry ~1,850 of ~9,870 samples) while decode_med is 946 / p90 1162 and running_med 13, and their 803 tok/s is probably a different accounting, so the shortfall is not cleanly a serving defect. Unmeasured by the digest: `[view] scrolled` in bp35 / lf52 and `view_offset` / `logical_grid()` use (0 grep hits in the notebook log; bp35 2 levels, lf52 1 level; those lines, if any, live in per-game logs the grep did not cover). `ours (--fail-fast): the` absent (conditional on the limit being hit, none hit). 10 `oom` hits in logs (SGLang advisory pattern as in hic16; `killed` 0, not_enough_host_memory 0); tokens/request 2125 (no band in this row); MemAvailable min 59.7 GiB. Not scheduled; arm C's slots stay as in the schedule until a rerun lands. **Rerun pushed 2026-10-10 17:38 UTC as v2 (jad81-push-2); any submit must use version 2.** **v2 check run done 2026-10-12 (read 00:11 UTC, kaggle-ops `daily-1012-s`, run 38186946527; kernel v2 COMPLETE, full-length 25 x 121 min, 2h 01m 44s): PASS, ADOPTED (the registered pass: tok/s >= 763, accept 3.0-3.3, score >= 39.7, levels >= 95 all met).** **789.91 gen tok/s** (v1 728.7; bar 763), accept median 3.12, **111 levels, mean_score 48.03** (v1 107 / 49.21), hard-15 52 levels, easy-10 59 levels, vc33 3 / tn36 1 / tr87 6, 25/25 terminal (19 gave_up, 6 won), 0 tracebacks, 0 repeated assistant turns, retracts 2, KV peak 0.91 (pool 1,477,888), mamba peak 0.67, prefix cache 94.3%, decode_med 920 / p90 1147, running_med 13, 5,570 actions, tokens/request 1989 (p90 4640), 2,952 requests, MemAvailable min 61.6 GiB (62 census lines), oom 6 / killed 0 / not_enough_host_memory 0. All six submit markers present (`harness patch applied successfully`, `our harness patches applied successfully: 6`, `#OURS_FORM ok version=d_prime` with `#OURS_FRESH replaced=25`, `priority gate active: 14 concurrent streams`, REAP `48 layers x 448 experts`, `FR-Spec map hot_tokens_64k_arc.pt written`), plus `server watchdog on` and `inputs mounted after`. Differences from v1's digest: `READY after` is now PRESENT (v1: absent; not a registered kill line, but it is the boot-time marker from the 2026-10-10 audit, so read the boot time in the artifact before assuming it is benign), `DEADLINE at` absent this time (v1 printed it once), `[view] scrolled` and `ours (--fail-fast): the` still unmeasured / not hit. **Submitted 2026-10-12 00:13 UTC as ref 57089293** (kaggle-ops `jad81-submit-1`, run 38187111540, version 2, `VERSION_OK`, gate clean, no force; message `m2 jad exp081 draw 1`). |
+| `arc3-jad-exp081-lm` | `kaggle_submission_jad_exp081_lm` | **arm C+LM, built 2026-10-12, never pushed**: arm C v2's notebook (read, never rewritten; sha-pinned) + our **solved-level memory** install cell (the incumbent's, same generator; inserted before the run cell, after D′) + the `level_memory_summary.json` dump in the run cell; nothing else (six patches, D′, REAP, acceptance 0.5, 14 streams, 2400 s grace, 25 x 121 min Save & Run all byte-identical; metadata differs only in id/title/code_file). Builder `scripts/_build_jad_exp081_lm_kernel.py`, tests `tests/test_jad_exp081_lm.py` | overlap analysis (`stage7_milestone2_improvements.md` section 10.2): ours-05 is per-level scratch emptied at each level change (no overlap); 03b's win ledger re-pins harness facts (counts, winning actions, object changes) but never the model's own conclusion, so our "Rule for level N:" (goal / controls / plan) and clearing-turn reasoning are new information, the facts half is redundant. Compatibility checked on the real exp-081 tree (`tests/jad_lm_probe.py`): wrappers sit on their patched methods, opener carries their win record then our rule request, block at the end of the system prompt + their ledger right after it, LM errors 0. Expected effect below the incumbent's +4.8; public-25 cannot measure it | **shape as arm C: 25 x 121 min, ~2.0-2.3 GPU-h.** **Pass**: arm C's six submit markers + `LEVEL_MEMORY installed`; `level_memory_summary.json` errors 0, `levels_recorded` > 0, `blocks_applied` > 0, `rules_captured` >= 0.5 x `levels_recorded`; 0 tracebacks, 25/25 terminal; gen tok/s >= 750 (C v2 789.9 -5%), accept 3.0-3.3, repeated turns <= 1, retractions <= 4, tokens/request <= 2190 (C v2 1989 +10%); levels >= 103 and score >= 44. **Kill**: tok/s < 723, levels < 95, score < 40, a traceback from `level_memory`, LM errors > 0, `blocks_applied` 0, tokens/request > 2390. Near-pass (tok/s 723-750, levels 95-103, score 40-44): rerun once. **Slots**: a pass only makes it eligible; per section 9.4.4 it is drawn only if C's mean leads at n >= 3, then interleaved with C (section 10.4) **Check run pushed 2026-10-12 00:31 UTC as v1 (jadlm-push-1, kaggle-ops run 38188311619); no GPU kernel was running/queued before it; any submit must use version 1.** **Check run done 2026-10-12 (read 06:38 UTC, kaggle-ops `read-1012-lmu`, run 38213052774; boot lines `read-1012-lmu-ready`, run 38213911803; v1 COMPLETE, 2h 02m 02s): PASS (all registered lines met; the levels line passes by 1).** Markers: all six arm C markers (`our harness patches applied successfully: 6`, `#OURS_FORM ok version=d_prime`, `#OURS_FRESH replaced=25`, 14 streams, REAP 48 x 448, FR-Spec map) + `LEVEL_MEMORY installed` + `LEVEL_MEMORY summary` + `server watchdog on`; 0 tracebacks, 25/25 terminal (17 gave_up, 8 won). `level_memory_summary.json`: levels_recorded 96, **rules_captured 93** (97%; bar >= 48), rules_missing 3, asks 99, **blocks_applied 64**, block_chars_max 8268, **errors 0**. Serving: **773.57 gen tok/s** (bar >= 750; kill < 723; C v2 789.9, -2.1%), accept median 3.14, retracts 2, 0 repeated assistant turns, **tokens/request 2052** (bar <= 2190; C v2 1989, +3.2%), p90 4853, KV peak 0.88, prefix cache 93.9%, decode_med 917 / p90 1140, running_med 13, 5,842 actions, 2,816 requests, MemAvailable min 60.3 GiB, oom 5 / killed 0. Outcome: **104 levels** (bar >= 103, kill < 95; C v2 111), **mean_score 47.21** (bar >= 44; C v2 48.03); hard-15 44 levels / easy-10 60 (C v2 52 / 59); vc33 7, tn36 1, tr87 5. `READY after 526s`, `DEADLINE at` absent, `ours: inputs mounted after 0 s`, `analyzer failed` absent. Reading: mechanism works (rules captured, blocks applied, no errors) and serving cost is small; levels 104 vs C v2 111 is public-25 noise (SE +-2.46 per run), not a harm signal, but the pass has 1 level of margin. Eligible only; slots per section 10.4 (after C's mean leads at n >= 3, interleaved with C). |
+| `arc3-jad-exp081-u` | `kaggle_submission_jad_exp081_u` | **arm C+U, built 2026-10-12, never pushed**: arm C v2's notebook (read, never rewritten; sha-pinned) + **C1** JustAdev742's `ours-10-untried.patch` (vendored verbatim, sha256 `a3a7d89f`, their repo @ `c7a462b` = `ccb7214`, Apache-2.0) with `OURS_UNTRIED=i1` (the I1 "Not yet tried on this level" line only; I2 off) + **C2** our stale-state latch fix (`patches/calamitychasm-stale-latch-fix.patch`: a `StaleStateActionError` refusal releases the per-snippet latch, at most 3 times per snippet; the no-op repeat guards are off in arm C, hence the cap). Both are source patches in the notebook's own apply loop (`our harness patches applied successfully: 8`); one install cell checks them, prints `STALE_LATCH_FIX installed` / `UNTRIED_NOTICE installed mode=i1` and installs count-only wrappers; the run cell writes `untried_summary.json`, `stale_latch_summary.json`, `untried_firings.json`. Everything else byte-identical (D′, REAP, acceptance 0.5, 14 streams, 2400 s grace, 25 x 121 min). Builder `scripts/_build_jad_exp081_u_kernel.py`, tests `tests/test_jad_exp081_u.py` | `stage7_milestone2_improvements.md` sections 11.4 / 12: I1 on this stack (exp-085/085r/086) drew clicks on named objects within 3 actions 21.5% vs 10.1% without it, critical levels 9 of 12 vs 9 of 16; the latch bug is confirmed on the built tree (without the fix a caught refusal leaves every later action refused; with it the next action executes). Expected +1 to +2 levels per run (C1), 0 to +1 (C2); not separable by draws | **shape as arm C: 25 x 121 min.** **Pass**: arm C's markers with `...successfully: 8` + `STALE_LATCH_FIX installed` + `UNTRIED_NOTICE installed mode=i1`; `untried_summary.json` errors 0, tracker_errors 0, i2_lines 0, i1_lines >= 20, **i1 click-within-3 share >= 15%**; `stale_latch_summary.json` errors 0 and **`stale_refused_after_released` 0**; 0 tracebacks, 25/25 terminal; **>= 3 of 4 key levels** (sp80 L2, tn36 L2, vc33 L4, cn04 L2); levels >= 103, score >= 44; gen tok/s >= 750, accept 3.0-3.3, repeated turns <= 1, retractions <= 4. **Kill**: tok/s < 723, levels < 95, score < 40, a traceback from the new code, a missing install marker, `stale_refused_after_released` > 0, or i1_lines 0. Near-pass: rerun once. **Slots**: eligible only; drawn if C's mean holds up and exp-085's hidden draws are not below exp-081's, then interleaved with C (section 12.6) **Check run pushed 2026-10-12 01:44 UTC as v1 (jadu-push-1, kaggle-ops run 38193017466); any submit must use version 1.** **Check run done 2026-10-12 (read 06:38 UTC, kaggle-ops `read-1012-lmu`, run 38213052774; boot lines `read-1012-lmu-ready`, run 38213911803; v1 COMPLETE, 2h 02m 25s): PASS (every registered pass line met; no kill, no near-pass line hit).** Markers: arm C markers with `our harness patches applied successfully: 8`, `#OURS_FORM ok version=d_prime`, `#OURS_FRESH replaced=25`, 14 streams, REAP 48 x 448, FR-Spec map, `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1`, both summary lines present, `C+U summary failed` absent; 0 tracebacks, 25/25 terminal (17 gave_up, 8 won). `untried_summary.json`: **i1_lines 109** (bar >= 20; 101 name objects, 549 named kinds, 23 of 25 games), **i1_clicked_named_within_3 21 -> share 0.193** (bar >= 15%, near-pass band 10-15%; their baseline 10.1%; `i1_used_named_action_within_3` 20), i1_partial_window 8, i1_unmatched 0, **i2_lines 0, errors 0, tracker_errors 0**. `stale_latch_summary.json`: snippets 2,860, action_calls 4,495, **stale_refusals 89** in 64 snippets (max 12 in one snippet), **stale_refused_after_released 0** (kill if > 0), stale_refused_after_cap 10, **executed_after_stale_refusal 19**, releases_per_snippet 3, **errors 0**. Key levels (levels completed per game): **sp80 4, tn36 5, vc33 7, cn04 4 = 4 of 4** (bar >= 3 of 4: >= 2 / 2 / 4 / 2). Transcript check on the four key games (cap 60 lines each): sp80 cleared L1-L4 and ended on L5; tn36 cleared L1-L5, ended on L6; vc33 cleared L1-L6, ended on L7; cn04 cleared L1-L4, ended on L5; the I1 line text ("Not yet tried on this level: ...") is visible in the models' own reasoning in sp80 L2, tn36 L6, vc33 L4/L5 (cn04 quoted none); StaleStateActionError appears in all of sp80 (8 in 4 results), tn36 (4), vc33 (10), cn04 (2). Serving: **773.81 gen tok/s** (bar >= 750; C v2 789.9, -2.0%), accept median 3.13, retracts 2, 0 repeated assistant turns, **tokens/request 2021** (C v2 1989, +1.6%), p90 4863, KV peak 0.93, prefix cache 94.2%, decode_med 928 / p90 1152, running_med 13, 5,712 actions, 2,904 requests, MemAvailable min 58.8 GiB, oom 5 / killed 0. Outcome: **114 levels** (bar >= 103; C v2 111), **mean_score 50.26** (bar >= 44; C v2 48.03); hard-15 51 levels / easy-10 63 (C v2 52 / 59). `READY after 481s`, `DEADLINE at` absent. Reading: all counts and the key-level check pass with margin; levels 114 vs 111 and the key-level gain are one run each and not separable from public-25 noise (SE +-2.46), so this is a no-harm plus mechanism pass, not evidence of a score effect. Eligible only; slots per section 12.6 (C's mean must hold up and exp-085's hidden draws must not be below exp-081's). |
+| `arc3-jad-exp081-hic16` | `kaggle_submission_jad_exp081_hic16` | **arm C+hic16, built 2026-10-12, never pushed**: arm C v2's notebook (read, never rewritten; sha-pinned) + the **32 GB system-RAM KV tier** (`--enable-hierarchical-cache --hicache-size 32`, write_through, kernel io: the hic16 kernels' `hicache_line`) + **16 streams** (`ARC3_MAX_ACTIVE_STREAMS` 16, the harness's only stream knob, which D′ never touches; `MAXREQ` / `CUDAGRAPH_MAXBS` 16; `MAMBA_CACHE` 96 = arm C's 6 per stream); the hic16 kernels' `STREAMS ...` / `HICACHE requested` prints and their serve.log `HICACHE_TIER` check after boot and again after `bm.run`; arm C's own `[sys] RAM` census reused. Everything else byte-identical (cell 0, D′, REAP, acceptance 0.5, ARC map, six patches, 2400 s grace, 25 x 121 min). Builder `scripts/_build_jad_exp081_hic16_kernel.py`, tests `tests/test_jad_exp081_hic16.py` | `stage7_milestone2_improvements.md` section 14: section 13 found throughput the only lever positive in every world (+5% tokens = +0.2..+1.5 pts); C's serving is arm A's, where the same tier + 16 streams measured +7.7% (831.6 vs 772.4); arm B's +1.6% run had a late boot (`DEADLINE at 721s`), which the 25-min shape charges ~4%/min and the 121-min shape ~0.8%/min. Expected ~851 tok/s if C gains as A did | **shape as arm C: 25 x 121 min.** **Pass**: gen tok/s >= 845 (+7% over C v2's 789.9); `hicache_attached=True` (post-run line counts); 16 streams (`priority gate active: 16 concurrent streams`, `STREAMS max_running_requests=16`); MemAvailable >= 10 GiB in every `[sys] RAM` line; retractions <= 4; accept 3.0-3.3; tokens/request 1790-2188 (1989 +-10%); 0 tracebacks; 25/25 terminal; levels >= 103; score >= 44. **Kill**: tok/s < 790, tier not attached, `Not enough host memory`, levels < 95, or score < 40. **Near-pass** 790-845: rerun once. Also read `DEADLINE at` / `READY after` and `by_running`. **Slots**: eligible only; may take over arm C's remaining slots under the same-mechanism-faster rule, decided at the 10-18 exploit decision (section 14.4) **Check run pushed 2026-10-12 06:42 UTC as v1 (kaggle-ops `jadh16-push-1`, run 38213793259; no GPU kernel was running/queued before it; `PUSHED`, version 1); first-ever push of this slug, so no earlier version exists. Any submit must use version 1.** **Check run done 2026-10-12 (read 11:39 UTC, kaggle-ops `read-1012-h16`, run 38243454868; v1 COMPLETE, 2h 01m 39s): NEAR-PASS (790-845 band), rerun once before any adoption; not a KILL.** **803.82 gen tok/s** (+1.8% vs C v2's 789.9; bar >= 845, kill < 790), `HICACHE_TIER attached hicache_attached=True` both after boot and post-run, 16 streams (`priority gate active: 16 concurrent streams`, `STREAMS max_running_requests=16`), `running_med` 15, decode_med 965 / p90 1218, `READY after 532s`, `DEADLINE at` absent, by_running (tok/s per running count): 16 -> 1006, 14-15 -> ~1000, 10-12 -> 880-950, 1-5 -> 204-570. Other lines all met: `[sys] RAM` 61 lines, MemAvailable min 27.5 GiB / median 29.0 / last 28.7 of 176.9 (>= 10), no `Not enough host memory`, oom 10 (advisory pattern) / killed 0, retracts 2 (<= 4), accept median 3.13, KV peak 0.99 (pool 1,427,968), mamba peak 0.67, prefix cache 94.1%, tokens/request 2026.9 (window 1790-2188; p90 4845), 0 repeated assistant turns, 0 tracebacks, 25/25 terminal (19 gave_up, 6 won), 3008 requests, 5594 actions, **114 levels** (bar >= 103; C v2 111), **mean_score 50.27** (bar >= 44; C v2 48.03), hard-15 53 levels / easy-10 61, vc33 3, tn36 1, tr87 5. Reading: the tier works and is safe on RAM, quality is unharmed, but the throughput gain over C v2 is +1.8%, 41 tok/s short of the pass bar, as arm B found (+1.6%). Eligible only as a serving swap by 10-24 (rule 3), and only after a rerun that reaches >= 845 plus the swap check on the bundle; no slots. |
+| `arc3-jad-exp081-ulm` | `kaggle_submission_jad_exp081_ulm` | **bundle C+UL (C+U+LM), built 2026-10-12, never pushed**: arm C v2's notebook (read, never rewritten; sha-pinned) + exactly the union of C+U's cells (ours-10 with `OURS_UNTRIED=i1`, the stale-latch fix, the 8-patch apply loop `...successfully: 8`, the C+U install cell, the C+U counter dump) and C+LM's cells (the level-memory install cell, the `level_memory_summary.json` dump); every added cell byte-identical to the variant notebook's. Install cells before the run cell: D′, C+U, LM. Composed by `scripts/_build_jad_exp081_ulm_kernel.py` (imports the C+U builder, then applies C+LM's edits from the same generator); the -u / -lm notebooks are untouched. Everything else byte-identical (cell 0, D′, REAP, acceptance 0.5, 14 streams, 2400 s grace, 25 x 121 min); 855,694 bytes. Tests `tests/test_jad_exp081_ulm.py`, interaction probe `tests/jad_ulm_probe.py` (real 8-patch tree, both install cells verbatim): **no interaction found**: wrappers disjoint (LM: `_build_user_prompt` / `_trim_messages_for_context` / `_ensure_session`; counters: `_run_python_tool`, `prompt_lines`, `stamp`); opener = 03b win record, tool line, LM rule request last; a stalled prompt = I1, tool line (+ LM's 2nd request last if the rule is still missing); after trims: system + LM block, 03b ledger at index 1, idempotent; I1 renders after the trims; latch `LOOP 4 6`; LM/untried/latch errors 0, `i1_unmatched` 0 | `stage7_milestone2_improvements.md` sections 16.5 / 16.8: neither part's effect is separable by draws; both passed their own check runs; the MC schedule (16.7) gives the bundle ~16-17 slots from 10-15 | **shape as arm C: 25 x 121 min, ~2.3 GPU-h.** **Pass** (union of 10.4 and 12.5): arm C's six markers with `...successfully: 8` + `STALE_LATCH_FIX installed` + `UNTRIED_NOTICE installed mode=i1` + `LEVEL_MEMORY installed`; LM errors 0, `levels_recorded` > 0, `blocks_applied` > 0, `rules_captured` >= 0.5 x `levels_recorded`; untried errors / tracker_errors / i2_lines 0, i1_lines >= 20, **i1 click-within-3 >= 15%**; **`stale_refused_after_released` 0**, latch errors 0; 0 tracebacks, 25/25 terminal; **gen tok/s >= 750**, accept 3.0-3.3, repeated turns <= 1, retractions <= 4, **tokens/request <= 2190**; **>= 3 of 4 key levels** (sp80 L2, tn36 L2, vc33 L4, cn04 L2); **levels >= 103, score >= 44**. **Kill**: tok/s < 723, levels < 95, score < 40, tokens/request > 2390, LM errors > 0, `blocks_applied` 0, i1_lines 0, `stale_refused_after_released` > 0, a missing install marker, or a traceback from `level_memory` / `ours_untried` / `cu_counters` / the install cells / the patched refusal lines. **Near-pass** (tok/s 723-750, levels 95-103, score 40-44, click share 10-15%, 2 of 4 key levels): rerun once; C+U v1 takes the bundle's slots until a run passes (section 16.8). Submit only a version whose check run passed (`jadulm-submit-N`, version 1) **Check run pushed 2026-10-12 ~11:39 UTC as v1 (kaggle-ops `read-1012-h16`, run 38243454868; `PUSHED`, version 1, `busy_before` [] so no GPU kernel was running or queued; first push of this slug). Not yet read: expect ~2h 05m, read with `jadulm-out-1`. Any submit must use version 1 and only after this run passes (section 16.8).** |
+| `arc3-mtp-session-a` | `kaggle_submission_mtp_session` | **MTP-draft session A, lean path L0, built 2026-10-12, never pushed** (not a scored kernel: it trains a draft): JustAdev742's session-A builder, session module, dump patch/driver, trainer and exporter vendored unmodified (`vendor/`, `ccb7214`, Apache-2.0, `SHA256SUMS`), run by our wrapper `scripts/_build_mtp_session_kernel.py`, which overrides at build time (no file edited) the logs input (arm C v2's 25 request logs, kernel source `calamitychasm/arc3-jad-exp081` v2), drops A2-A5 and A10 (probe dump, replica checks: no private inputs left), `session_hours` 4.5; their v1 recipe otherwise (REAP-448 dump server, 11 hold-out games, repeat/loop hygiene, 34 GB dump, 75-min training cap, ARC map, exporter). Four cells of ours: data check (25 names, **response count pinned at 2,952**, stops on another version), A5 stand-in, the 15.6 drafter gate from A9's held-out evaluation, export check (manifest sha256, frozen files identical). Log sizes listed by `mtps-ls-1` (run 38214680909: 25 files, 1,798,106,223 bytes) and pinned in the manifest and the session config (notebook sha256 f11d1ea9...; sha256 of each log recorded in the manifest; 750 tests pass). **Session A pushed 2026-10-12 07:01 UTC as v1 (mtps-push-1, kaggle-ops run 38215406132; the only GPU kernel busy before it was `arc3-jad-exp081-hic16` v1 QUEUED).** Tests `tests/test_mtp_session_lean.py` (their stub bed runs our lean cells) | `stage7_milestone2_improvements.md` section 15: their draft on the identical arm gained accept 3.14 -> 3.33 and +3% run-level output tok/s (exp-084 vs exp-081); hidden evidence null at n=1. Cost: **~1.5 GPU-h nominal, <= 2.5 slow storage, hard cap 4.5 h** | **drafter gate** (`ours (lean): drafter gate`): PASS = realized accept +0.20, greedy +0.20, step-1 KL -40%, top-1 up at all 3 steps, manifest written with frozen files identical; KILL = realized < +0.10; between: no C+D run (full path's probes). Requests `mtps-ls-1` / `mtps-push-1` / `mtps-out-1` in section 15.7. **Push only on spare quota, never ahead of a scheduled check run; do not push a v3 of `arc3-jad-exp081` before it runs; never push a v2 of this kernel once C+D pins it** **Session A done 2026-10-12 (read 11:39 UTC, kaggle-ops `read-1012-h16`, run 38243454868; v1 COMPLETE, started 07:34 UTC, finished 08:29 UTC, 54.6 min, 5.41 GB working): DRAFTER GATE PASS.** `ours (lean): drafter gate PASS: realized +0.2291, greedy +0.2794, step-1 KL drop 55%, top-1 (target, full) delta per step [0.0491, 0.0764, 0.1051]`; held-out accept_realized 2.8939 -> 3.1230, accept_greedy 2.8910 -> 3.1704; step-1 KL 0.4922 -> 0.2227 (step 2 1.109 -> 0.449, step 3 1.709 -> 0.627); data 2952 responses (5,871,402 completion tokens) from 25 logs, train 14 games / 1882 responses, holdout 11 games / 1070; A9 358 of 358 steps in 1782.8 s; 0 tracebacks, no `STOP at` / `WARNING`, oom 2 / killed 0. Export: **manifest sha256 `6f408d58fd813bce415edc55802f174ebac73fef292455ac388104c404dc1d45`** (2998 bytes, equals `json.dumps(obj, indent=1) + "\n"` of the printed `PRINT_FILE_JSON mtp-draft/arc3-draft-manifest.json`), `mtp-dense.safetensors` sha256 `b677e0c4234c6344fe29f147a972b192de241e557e83a12452409da13967a985`, 26 dense tensors replaced, 11 frozen files byte-identical, `frozen_differ` []. Next (section 15.7 step 3): save that printed manifest (job log of run 38243454868, or re-run `mtps-out-1` with `print_files`) as a file, `python scripts/_build_jad_exp081_draft_kernel.py --draft-manifest <file> --expect-sha 6f408d58...1d45`, pin the notebook in `tests/test_jad_exp081_draft.py`, then push `arc3-jad-exp081-draft` into a free GPU slot (not ahead of the bundle check run) and read it against the C+D gate. Do not push a v2 of this kernel. **Step 3 done 2026-10-12 11:55 UTC: C+D built and pushed v1 (`jadd-push-1`, run 38245684435); see the `arc3-jad-exp081-draft` row.** |
+| `arc3-jad-exp081-draft` | `kaggle_submission_jad_exp081_draft` | **arm C+D, built 2026-10-12 from session A v1's real manifest; check run pushed v1 2026-10-12 11:55 UTC (kaggle-ops `jadd-push-1`, run 38245684435; `PUSHED`, version 1; `busy_before` only the bundle `arc3-jad-exp081-ulm` RUNNING). Any submit must use version 1.** Manifest `kaggle_submission_jad_exp081_draft/arc3-draft-manifest.json`: rebuilt byte-exactly from the `PRINT_FILE_JSON mtp-draft/arc3-draft-manifest.json` line of run 38243454868 and cross-checked against the file text printed in the same log (2998 bytes, sha256 `6f408d58...1d45`, names dense `b677e0c4...a985`, 26 dense tensors replaced, 12 files). Built with `scripts/_build_jad_exp081_draft_kernel.py --draft-manifest <that file> --expect-sha 6f408d58...` (their vendored builder + `--draft calamitychasm/arc3-mtp-session-a`; refuses without a real manifest; the apply check against Franzen's repo gives the same bytes); notebook sha256 `0e2a7599...`, metadata `ca4d0266...`, pinned and rebuilt byte-identically in `tests/test_jad_exp081_draft.py` (13 tests; full suite 765 passed). **Diff vs arm C v2: exactly markdown cell 0 and the drafter line of the setup cell (cell index 11)**: the stock-draft `DRAFT_MODEL_DIR` line becomes `_ours_draft_dir([...'/kaggle/input/notebooks/calamitychasm/arc3-mtp-session-a/mtp-draft', '/kaggle/input/arc3-mtp-session-a/mtp-draft'], <manifest sha>, <dense sha>)`: waits up to 600 s for `arc3-draft-manifest.json`, checks the manifest's and `mtp-dense.safetensors`' sha256, prints `ours: MTP draft <path> after N s (manifest 6f408d58fd81, dense b677e0c4234c)`; runs before the 120 s input wait, the precache thread and the draft view. Metadata: id/title/code_file, the albucino drafter model source dropped, `kernel_sources` `[calamitychasm/arc3-mtp-session-a]`; everything else (six patches, D', REAP-448, acceptance 0.5/0.5, 14 streams, 2400 s grace, 25 x 121 min) byte-identical. Mount: session A itself saw its kernel source at `/kaggle/input/notebooks/calamitychasm/arc3-jad-exp081/` (new layout, files at the mount root), so the first candidate is the proven layout; the second is the older `/kaggle/input/<slug>/` layout; there is no glob fallback (a third layout fails after 600 s, loudly). `kernel_sources` cannot pin a version: Kaggle mounts the session's latest version, v1 is the only one, and the sha check stops the notebook if the output changes. **Never push a v2 of `arc3-mtp-session-a`.** Tests `tests/test_jad_exp081_draft.py` | as the row above; adoption rides on throughput only (draws cannot see +3%) | **C+D gate** (section 15.6; shape as arm C, 25 x 121 min, ~2.3 GPU-h): pass = arm C's six submit markers + `ours: MTP draft` with the expected sha prefixes, accept median >= 3.27, gen tok/s >= 805 or decode median >= 948, repeated turns <= 1, loop reports <= 2, tokens/request 1,790-2,190, tracebacks/NameErrors per tool result <= 1.3x arm C v2's, retractions <= 4, levels >= 100, score >= 42; kill = draft mount/sha failure, accept < 3.17, both tok/s < 790 and decode < 920, repeated turns > 2, levels < 95 or score < 40; else rerun once. A pass takes arm C's remaining slots. Read it with `jadd-out-1` (examples below) |
+| `arc3-jad-exp081-ulm-draft` | `kaggle_submission_jad_exp081_ulm_draft` | **serving swap bundle + draft (C+U+LM+D), built 2026-10-12, never pushed; push only after BOTH the bundle and C+D check runs pass (rule 3 above).** The bundle notebook with exactly C+D's edits on top: markdown cell 0 := C+D's; in the setup cell the stock `DRAFT_MODEL_DIR` line := C+D's `# >>> ours (--draft)` block (session A v1's manifest `6f408d58...1d45`, dense `b677e0c4...a985`); metadata := the bundle's with C+D's `model_sources` (albucino drafter dropped) and `kernel_sources` `[calamitychasm/arc3-mtp-session-a]`. Composed by `scripts/_build_jad_exp081_ulm_draft_kernel.py --draft-manifest <file> --expect-sha <sha>` (calls the -ulm builder's `build_notebook()` and the -draft builder's `build()` into a temp dir, checks C+D is exactly that edit vs arm C v2, applies it; same manifest guard as C+D; manifest copied to `kaggle_submission_jad_exp081_ulm_draft/arc3-draft-manifest.json`). 40 cells: 38 byte-identical to the bundle's, cell 0 byte-identical to C+D's, the setup cell = the bundle's with C+D's one-line swap (checked line-wise: bundle setup edits + C+D's block, nothing else); 857,931 bytes, notebook sha256 `e2814c70...`, metadata `1342c86c...`. Tests `tests/test_jad_exp081_ulm_draft.py` (pins, byte-identical rebuild, manifest guard, composition vs arm C / bundle / C+D, metadata, and `tests/jad_ulm_probe.py` gives identical findings on the bundle and on this notebook) | the bundle's (16.5 / 16.8) plus C+D's (15.6): adoption rides on throughput; it pools with the bundle as "same harness, faster serving" and needs n >= 2 of its own before selection | **swap check run** (25 x 121 min, ~2.3 GPU-h). **Pass** = the bundle's pass lines (16.8: its nine markers, LM/untried/latch counters, 0 tracebacks, 25/25 terminal, retractions <= 4, repeated turns <= 1, >= 3 of 4 key levels, levels >= 103, score >= 44) **plus** C+D's serving lines (15.6): `ours: MTP draft` with `(manifest 6f408d58fd81, dense b677e0c4234c)`, **accept median >= 3.27** (replaces the bundle's 3.0-3.3), **gen tok/s >= 805 or decode median >= 948**, loop reports <= 2, tracebacks/NameErrors per tool result <= 1.3x the bundle's, tokens/request <= 2,190. **Kill** = the bundle's kill lines plus draft mount/sha failure, accept < 3.17, both tok/s < 790 and decode < 920, repeated turns > 2. Otherwise rerun once; until it passes the bundle keeps its slots. Submit only that passed version (`jadulmd-submit-N`, version 1) |
+| `arc3-m2-lm-tail` | `kaggle_submission_m2_lm_tail` | incumbent + the same priority-gate fix only (no histcache / serving change) | same simulation; ~100 draws per arm to see on its own, so **no slots of its own**: it exists to isolate the gate fix if a tail bundle misbehaves | `PRIORITY_TAIL installed`, incumbent markers, level_memory errors 0 |
+| `arc3-m2-turbo` | `kaggle_submission_m2_turbo` | histcache + sandbox-timeout fix + **REAP-448** (prune 64/512 experts per layer at load, +7.3 GiB KV) + **MTP acceptance 0.5** (lossy) + ARC FR-Spec map + **14 streams** (Mamba 84, mem 0.96); check run plays all 25 public games x 25 min (rerun unchanged) | JustAdev742 (Apache-2.0), **same stack**, same-conditions gates: 641.9 -> 733.2 (REAP+14) -> **819.3 output tok/s (+28%)**, output length unchanged; public-25 full length 56.00 / 42.89 vs Franzen 45.6-47.5; REAP shifts image-turn logprobs (0.048 vs 0.038 floor); their LB draw 56980485 PENDING at port time | markers incl. `REAP448 applied kept=448`, `SPEC_ACCEPT 0.5`, `ARC_HOTMAP sha=ec15348b...`, `TIMEOUT_FIX installed`, `priority gate active: 14 concurrent streams`; gen tok/s >= 664.5 (+15% vs 577.8; kill < 606.7), retracts <= 2x base, histcache zero-counters, LM/TF errors 0 (`stage7_m2_speed.md`, Turbo) |
+| `arc3-m2-turbo-lossless` | `kaggle_submission_m2_turbo_lossless` | exactly turbo **without** the lossy acceptance: histcache + sandbox-timeout fix + REAP-448 + ARC FR-Spec map + 14 streams; `SPEC_ACCEPT_SINGLE/ACC` stay 1.0 (the cell diff vs turbo is the header blurb and the launcher's acceptance lines only) | JustAdev742 measured REAP-448 + 14 streams alone at 733.2 vs 641.9 output tok/s (**+14%**, 49.45 public-25 full length) on our stack; the only unmeasured risk is REAP on image turns; the fallback if acceptance 0.5 proves lossy | markers as turbo minus `SPEC_ACCEPT 0.5`; gen tok/s **>= 640** (kill < 606.7), output tokens/request within +-10% of base, 0 exact repeated assistant turns, other guards as turbo (`stage7_m2_speed.md`, Turbo-lossless) |
+| `arc3-m2-lm-histcache` | `kaggle_submission_m2_lm_histcache` | history cache (compact state file, cached loads/views, incremental sandbox payloads); **zero behaviour change** | local host overhead per action 2.03 s -> 0.065 s at N=1000 (0.20 -> 0.009 at N=100); modelled +15-25% turns median, range +3..+40% (model, not measured) | `history_cache_summary.json`: errors/write_fallbacks/payload_plain/view_misses/loads_stale all 0, payload_delta >> payload_full; kills <= incumbent (`stage7_m2_level_memory.md`) |
+| `arc3-m2-lm-triedfacts` | `kaggle_submission_m2_lm_triedfacts` | facts-only block about the CURRENT level (actions, game overs, last moves of fatal runs, reasoning tail; <= 3000 B) pinned at history eviction | mechanism only, no score evidence; inspired by lordhansolo's game_overs | `TRIED_FACTS installed`, errors 0, `tried_facts_blocks` > 0, bytes max <= 3000 (`stage7_m2_level_memory.md`) |
+| `arc3-m2-lm-histcache-triedfacts` | `kaggle_submission_m2_lm_histcache_triedfacts` | both of the above | as the two above | both sets of criteria |
+| `arc3-m2-spd-m97s12` | `kaggle_submission_m2_spd_m97s12` | SGLang mem 0.97, 12 streams, Mamba cache 72 | **expected null/worse alone**: 12-stream KV demand is 107-116% of the ~1.03M pool; a control for the hic pair | gen tok/s >= 606.7 (+5% over base 577.8), retracts <= 2x base, no OOM (`stage7_m2_speed.md`, Round 3) |
+| `arc3-m2-spd-m96s12hic` | `kaggle_submission_m2_spd_m96s12hic` | mem 0.96, 12 streams, 32 GB system-RAM KV tier (`--hicache-size 32`) | the real test of whether the host tier makes oversubscription cheap; pool ~0.96M + ~1.7M host tokens | as above plus `hicache_attached=True`, `MemAvailable` >= 10 GiB in every census line |
+| `arc3-m2-spd-m97s12hic` | `kaggle_submission_m2_spd_m97s12hic` | mem 0.97 + 12 streams + host tier | both factors together | as above |
+| `arc3-m2-vllm-s12` | `kaggle_submission_m2_vllm_s12` | lordhansolo's vLLM serving + NVFP4/FP8 model with built-in MTP, 12 streams, context 139,264 | his peak decode 1,135 vs our 946 tok/s, KV ~1.42M vs 1.01M; **model swap, quality unknown, risky**; second-final-selection candidate only; **hard kill date 2026-10-15** | tok/s >= 665 (+15%), prefix hit >= 85%, preemptions <= ~50; any `VLLM_*` failure marker, restart or `identical=False` probe kills (`stage7_m2_speed.md`, vLLM section) |
+| `arc3-m2-vllm-s14` | `kaggle_submission_m2_vllm_s14` | same, 14 streams | as above; peaks (1.79M) can exceed the pool and preempt | as above **Check run done 2026-10-10 (run 38027035237): KILLED by the registered criterion `PREFIX_CACHE_PROBE identical=False under_load=False`** (cold vs warm outputs differ in wording at temp 0, `cached_tokens=[0,7808,7808]`; benign nondeterminism vs cache corruption undecidable here). All else passed: overlay hash OK, ready_after 668 s, 0 restarts/preempts, 0 tracebacks, 25/25 gave_up, IMAGE_TOKENS 402, MULTI_IMAGE ok, REASONING_ECHO rendered, **812.8 gen tok/s (+5.2% vs turbo-tail 772.4)**, prefix hit 92.7%, 1494 tok/req, level_memory errors 0, **42 levels, mean_score 10.62, hard-15 16, easy-10 26**; tokenizer sha != m2 pin. Not scheduled. |
+
+Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-facts]` (also `--turbo` / `--turbo-lossless`, or any subset of
+`--timeout-fix --reap --spec-accept X --arc-hotmap --streams N --check-all25 --hicache-gb [N]`; JustAdev742's files and NOTICE in
+`kaggle_submission_milestone2_fork/turbo/`),
+`scripts/_build_m2_speed_kernels.py m97s12 m96s12hic m97s12hic`, `scripts/_build_m2_vllm_kernel.py`
+(all idempotent; tests pin the committed notebooks). Report: `python scripts/m2_speed_report.py base <names>`.
+
+**GPU quota budget (2026-10-12 12:15 UTC; a tally from this file, NOT a read of the API -- the cloud box cannot reach kaggle.com).**
+Kaggle gives **30 GPU-h per week**; the RTX PRO 6000 kernels draw on it; the window resets **Saturdays 00:00 UTC** (JustAdev742
+`scripts/kaggle_quota.py`, `docs/status.md`; resets seen 09-19, 09-26, 10-03, 10-10). So this week's window is 10-10 00:00 .. **10-17 00:00 UTC**,
+the next one 10-17 .. 10-24 00:00 UTC. Whether OUR account has the same 30 h and the same reset is assumed, not verified.
+
+| since the 10-10 00:00 reset | GPU-h | basis |
+|---|---:|---|
+| `vllm-s14`, `re-medium`, `turbo-lossless-tail-hic16`, `dprime-ff` (4 x 25-game x 25-min check runs) | ~4.0 (3.2-4.8) | **estimate**: ~1 h each, durations not recorded |
+| `arc3-jad-exp081` v1 + v2, `-lm`, `-u`, `-hic16` (25 x 121 min) | 10.2 | recorded: 2h01m47s, 2h01m44s, 2h02m02s, 2h02m25s, 2h01m39s |
+| `arc3-mtp-session-a` v1 (pushed 07:01) | ~1.5 (1.2-2.5) | **estimate** (nominal 1.5, slow-storage cap 2.5), duration not recorded |
+| **completed, total** | **~15.7 (14.6-17.5)** | |
+| in flight: `arc3-jad-exp081-ulm` (pushed 11:39), `arc3-jad-exp081-draft` (pushed 11:55) | ~0.8 so far, ~4.1 when both finish (~13:45-14:10 UTC) | 2 x ~2.05 h expected |
+| **projected used after both finish** | **~19.8 (18.7-21.6)** | |
+| **projected left until the 10-17 reset** | **~10.2 (8.4-11.3)** | |
+
+Not counted (flag): the 10-09 evening pushes (strategy-audit 21:51, turbo-tail-hic16 22:12) should have ended before 00:00 UTC; any push made from the
+dev box outside kaggle-ops is not in the repo; whether time held QUEUED before a session starts counts is unknown (JustAdev742 lost ~5 h that way, effect on
+quota unknown); whether the daily submission reruns count: JustAdev742's `kaggle_quota.py` says a competition rerun does not (their status.md calls it
+UNVERIFIED), and ours submit existing check-run versions, so none is added here. Cross-check: the 11-13 h "used" in section 15.3 matches this tally at ~07:00 UTC.
+
+**Reservation rule (JustAdev742 lesson 0035):** Kaggle refuses a push when used + ~12 h per running session would pass 30 h. At ~19.8 used, ONE session
+is accepted but a second concurrent one is refused, so from this afternoon until the reset the checks below run **one at a time** (~2.1 h each), not in
+parallel. `kaggle_ops.py push_kernel` only checks the 2-session count, so a refused push must be retried, not forced. Avoid pushing Fri 10-16 evening
+to Sat 10-17 ~03:00 UTC (slow storage and a saturated pool after the reset, lessons 0031 / 0038).
+
+**Planned GPU needs through 10-24** (each full-length check ~2.3 h with margin):
+- swap check run `arc3-jad-exp081-ulm-draft`: 2.3, only after BOTH the bundle and C+D pass;
+- reruns of near-passes (bundle, C+D, or the swap run): 2.3 each;
+- hic16 rerun: 2.3 (it is C+hic16, 803.8 vs the 845 bar; a swap on the bundle needs a further 2.3 swap check, so the hic16 path is 4.6 in all).
+Worst case this week: swap 2.3 + bundle rerun 2.3 + C+D rerun 2.3 + swap rerun 2.3 = 9.2, which just fits the ~10.2 left (it does not fit the
+low-end 8.4); adding the hic16 rerun (2.3) does not fit. Overflow simply moves to the 10-17 window (30 h fresh), still before the 10-24 swap
+deadline, so **quota does not bind before 10-24; the order and the one-at-a-time rule do.**
+
+**Priority order:**
+1. **Swap check run** (`jadulmd-push-1`) if both the bundle and C+D pass. (If one is only a near-pass, its rerun comes first, because the swap needs both
+   passed.)
+2. **Any required rerun** of the bundle or C+D (a near-pass gets one rerun; a kill gets none). Run them serially.
+3. **hic16 rerun last**, only if quota is left after 1-2 (keep >= 2 h in hand) or in the 10-17 window. **C+D is preferred over hic16 for the single serving
+   swap** (rule 3): C+D has a +0.23 accept gain and a throughput bar it can meet; hic16 is +1.8% on C and +1.6% on B.
+Re-tally when the bundle and C+D results are read; replace the estimates above with the real `GPU_QUOTA` line (the status op now prints it; first live read pending, untested against the real API).
+
+**The SDK exposes the quota, and the status op now prints it (implemented, not yet run against the real API).** `kagglesdk` 0.1.37:
+`kaggle.kernels.kernels_api_client.get_accelerator_quota_statistics(ApiGetAcceleratorQuotaStatisticsRequest())` returns `quota_refresh_time`
+(a datetime) and `gpu_quota` / `tpu_quota` with `time_used`, `time_reserved`, `total_time_allowed` (timedeltas). `Runner.gpu_quota()` in
+`scripts/kaggle_ops.py` reads it through `api.build_kaggle_client()`; `op_status` logs `GPU_QUOTA used=..h reserved=..h allowed=..h left=..h refresh=...`
+(left = allowed - used) and sets `res["gpu_quota"]`; any failure logs `GPU_QUOTA unavailable: <err>` and the op still succeeds. `push_kernel` does NOT
+gate on it (a `left - 12 x (running + 1) < 0` skip was left out: the tally above says one session is accepted at ~19.8 h used, which that rule would
+refuse, and whether `time_reserved` is already inside `time_used` is unread; a wrong skip costs more than a Kaggle-side refusal). Decide after the first live read.
+
+**Dev-box action queue (in order):**
+
+1. **Every UTC day, submit something.** Until a challenger passes its check run, submit the incumbent v1
+   (n grows; scores so far 33.29, 28.18, 31.03, 29.38). First verify the 2026-10-07 and 10-08 slots in the
+   API (`kaggle competitions submissions -c arc-prize-2026-arc-agi-3 --csv`); this file records neither.
+2. **Tail check runs: DONE, both passed 2026-10-09** (see "Check runs PASSED"; submit per the schedule). Background: they are turbo / turbo-lossless
+   (largest measured effect on our exact stack: +28% / +14% output tok/s in JustAdev742's same-conditions gate)
+   plus the zero-throughput-cost priority-gate fix (`stage7_milestone2_improvements.md` section 4). Check
+   JustAdev742's LB result for 56980485 (their research_log / status.md) first; a catastrophe there is a reason
+   to wait. Pass/kill criteria in `stage7_m2_speed.md` (Turbo / Turbo-lossless) plus the `PRIORITY_TAIL installed`
+   marker; the check run also reports output tokens/request and repeated assistant turns (the lossy-acceptance
+   guards). Read `history_cache_summary.json` by hand before arming a submission (write_fallbacks /
+   payload_plain / view_misses / loads_stale all 0; payload_delta >> payload_full); the gate checks it only via
+   `require_zero`.
+2b. **Fallbacks only**: `arc3-m2-turbo` / `arc3-m2-turbo-lossless` (no tail) and the histcache pair
+   (`arc3-m2-lm-histcache`, `...-histcache-triedfacts`) are pushed only if a tail variant fails its check run
+   for a **tail-specific** reason (e.g. `PRIORITY_TAIL` missing, tail-install assert, priority-gate errors,
+   game starvation); a serving-side failure (REAP, acceptance, throughput) hits the plain turbo base too.
+   `arc3-m2-lm-tail` is not scheduled for submissions.
+   If JustAdev742's hidden draw (56980485) lands <= ~28, or turbo-tail's loop/length guards trip, prefer B over A.
+3. **Then the SGLang hicache pair** (`m96s12hic`, `m97s12hic`; `m97s12` as the control), **then** the vLLM
+   pair after the day-0 dataset/overlay checks in `stage7_m2_speed.md` (overlay sha256, python ABI,
+   draft vocab file). Respect the 2-GPU-session limit: push only via `scripts/kaggle_push_queue.py`
+   (a first push rejected at the limit never mounts its datasets). Do not run a submission slot and a
+   speed check at the same time.
+4. **Submission plan.** Follow "Submission schedule (from 2026-10-10)" above (the section-16 table: C+U 10-13, C 10-14, the bundle or C+U
+   from 10-15, C verbatim on 10-19 and 10-25; decision rules and the final-selection rule are there).
+   `arc3-m2-lm-tail` gets no slots on its own.
+5. **Delete the stray remote branch `wip-histcache-inherited`** (content already merged; the cloud proxy
+   blocks ref deletion, so do it from the dev box or GitHub).
+
+### Open leads (from section 14 and `experiments/stage7_milestone2_improvements.md`)
+
+The run is **decode-bound and compute-starved**: ~700 tok/s x 532 min ~ 22M
+tokens / ~110 games = ~200K tokens per game, against a per-level reference of
+27-67K, and scores were still rising when the clock ended. KV pool 1.01M
+(FP8) peaked at 0.91 usage with `max_running_requests=10`.
+
+1. **More streams / more KV room.** The other two Milestone-2 winners ran 14
+   (lordhansolo, vLLM, KV 1.42M) and 16 (sirikilohit, 1.0M + 48 GB host tier)
+   streams for peak decode 1,135-1,159 vs our 946. Untested here: 12/14 streams
+   and the 32 GB system-RAM KV tier. They need KV room from a smaller KV dtype
+   (NVFP4 KV: NOT supported on this QSA model, see 2. below), shorter retained context, or
+   the host tier -- **not** from the static memory fraction.
+2. **Closed in section 14 (do not retry):** 4 draft tokens is impossible (Qwen
+   QSA caps `speculative_num_draft_tokens` at 4; 3 steps already uses it);
+   `--mem-fraction-static 0.98` OOMs at runtime (lazily loaded Triton kernels
+   need the ~4 GB that 0.96 leaves). Baseline throughput is reproducible
+   (577.8 / 576.5 tok/s).
+   **FP4 KV is not supported for this model** (2026-10-09 source audit, nothing
+   built): Pennyroyal's QSA backend, which always serves the full-attention
+   layers, has no FP4 read path. `nvfp4` hands it packed uint8; `fp4_mx_block16`
+   dequantizes the whole layer pool per forward and OOMs. FP8 is the smallest
+   usable KV dtype. sirikilohit's 16 streams came from a 69,632 context, not
+   from a smaller dtype. Next route: host tier on turbo-tail
+   (`experiments/stage7_m2_speed.md`, "FP4 KV cache on this stack").
+3. **Strategy-audit prompt** at 25% of a game's time (lordhansolo's extra).
+4. **Longer retained history** with freed KV (one team went 14.5 -> 22.5 mainly
+   on this; sirikilohit's biggest step was the same change).
+5. **Prompt-side extras** from the other winners (Wang/Ludvig addenda).
+6. Unseparated: how much of 4.58 -> 24.99 is serving efficiency vs harness
+   /perception changes (our switch changed everything at once).
+7. **JustAdev742 update (read 2026-10-12, their repo @ `ccb7214`):** exp-081 (our arm C's source) hidden 34.04 (n=1) vs their
+   base D′ family 26.04-28.87; exp-082 (reasoning effort medium) was their worst full run, matching our closed line. Their
+   fine-tuned MTP drafter (+9-11% accept) has private weights, so it is not adoptable; their untried-objects notices
+   (`OURS_UNTRIED=1`) are a candidate add-on to arm C only if exp-085 lands strong. Detail:
+   `experiments/stage7_milestone2_improvements.md` section 9.5.
+
+### Environment note: this cloud checkout
+
+The Claude Code cloud environment these notes were last edited in is
+**Linux, no GPU, 4 CPU**. It **cannot reach kaggle.com** unless the
+environment network policy allows it, so it cannot push kernels, submit, or
+read the leaderboard directly; Kaggle steps run on the Windows dev box
+(RTX 2070, scheduled tasks) or via the GitHub Actions operator below. It can
+edit code, run the unit tests (`pytest tests/ -q`), and push branches to GitHub.
+
+### Operating Kaggle from the cloud via GitHub Actions
+
+GitHub Actions runners can reach kaggle.com, so the cloud box operates Kaggle by commit:
+`.github/workflows/kaggle-ops.yml` runs `scripts/kaggle_ops.py` on every push to branch
+`claude/modest-ride-gut4vo` that changes `.github/kaggle-ops/request.json` (or by manual dispatch).
+
+- **Status (2026-10-09): credentials are configured (`KAGGLE_USERNAME` + `KAGGLE_KEY`) and the operator works;
+  it is now the PRIMARY way to submit** (draw 5, ref 57017233, went through it). The dev box's scheduled submitter
+  (`ARC3Submit_*`) shares the same 1-per-UTC-day quota: **only one of them should submit on a given day**
+  (disable or do not arm the other). `status` on a never-pushed kernel logs
+  `Permission 'kernels.get' was denied`; that is expected (the kernel does not exist yet), not a credential fault.
+- **Secrets** (repo Settings -> Secrets -> Actions), any one of: `KAGGLE_USERNAME` + `KAGGLE_KEY`;
+  `KAGGLE_JSON` (the whole kaggle.json); `KAGGLE_API_TOKEN`. Without them the run exits cleanly
+  printing `NO_CREDENTIALS`.
+- **Request**: `{"id": "<new unique id>", "ops": [...]}`, executed in order. Ops: `status`
+  (last 25 submissions, leaderboard bars at top 1/5/10%, our row, top 40, status of every kernel in
+  the tables above, and the weekly GPU quota as one `GPU_QUOTA used=..h reserved=..h allowed=..h left=..h refresh=...` line
+  plus `res["gpu_quota"]`, or `GPU_QUOTA unavailable: <err>` if the call fails -- the op still succeeds); read-only `list_kernels` `{"sort_by": "scoreDescending|dateCreated|voteCount",
+  "page_size": 50, "pages": 2, "search": optional}` (public kernels of the competition; kagglesdk's
+  metadata has no score field, so scores are mostly `-`) and `pull_kernel` `{"kernel": "owner/slug",
+  "max_lines": 200}` (prints notebook cells mentioning score/prompt/context/stream/audit/memory); read-only `competition_pages` `{"grep": [regex...], "context": 2, "max_lines": 400, "page": optional name}` (the competition's rules/overview/evaluation/data pages via kagglesdk `list_competition_pages`, tags stripped; prints page names and the lines matching the case-insensitive greps, default `select|final submission|private|public leaderboard|rerun|re-run|best`; full text in the artifact); `push_kernel` `{"dir": "kaggle_submission_x/notebook"}` (skipped as
+  `SKIPPED_GPU_BUSY` if 2 of our GPU kernels are running/queued); `kernel_output`
+  `{"kernel", "grep": [markers]}` (digest: status, version, markers, tracebacks, game states,
+  `*_summary.json` counters, speed metrics; full output as artifact, 7 days); `submit`
+  `{"kernel", "version", "message", "markers", "counters", "require_zero", "force_gate"}` (the
+  `kaggle_submit_when_ready.py` gate plus a version check -- a known different latest version refuses;
+  if Kaggle does not report the version the op prints a loud `VERSION_UNKNOWN` warning and gates on
+  the rest only, because kagglesdk reports an unset `current_version_number` as 0 (2026-10-09 bug,
+  `ksr.kernel_version`); refused as
+  `SKIPPED_ALREADY_SUBMITTED_TODAY` if any submission is dated today UTC -- no override).
+  `push_kernel`/`submit` run only when the triggering push changed request.json, so editing the
+  workflow never replays them. Always change `id`.
+- **Results**: the job log; its last line is `KAGGLE_OPS_RESULT {json}` (one entry per op). The dev
+  box's scheduled tasks still work and share the same daily quota.
+- **Examples for the tail kernels** (markers copied from `kernel_markers()` for that variant; re-derive with
+  `python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail` if the builder changes). turbo-tail
+  (arm A):
+  ```json
+  {"id": "tt-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_tail/notebook"}]}
+  {"id": "tt-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail",
+    "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+             "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "SPEC_ACCEPT 0.5", "ARC_HOTMAP sha=",
+             "PRIORITY_TAIL installed", "LEVEL_MEMORY installed", "priority gate active",
+             "priority gate active: 14 concurrent streams", "harness patch applied successfully"]}]}
+  {"id": "tt-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo-tail", "version": 1,
+    "message": "m2 turbo-tail draw 1",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active", "harness patch applied successfully", "INPUT_RESOLVED",
+                "HISTORY_CACHE installed", "PRIORITY_TAIL installed", "TIMEOUT_FIX installed",
+                "REAP448 applied kept=448", "SPEC_ACCEPT 0.5",
+                "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f",
+                "priority gate active: 14 concurrent streams"],
+    "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
+    "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
+                     "timeout_fix_summary.json": ["errors"]}}]}
+  ```
+  turbo-lossless-tail (arm B): same three requests with `kaggle_submission_m2_turbo_lossless_tail/notebook` /
+  `calamitychasm/arc3-m2-turbo-lossless-tail` (ids `ttl-*`, message `m2 turbo-lossless-tail draw 1`) and **no
+  `SPEC_ACCEPT 0.5`** in `grep` or `markers`; everything else, `counters` and `require_zero` identical.
+- **Examples for turbo-tail-hic16** (host KV tier + 16 streams on arm A; markers from `kernel_markers()`, re-derive with
+  `python scripts/_build_m2_level_memory_kernel.py --turbo --prio-tail --hicache-gb`; grep the `[sys] RAM` census lines
+  for the `MemAvailable` >= 10 GiB check). Submit only after its check run passes the criteria in the table row:
+  ```json
+  {"id": "tth16-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_tail_hic16/notebook"}]}
+  {"id": "tth16-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-tail-hic16",
+    "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+             "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "SPEC_ACCEPT 0.5", "ARC_HOTMAP sha=",
+             "PRIORITY_TAIL installed", "LEVEL_MEMORY installed", "priority gate active: 16 concurrent streams",
+             "STREAMS max_running_requests=16 cuda_graph_bs=", "HICACHE requested", "HICACHE_TIER",
+             "harness patch applied successfully", "[sys] RAM", "Not enough host memory"]}]}
+  ```
+- **Examples for turbo-lossless-tail-hic16** (host KV tier + 16 streams on arm B; as the tth16 examples minus `SPEC_ACCEPT 0.5`;
+  re-derive markers with `python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --prio-tail --hicache-gb`). Submit only
+  after its check run passes the criteria in the table row:
+  ```json
+  {"id": "ttlh16-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless_tail_hic16/notebook"}]}
+  {"id": "ttlh16-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless-tail-hic16",
+    "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+             "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "ARC_HOTMAP sha=",
+             "PRIORITY_TAIL installed", "LEVEL_MEMORY installed", "priority gate active: 16 concurrent streams",
+             "STREAMS max_running_requests=16 cuda_graph_bs=", "HICACHE requested", "HICACHE_TIER",
+             "harness patch applied successfully", "[sys] RAM", "Not enough host memory"]}]}
+  ```
+- **Examples for turbo-lossless-dprime** (arm B + D′ slot priority; markers from `kernel_markers()`, re-derive with
+  `python scripts/_build_m2_level_memory_kernel.py --turbo-lossless --dprime`). Push only into a free GPU slot and not between
+  12:10 and 13:15 UTC; submit only after its check run passes the criteria in the table row:
+  ```json
+  {"id": "tld-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless_dprime/notebook"}]}
+  {"id": "tld-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless-dprime",
+    "grep": ["INPUT_RESOLVED", "INPUT_MISSING", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+             "REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "ARC_HOTMAP sha=", "PRIORITY_DPRIME installed",
+             "#OURS_FORM ok version=d_prime", "#OURS_FRESH replaced=", "PRIORITY_DPRIME summary", "LEVEL_MEMORY installed",
+             "priority gate active: 14 concurrent streams", "harness patch applied successfully",
+             "DEADLINE at", "READY after", "analyzer failed"]}]}
+  {"id": "tld-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo-lossless-dprime", "version": 1,
+    "message": "m2 turbo-lossless-dprime draw 1",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active", "harness patch applied successfully", "INPUT_RESOLVED",
+                "HISTORY_CACHE installed", "PRIORITY_DPRIME installed", "TIMEOUT_FIX installed", "REAP448 applied kept=448",
+                "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f",
+                "priority gate active: 14 concurrent streams"],
+    "counters": ["level_memory_summary.json", "history_cache_summary.json", "dprime_summary.json", "timeout_fix_summary.json"],
+    "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
+                     "dprime_summary.json": ["errors"], "timeout_fix_summary.json": ["errors"]}}]}
+  ```
+- **Examples for arc3-jad-exp081 (arm C)** (markers are the notebook's own print/log lines; their notebook writes no
+  `*_summary.json` counters, so the submit gate has none; it prints no `INPUT_RESOLVED`). Push only into a free GPU slot:
+  ```json
+  {"id": "jad81-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081/notebook"}]}
+  {"id": "jad81-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
+             "DEADLINE at", "READY after", "analyzer failed"]}]}
+  {"id": "jad81-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081", "version": 2,
+    "message": "m2 jad exp081 draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written"],
+    "counters": []}]}
+  ```
+- **Examples for arc3-jad-exp081-lm (arm C+LM)** (arm C's markers plus `LEVEL_MEMORY installed`; counters
+  `level_memory_summary.json`; no `INPUT_RESOLVED`). Push only into a free GPU slot; submit only after its check run passes
+  (CLAUDE.md row / `stage7_milestone2_improvements.md` section 10.4) and with the version that check run used:
+  ```json
+  {"id": "jadlm-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_lm/notebook"}]}
+  {"id": "jadlm-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-lm",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "LEVEL_MEMORY installed", "LEVEL_MEMORY summary",
+             "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
+             "DEADLINE at", "READY after", "analyzer failed"]}]}
+  {"id": "jadlm-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081-lm", "version": 1,
+    "message": "m2 jad exp081 lm draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written", "LEVEL_MEMORY installed"],
+    "counters": ["level_memory_summary.json"], "require_zero": {"level_memory_summary.json": ["errors"]}}]}
+  ```
+- **Examples for arc3-jad-exp081-u (arm C+U)** (arm C's markers with `our harness patches applied successfully: 8`, plus the two install
+  markers; counters `untried_summary.json` and `stale_latch_summary.json`; no `INPUT_RESOLVED`). Push only into a free GPU slot; submit only after
+  its check run passes (`stage7_milestone2_improvements.md` section 12.5) and with the version that check run used:
+  ```json
+  {"id": "jadu-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_u/notebook"}]}
+  {"id": "jadu-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-u",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 8", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "STALE_LATCH_FIX installed", "UNTRIED_NOTICE installed mode=i1", "UNTRIED_NOTICE summary", "STALE_LATCH_FIX summary",
+             "C+U summary failed", "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after",
+             "DEADLINE at", "READY after", "analyzer failed"],
+    "transcripts": {"games": ["sp80", "tn36", "vc33", "cn04"], "grep_text": {"Not yet tried on this level": 8},
+                    "samples": {"StaleStateActionError": 5}}}]}
+  {"id": "jadu-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081-u", "version": 1,
+    "message": "m2 jad exp081 u draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 8", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written", "STALE_LATCH_FIX installed", "UNTRIED_NOTICE installed mode=i1"],
+    "counters": ["untried_summary.json", "stale_latch_summary.json"],
+    "require_zero": {"untried_summary.json": ["errors", "tracker_errors", "i2_lines"],
+                     "stale_latch_summary.json": ["errors", "stale_refused_after_released"]}}]}
+  ```
+- **Examples for arc3-jad-exp081-ulm (bundle C+UL)** (the union of C+U's and C+LM's: arm C's markers with `our harness patches applied
+  successfully: 8`, plus `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1` and `LEVEL_MEMORY installed`; counters
+  `level_memory_summary.json`, `untried_summary.json` and `stale_latch_summary.json` with each variant's `require_zero`; no `INPUT_RESOLVED`).
+  Push only into a free GPU slot; submit only after its check run passes (`stage7_milestone2_improvements.md` section 16.8) and with the
+  version that check run used:
+  ```json
+  {"id": "jadulm-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_ulm/notebook"}]}
+  {"id": "jadulm-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-ulm",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 8", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "STALE_LATCH_FIX installed", "UNTRIED_NOTICE installed mode=i1", "LEVEL_MEMORY installed",
+             "UNTRIED_NOTICE summary", "STALE_LATCH_FIX summary", "LEVEL_MEMORY summary", "C+U summary failed",
+             "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
+             "DEADLINE at", "READY after", "analyzer failed"],
+    "transcripts": {"games": ["sp80", "tn36", "vc33", "cn04"],
+                    "grep_text": {"Not yet tried on this level": 8, "Rule for level": 8},
+                    "samples": {"StaleStateActionError": 5}}}]}
+  {"id": "jadulm-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081-ulm", "version": 1,
+    "message": "m2 jad exp081 ulm draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 8", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written", "STALE_LATCH_FIX installed", "UNTRIED_NOTICE installed mode=i1",
+                "LEVEL_MEMORY installed"],
+    "counters": ["level_memory_summary.json", "untried_summary.json", "stale_latch_summary.json"],
+    "require_zero": {"level_memory_summary.json": ["errors"],
+                     "untried_summary.json": ["errors", "tracker_errors", "i2_lines"],
+                     "stale_latch_summary.json": ["errors", "stale_refused_after_released"]}}]}
+  ```
+- **Examples for arc3-jad-exp081-hic16 (arm C+hic16)** (arm C's markers with 16 streams, plus the host tier and the server's stream count;
+  no counters; no `INPUT_RESOLVED`; markers from `kernel_markers()` in the builder). Push only into a free GPU slot; submit only after its
+  check run passes (`stage7_milestone2_improvements.md` section 14.3) and with the version that check run used:
+  ```json
+  {"id": "jadh16-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_hic16/notebook"}]}
+  {"id": "jadh16-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-hic16",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 16 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "STREAMS max_running_requests=16 cuda_graph_bs=", "HICACHE requested", "HICACHE_TIER",
+             "HICACHE_TIER attached hicache_attached=True", "[sys] RAM", "Not enough host memory",
+             "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after",
+             "DEADLINE at", "READY after", "analyzer failed"],
+    "show_lines": 3}]}
+  {"id": "jadh16-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081-hic16", "version": 1,
+    "message": "m2 jad exp081 hic16 draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 16 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written", "HICACHE_TIER attached hicache_attached=True",
+                "STREAMS max_running_requests=16 cuda_graph_bs="],
+    "counters": []}]}
+  ```
+- **Examples for arc3-jad-exp081-draft (arm C+D)** (arm C's six markers plus the draft line with its sha prefixes; no counters; no
+  `INPUT_RESOLVED`; the builder has no `kernel_markers()`, so the markers are arm C's submit markers plus the notebook's own
+  `ours: MTP draft {path} after ... (manifest <sha12>, dense <sha12>)` print). Pushed v1 (`jadd-push-1`, run 38245684435); submit only after
+  its check run passes the C+D gate (`stage7_milestone2_improvements.md` section 15.6) and with version 1. The loop / NameError lines of
+  the gate come from the per-game transcripts (`transcripts` "all"):
+  ```json
+  {"id": "jadd-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_draft/notebook"}]}
+  {"id": "jadd-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-draft",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "ours: MTP draft", "(manifest 6f408d58fd81, dense b677e0c4234c)", "MTP draft not mounted", "MTP draft /kaggle",
+             "stuck in a loop", "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after",
+             "DEADLINE at", "READY after", "analyzer failed"],
+    "show_lines": 3, "transcripts": {"games": "all", "max_lines_per_game": 12}}]}
+  {"id": "jadd-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081-draft", "version": 1,
+    "message": "m2 jad exp081 draft draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 6", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written", "ours: MTP draft",
+                "(manifest 6f408d58fd81, dense b677e0c4234c)"],
+    "counters": []}]}
+  ```
+- **Examples for arc3-jad-exp081-ulm-draft (bundle + draft, the serving swap)** (the bundle's nine submit markers plus C+D's draft line
+  with its sha prefixes; the bundle's counters and `require_zero`; no `INPUT_RESOLVED`). **Built, never pushed:** push only into a free GPU slot
+  and only after BOTH the bundle (`jadulm-out-1`) and C+D (`jadd-out-1`) check runs have passed; submit only after its own swap check run passes
+  (gate in its table row) and with the version that run used:
+  ```json
+  {"id": "jadulmd-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_ulm_draft/notebook"}]}
+  {"id": "jadulmd-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081-ulm-draft",
+    "grep": ["harness patch applied successfully", "our harness patches applied successfully: 8", "#OURS_FORM ok version=d_prime",
+             "#OURS_FRESH replaced=", "priority gate active: 14 concurrent streams",
+             "48 layers x 448 experts, router sha256 for every layer", "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+             "STALE_LATCH_FIX installed", "UNTRIED_NOTICE installed mode=i1", "LEVEL_MEMORY installed",
+             "UNTRIED_NOTICE summary", "STALE_LATCH_FIX summary", "LEVEL_MEMORY summary", "C+U summary failed",
+             "ours: MTP draft", "(manifest 6f408d58fd81, dense b677e0c4234c)", "MTP draft not mounted", "stuck in a loop",
+             "ours (--fail-fast): server watchdog on", "ours (--fail-fast): the", "ours: inputs mounted after", "[view] scrolled",
+             "DEADLINE at", "READY after", "analyzer failed"],
+    "show_lines": 3,
+    "transcripts": {"games": "all", "max_lines_per_game": 12,
+                    "grep_text": {"Not yet tried on this level": 8, "Rule for level": 8},
+                    "samples": {"StaleStateActionError": 5}}}]}
+  {"id": "jadulmd-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-jad-exp081-ulm-draft", "version": 1,
+    "message": "m2 jad exp081 ulm draft draw 1",
+    "markers": ["harness patch applied successfully", "our harness patches applied successfully: 8", "#OURS_FORM ok version=d_prime",
+                "priority gate active: 14 concurrent streams", "48 layers x 448 experts, router sha256 for every layer",
+                "ours: FR-Spec map hot_tokens_64k_arc.pt written", "STALE_LATCH_FIX installed", "UNTRIED_NOTICE installed mode=i1",
+                "LEVEL_MEMORY installed", "ours: MTP draft", "(manifest 6f408d58fd81, dense b677e0c4234c)"],
+    "counters": ["level_memory_summary.json", "untried_summary.json", "stale_latch_summary.json"],
+    "require_zero": {"level_memory_summary.json": ["errors"],
+                     "untried_summary.json": ["errors", "tracker_errors", "i2_lines"],
+                     "stale_latch_summary.json": ["errors", "stale_refused_after_released"]}}]}
+  ```
+- **Examples for the turbo kernel** (one request per commit; change `id` every time):
+  ```json
+  {"id": "turbo-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo/notebook"}]}
+  {"id": "turbo-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo",
+    "grep": ["REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "SPEC_ACCEPT 0.5", "ARC_HOTMAP sha=",
+             "TIMEOUT_FIX installed", "HISTORY_CACHE installed", "priority gate active: 14 concurrent streams",
+             "INPUT_RESOLVED", "INPUT_MISSING"]}]}
+  {"id": "turbo-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo", "version": 1,
+    "message": "m2 turbo draw 1",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active: 14 concurrent streams",
+                "harness patch applied successfully", "INPUT_RESOLVED", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+                "REAP448 applied kept=448", "SPEC_ACCEPT 0.5",
+                "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f"],
+    "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
+    "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
+                     "timeout_fix_summary.json": ["errors"]}}]}
+  ```
+- **Examples for the turbo-lossless kernel** (same shape; no `SPEC_ACCEPT` marker; `kernel_output` also returns a
+  `request_log` digest: `completion_tokens_per_request`, `repeated_assistant_turns`, `repeated_assistant_turns_long`):
+  ```json
+  {"id": "tl-push-1", "ops": [{"op": "push_kernel", "dir": "kaggle_submission_m2_turbo_lossless/notebook"}]}
+  {"id": "tl-out-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-m2-turbo-lossless",
+    "grep": ["REAP448 applied kept=448", "REAP448 NOT CONFIRMED", "ARC_HOTMAP sha=", "TIMEOUT_FIX installed",
+             "HISTORY_CACHE installed", "priority gate active: 14 concurrent streams", "INPUT_RESOLVED", "INPUT_MISSING"]}]}
+  {"id": "tl-submit-1", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-turbo-lossless", "version": 1,
+    "message": "m2 turbo-lossless draw 1",
+    "markers": ["LEVEL_MEMORY installed", "priority gate active: 14 concurrent streams",
+                "harness patch applied successfully", "INPUT_RESOLVED", "HISTORY_CACHE installed", "TIMEOUT_FIX installed",
+                "REAP448 applied kept=448",
+                "ARC_HOTMAP sha=ec15348b11863ec6fb94b655e4f9ddc4c0ce457fb11f77807b0c5c2d391da70f"],
+    "counters": ["level_memory_summary.json", "history_cache_summary.json", "timeout_fix_summary.json"],
+    "require_zero": {"history_cache_summary.json": ["write_fallbacks", "payload_plain", "view_misses", "loads_stale"],
+                     "timeout_fix_summary.json": ["errors"]}}]}
+  ```
+  Every kernel built with a variant (histcache, triedfacts, tail, turbo, turbo-lossless, spd-*, speed-*, vllm-*, `arc3-m2-lm-inputs`)
+  resolves its inputs in either Kaggle mount layout and logs one `INPUT_RESOLVED <name> -> <path> (via ...)`
+  line per input (5 for the SGLang kernels), or `INPUT_MISSING <name>` plus what it searched and an error. Put
+  `"INPUT_RESOLVED"` in `markers` for those kernels (`kernel_markers()` in the builder includes it) and grep
+  `INPUT_MISSING` in `kernel_output`. The incumbent v1 hardcodes the newer layout and prints neither; do not add the marker to its
+  submit gate. Kernels pushed before 2026-10-09 predate the resolver: rebuild and push a new version first.
+  `kernel_output` prints the speed digest (gen tok/s, retractions, accept length, KV pool/peak) used by the
+  turbo pass criteria, plus the `request_log` line (mean completion tokens per request, repeated assistant
+  turns; needs the check run's `*_requests.jsonl`); read both before arming `submit`.
+- **Per-game transcripts (opt-in, read-only)**: `"transcripts": {"games": ["sp80", "lf52"] | "all", "max_lines_per_game": 60}` on a
+  `kernel_output` op (also `turn_chars`, `first_turns`, `last_turns`, `list_actions`, `count`). Per game's `<game>*requests.jsonl` it
+  prints a per-level timeline (requests, tokens, `action(` count, steps, cleared/ended), tool-result counts (StaleStateActionError,
+  NameError, Traceback, `[view] scrolled`, GAME_OVER, RESET) and the first 2 / last 3 assistant turns of the last level. <= 3,000 lines, scrubbed.
+  Also `excerpt_levels` {game|"*": level}, `samples` {text: n} (first n tool results containing it + the call before) and `grep_text` {regex: n}.
+
+- **Output files (opt-in, read-only)** on a `kernel_output` op: `"list_files": "*_requests.jsonl"` prints name, bytes and sha256 of
+  every matching output file plus one `LIST_FILES {json}` line; `"print_files": ["mtp-draft/arc3-draft-manifest.json", ...]` (<= 10)
+  prints small text files in full with bytes and sha256 (a JSON file also as one `PRINT_FILE_JSON <path> {json}` line). Used by
+  the MTP session (`mtps-ls-1`, `mtps-out-1`, `stage7_milestone2_improvements.md` section 15.7); add `"artifact": false` for big outputs.
+
+### Branches merged into this one (2026-10-09)
+
+`stage7-milestone2-fork` (incumbent, sections 12-14), `stage7-sheet-momentum`
+(10-11), `stage7-momentum-time`, `stage7-goal-hint` (which contains
+`stage7-hud-perception`), `stage7-codeworld-backtest`. Section 8b (CodeWorldAgent
+verdict overturned) comes from `stage7-goal-hint`.
+
+## HISTORY -- dated status log (sections 1-14; sections 1-9 are SUPERSEDED)
+
+Original 2026-09-07 header, kept for the record: **Everything from "## Status"
+down to the Gotchas section is still accurate as a record of what was tried,
+but it is no longer the plan.** Full analysis:
+`experiments/stage7_strategy_reset.md`; backlog is tracked in GitHub Issues.
 
 ### 1. We were optimizing the wrong objective
 
@@ -317,7 +1097,50 @@ solvability**. **Stop spending slots on this lineage.** The remaining directions
 are perception (their stated gap, where our measured 9-155 s analyzer timeouts
 also live) and model capability -- not more serving tuning.
 
-### 9. CURRENT STANDING — 2026-09-21 (supersedes the 2026-09-07 header above)
+### 8b. CORRECTION (2026-09-23): the CodeWorldAgent verdict is overturned
+
+Commit `0603d60` merged a verdict to `master` reading **"the coder model
+cannot write a replay-passing world model"** (0 of 25, best 2/9). **Do not
+cite it.** It was confounded three ways, and the third is decisive: that
+run recorded *"prompts growing to 142 KB"* as a throughput note, but at
+~47k tokens against a 32,768 context those prompts were being **rejected,
+not answered**.
+
+`llm_engine.drafting._render_transcript` emitted a full 64x64 grid for
+**every** transition shown. Measured on a real 12-game run: prompts to
+**281,603 chars (~94k tokens)**, and **93 of 109 LLM calls failed in ~0.1s**
+-- an instant HTTP rejection. 85% of the coder budget never reached the
+model, and the resulting "0 replay passes" was indistinguishable from a
+capability ceiling.
+
+Rendering one opening grid plus per-step diffs (lossless; hard 36k-char
+cap) changes the same kernel, same games, same model:
+
+| | before | after |
+|---|---:|---:|
+| prompts over context | 76/109 | **0/308** |
+| calls returning text | 15% | **92%** |
+| **replay passes** | **0** | **16** |
+| games with a passing model | 0 | **4 of 12** |
+| longest passing replay | — | **28/28 transitions** |
+
+**The served model does write replay-passing world models for real 64x64
+games.** What is still NOT shown is conversion: **0 levels completed in 12
+games**. CodeWorldAgent remains a non-candidate for a scored submission
+(with no model installed it plays random actions, the ~0.06 floor), but
+the reason to shelve it was wrong.
+
+Full write-up: `experiments/stage7_codeworld_prototype.md`.
+
+**Standing lesson, and this is the fourth instrument failure in this arm:**
+a prompt that does not fit is not a weak result, it is *no* result -- and
+it looks exactly like a weak result. Measure prompt size against the
+served context before reading anything into a low score. The renderer
+defect had already been written down in
+`experiments/stage7_codeworld_backtest.md` as finding #4 and was simply
+not carried into the engine the live agent uses.
+
+### 9. CURRENT STANDING — 2026-09-21 (SUPERSEDED by "CURRENT STATUS (2026-10-09)" at the top; kept as history)
 
 **Best score 3.79. Rank ~204 / 3,175. Top 5.7%. The top-10% mission target is
 met.** The header above ("top 10% = 2.99", "we sit at 2.95") is stale; the bar
@@ -351,10 +1174,107 @@ effect shrank when n grew; assume it will happen again.
 | config | n | scores | mean | sd |
 |---|---:|---|---:|---:|
 | NVFP4 baseline | 4 | 2.84, 2.95, 2.42, 3.11 | 2.830 | 0.295 |
-| **+ anim graft** | **4** | 3.43, 3.79, **3.37, 3.02** | **3.402** | **0.315** |
+| **+ anim graft** | **5** | 3.43, 3.79, 3.37, 3.02, **2.66** | **3.254** | **0.430** |
 | + wipe guard | 1 | 2.53 | — | — |
 
-anim is the incumbent and the thing to beat: **mean 3.402, sd 0.315, n=4.**
+#### CORRECTION (2026-09-22): the anim graft is NOT established, and the
+#### comparison behind it is confounded
+
+The 5th anim draw came in at **2.66** -- the lowest of the arm, and below
+the baseline mean. Three things follow, and none of them are comfortable.
+
+**1. The effect lost significance when n grew.** Exact permutation test
+(all 126 splits, one-sided): **p = 0.071**, versus the p = 0.038 recorded
+here at n=4. Welch t fell 2.652 -> 1.750. **This is the fourth time in
+this project that an effect shrank when n grew**, and this file predicted
+it in writing after the third. Treat every remaining n<=5 claim here as
+likely overstated.
+
+**2. Almost all of the apparent advantage lives in the first three
+draws.** Sensitivity, each against the same baseline:
+
+| anim subset | mean | diff | perm p |
+|---|---:|---:|---:|
+| all 5 | 3.254 | +0.424 | 0.071 |
+| drop the best (3.79) | 3.120 | +0.290 | 0.129 |
+| last 3 only | 3.017 | +0.187 | 0.257 |
+| **last 2 only** | **2.840** | **+0.010** | **0.533** |
+
+anim's two most recent draws average **2.840** against baseline's
+**2.830**. On recent evidence alone the graft is worth **nothing**.
+
+**3. The two arms never overlap in time, so the comparison is
+confounded.** Baseline was drawn 09-11..09-15 (all four); anim 09-16..09-22
+(all five). Zero overlap. "anim vs baseline" is therefore identical to
+"later vs earlier", and no statistic computed on this data can separate
+them. There is also a real downward drift *within* anim (OLS slope
+**-0.231/draw**, permutation p = 0.042 -- but found post-hoc, by looking
+at the sequence, so that p is optimistic), against **+0.028/draw** within
+baseline.
+
+**The decisive experiment is to re-run the NVFP4 baseline NOW**, in the
+same period anim is being drawn in. If baseline now scores ~2.4, the
+graft survives. If it scores ~3.0, the graft was a temporal artifact and
+three submissions were spent on it. Nothing else in the current data can
+settle this, and every further anim draw compounds the confound rather
+than resolving it.
+
+**Standing lesson, now with four instances:** an arm adopted *because* its
+first draws were high carries a winner's curse. Early draws are not a
+random sample of that arm's distribution -- they are the reason the arm
+was selected. Interleave arms in time from now on; never run one arm to
+exhaustion and then the next.
+
+#### RESOLVED (2026-09-24): the baseline re-run breaks the confound, in the
+#### graft's favour -- but the caution stands
+
+The decisive experiment recommended above was run. NVFP4 baseline, kernel v2
+byte-identical to all four prior baseline draws, submitted into the *current*
+period: **2.48**.
+
+| arm | n | scores | mean | sd |
+|---|---:|---|---:|---:|
+| NVFP4 baseline | 5 | 2.84, 2.95, 2.42, 3.11, **2.48** | **2.760** | 0.300 |
+| + anim graft | 5 | 3.43, 3.79, 3.37, 3.02, 2.66 | **3.254** | 0.430 |
+
+**The effect is significant again: exact permutation p = 0.036**, against
+0.071 when baseline had only its four early draws. Adding a *low* baseline
+draw in the current period strengthened the graft rather than sinking it.
+
+**A period effect is real, and it hits BOTH arms**, which is what the
+confound made impossible to see before:
+
+| | early | late | delta |
+|---|---:|---:|---:|
+| baseline | 2.830 (09-11..15) | **2.480** (09-24) | **-0.350** |
+| anim | 3.530 (09-16..18) | 2.840 (09-20,22) | -0.690 |
+
+So anim's decline was **not purely anim-specific** -- scores are drifting
+down for the unmodified stack too. That partially rescues the 2026-09-22
+reading, which attributed the whole drop to anim.
+
+**The first same-period comparison this project has ever had:** anim's two
+recent draws average **2.840** against baseline's **2.480** on 09-24, a gap
+of **+0.360** in the graft's favour. n=2 vs n=1, so directional only -- but
+it points the same way as the pooled test.
+
+**What has NOT changed.** The sensitivity analysis still bites:
+
+| anim subset | mean | diff | perm p |
+|---|---:|---:|---:|
+| all 5 | 3.254 | +0.494 | **0.036** |
+| drop the best (3.79) | 3.120 | +0.360 | 0.071 |
+| last 3 only | 3.017 | +0.257 | 0.161 |
+| last 2 only | 2.840 | +0.080 | 0.381 |
+
+Most of the effect still lives in the three early anim draws. The honest
+summary: **the graft is real but smaller than 3.53 suggested, and the
+current-period gap is ~+0.36, not ~+0.70.**
+
+**The winner's-curse and interleaving lessons stand unchanged** -- they are
+what made this resolvable at all. Had baseline not been re-run in the
+current period, the 09-22 data would have supported "the graft is worth
+nothing" just as readily as the truth. **Interleave arms in time.**
 
 #### THE MEASUREMENT RULE THAT MATTERS MOST
 
@@ -447,11 +1367,21 @@ helps.** Register an outcome measure too, not just a mechanism measure.
 The next lever must target **whether a level is solvable at all**, not how many
 actions are spent on it. Tufa's own stated weak areas are "context management
 and perception", and there is direct evidence of a perception tax in our own
-run: HUD/status-bar reasoning appears in **all 25 of 25 games** (4,608 mentions
-in the anim run). The model re-derives HUD geometry from scratch, misattributes
-HUD pixels to game objects ("my white-object tracker accidentally matched the
-growing row-0 HUD bar ... that reading was HUD noise"), and spends turns
-establishing "did only the HUD change?".
+run. The model re-derives HUD geometry from scratch, misattributes HUD pixels
+to game objects ("my white-object tracker accidentally matched the growing
+row-0 HUD bar ... that reading was HUD noise"), and spends turns establishing
+"did only the HUD change?".
+
+**Correction, made before the arm ran:** this lead was first recorded here as
+"**all 25 of 25 games**, 4,608 mentions". That raw count is **~85% harness
+boilerplate** -- the base `VISUAL_GAME_ADDENDUM` already carries a HUD warning
+and is quoted back in all 940 prompts (SYSTEM 2,820 + USER 1,051). The honest
+figure is **718 model-generated mentions across 24 of 25 games, of which 286
+derive geometry** (a row/col index or range on the same line). The finding
+survives -- 286 real geometry derivations is a genuine tax -- but it is ~6x
+smaller than first stated. **Registering the falsifier on 4,608 would have made
+it unfalsifiable, since this arm adds HUD words to the prompt itself.** It is
+registered on 718 / 286.
 
 A rule-based status-bar detector already exists in this repo
 (`graph_explorer_agent.py: identify_status_bars_with_rule`, ported from
@@ -464,6 +1394,86 @@ Arm in progress on `stage7-hud-perception`: annotate `segmentation`'s nodes
 with an advisory `hud` flag. **Annotate, never mask** -- no pixel or node is
 removed, so a wrong heuristic costs nothing and the model can override it.
 
+### 10. Momentum time allocation (2026-09-28): first draw **4.37**, best ever
+
+Branch `stage7-momentum-time`, write-up `experiments/stage7_momentum_time.md`.
+The run is time-bound (every game plays to its 7,920 s clock). Measured on 225
+game-runs: a turn in a game stuck 10+ turns earns 2.7x less than a turn in a
+progressing game, and momentum does not fade with depth. Simulated on a
+110-game queue, merely stopping stuck games HURTS; what helps is the opposite:
+**at 7,920 s a game that leveled up in the last 45 min keeps going (cap 1.5x),
+paid for by stopping games stuck 100 min** (+9.9% projected). Installed by a
+notebook cell replacing `_HarnessGameSession.runtime_limit_reached` /
+`timing_payload`; the model sees the baseline's time until 7,920 s.
+
+Verified before submitting: 12 unit tests; a Haiku-subagent relay smoke test on
+the REAL solver locally (queue refill + stall stops work); a public-25 GPU run
+(25/25 clean, 11 stall stops, 6 extensions, tr87 +1 level).
+
+**Draw 1: 4.37** (ref 56631362) vs anim n=6 mean 3.258 sd 0.385. n=1: the exact
+permutation p cannot go below 1/7. **Interleave with anim; no claim before n>=3.**
+Incumbent config for new draws: anim + momentum, if it holds.
+
+### 11. sheetu12b + momentum (2026-09-29..10-01): **3.89, 4.38, 4.58** (mean 4.283) -- incumbent
+
+Branch `stage7-sheet-momentum`, write-up `experiments/stage7_sheet_momentum.md`.
+Public notebook `scottlegrand/taaf-flashnext-sheetu12b-0922` scored 5.19 (n=1,
+theirs): same stack, plain Duck solver plus agent patches (animation frames in
+the sandbox, an all-frames contact-sheet image, 12x board upscale, 2 history
+images, tolerant world-model parser). Forked verbatim + our momentum cell,
+check run clean, submitted: **3.89** (ref 56655708). Below anim + momentum's
+4.37, so the pre-registered falsifier holds; above the anim mean. n=1 each --
+nothing ranked. Measured in anim along the way: 63% of world-model updates are
+dropped by its exact-prefix label parser, and images are charged ~5x their real
+token cost -- both untested fixes. Draw 2 (byte-identical, ref 56713526):
+**4.38**. vs anim n=6: p = 1/28 = 0.036. Not separable from anim + momentum
+(4.37, n=1); neither arm's two components are separated.
+Draw 3 (ref 56750615): **4.58**, the project's best. n=3 mean 4.283, sd 0.355;
+vs anim p = 1/84 = 0.012. **Incumbent config for new draws: sheetu12b + momentum.** *(Superseded 2026-10-02 by section 12.)*
+
+### 12. Milestone-2 fork (2026-10-02): **24.99**, rank 249 -- top ~7%
+
+Branch `stage7-milestone2-fork`, write-up `experiments/stage7_milestone2_fork.md`.
+The leaderboard jumped after `dfranzen/arc-agi-3-milestone-2-solution`
+(public 31.47) was published: #1 52.51, #99 27.36 on 2026-10-02. A
+byte-identical fork (kernel `calamitychasm/arc3-milestone2-fork` v1; W4A16
+Qwen3.8-Flash-Next + MTP drafter on an SGLang fork, 128K context, an
+8,400-line harness patch, and a harness-side priority gate that runs all
+~110 games with 10 active streams ranked by expected level value) scored
+**24.99** (ref 56763055) -- 5.5x our previous best 4.58. Team "How bad can it
+go?" is rank 249. Our momentum cell does not apply to this solver; its
+priority gate is the stronger version of the same idea. **Incumbent config for
+new draws: the milestone-2 fork.**
+
+### 13. Solved-level memory (2026-10-03): **33.29**, rank 10
+
+`experiments/stage7_m2_level_memory.md`. sirikilohit's M85 ported onto the
+milestone-2 fork (runtime patch on ToolAgent; block pinned into the system
+prompt only at history eviction, so no extra prefill). Check run: 32/44 rules
+captured, 15 blocks applied, 0 errors. Submitted by the detached gated
+submitter (`scripts/kaggle_submit_when_ready.py`), ref 56789553: **33.29**
+vs the copies' 25.77 +/- 3.93 -> p = 0.028 for "no effect" (n=1). Incumbent
+for new draws. **Draws 2-4: 28.18, 31.03, 29.38** (four-draw mean 30.47, p = 0.008 vs the copies; effect +4.7, 95% CI +0.8..+8.6). Submissions/polling now run as Windows scheduled tasks
+(`ARC3KaggleWatch`, `ARC3Submit_*`), independent of any chat session.
+
+### 14. Serving-speed sweep (2026-10-04..06): nothing adoptable yet
+
+`experiments/stage7_m2_speed.md`, kernels `scripts/_build_m2_speed_kernels.py`.
+Baseline throughput is reproducible (577.8 / 576.5 generated tok/s on two
+runs). **4 draft tokens is impossible** on this model (Qwen QSA caps
+speculative_num_draft_tokens at 4; 3 steps already uses it). **mem fraction
+0.98 OOMs** at runtime (lazily loaded Triton kernels need the ~4 GB 0.96
+leaves). 12/14 streams and the 32 GB system-RAM KV tier remain untested:
+they need KV room from a smaller KV dtype, shorter retained context, or the
+host tier -- not from the static memory fraction.
+
+**Automation (Windows Task Scheduler, no AI, survives any chat):**
+`ARC3KaggleWatch` (`scripts/kaggle_watch.py`, every 10 min ->
+`logs/kaggle_watch_latest.txt` / `.jsonl`), `ARC3PushQueue`
+(`scripts/kaggle_push_queue.py`, pushes queued kernels only into a free GPU
+slot), and one-shot `ARC3Submit_*` tasks (`scripts/kaggle_submit_when_ready.py
+--arm "<UTC time>" ...`) that gate on the check run, then submit.
+
 ## Repo / branch layout
 
 - `master` -- Stage 0 (harness) is complete and stable here. Don't rebase
@@ -473,11 +1483,24 @@ removed, so a wrong heuristic costs nothing and the model can override it.
   the working Stage 0 harness. Merge to master once Stage 1 clears its
   milestone (see Status below) or is deliberately parked as a documented
   limitation.
-- Remote: `https://github.com/CalamityChasm/ARC-AGI-3-JEPAstyle_approach`
-  (private). Git identity for commits in this repo: `CalamityChasm
+- Remote: `https://github.com/calcrockett/ARC-AGI-3-JEPAstyle_approach`
+  (private). **The GitHub account was renamed `CalamityChasm` ->
+  `calcrockett` on 2026-09-22**; the remote URL was updated to match.
+  GitHub redirects the old path, so a stale clone keeps working and will
+  give no warning that it is relying on a redirect -- which stops working
+  if anyone claims the old name. If a clone still points at
+  `CalamityChasm`, run
+  `git remote set-url origin https://github.com/calcrockett/ARC-AGI-3-JEPAstyle_approach.git`.
+  Git identity for commits in this repo: `CalamityChasm
   <calcrockett@gmail.com>` (repo-local config, not global -- check `git
   config user.name`/`user.email` if cloning fresh on a new machine, you'll
-  need to set these locally again).
+  need to set these locally again). The commit *author name* is
+  deliberately left as `CalamityChasm` so history stays consistent; GitHub
+  links commits by the email, which did not change.
+- **The Kaggle account is a different account and was NOT renamed.** Every
+  dataset/kernel slug stays `calamitychasm/...` (e.g.
+  `calamitychasm/arc3-duck-nvfp4-anim`). Do not "fix" these to match the
+  GitHub rename -- it would break every submission and dataset mount.
 
 ## Environment setup (new machine)
 
@@ -4006,6 +5029,61 @@ above to narrow it down without spending more of the daily quota.
 
 ## Gotchas learned the hard way (don't re-discover these)
 
+- **(2026-10-09) Kaggle mounts inputs in TWO layouts, per session, not per kernel.** The same kernel gets
+  `/kaggle/input/{datasets/<owner>,competitions}/<slug>` in one GPU session and the older
+  `/kaggle/input/<slug>` in another (JustAdev742: 5 of 9 sessions on 2026-10-07, `cp: cannot stat
+  .../datasets/dfranzen/taaf-kaggle-source-bundle-copy`; models may likewise be `/kaggle/input/<model>/...`
+  instead of `/kaggle/input/models/<owner>/<model>/...`). Waiting does not help. The incumbent v1 hardcodes
+  the newer layout (hundreds of public copies scored with it, so the scored rerun evidently has it); every
+  derived builder output resolves inputs via `scripts/_m2_input_resolver.py` +
+  `kaggle_submission_milestone2_fork/input_resolver/input_resolver.py` (both layouts, then a depth-4
+  case-insensitive directory-name glob; constants are rewritten, nothing is symlinked because /kaggle/input is
+  read-only) and logs `INPUT_RESOLVED` / `INPUT_MISSING`. Any new notebook must do the same, and its submit gate
+  should require `INPUT_RESOLVED`. Evidence: JustAdev742's
+  `docs/lessons/0030-kaggle-mounts-inputs-in-two-layouts.md` (github.com/JustAdev742/Arc-Agi-3-Kaggle-comp); this repo's
+  own earlier gotchas recorded only the newer nested layout. **The v1 incumbent notebook is committed as Kaggle serialised it;
+  rebuilding it with `_build_m2_level_memory_kernel.py` (no flags) rewrites its JSON formatting, so restore it
+  with `git checkout` after any full rebuild.**
+
+- **(2026-10-05) A Kaggle kernel whose FIRST push is rejected at the 2
+  concurrent GPU-session limit never mounts its `dataset_sources`
+  afterwards** (`cp: cannot stat /kaggle/input/datasets/...`), on every later
+  push, while identical kernels first pushed into a free slot mount fine.
+  Seen on 4 kernels (3 old slugs + `arc3-m2-spd2-s12`), never on any kernel
+  whose first push succeeded. Push only when a GPU slot is free
+  (`scripts/kaggle_push_queue.py` checks); if it happens, recreate the kernel
+  under a new slug.
+- **(2026-10-09) The Claude Code cloud environment (Linux, no GPU, 4 CPU) cannot
+  reach kaggle.com** unless the environment network policy allows it. Kaggle
+  pushes, submissions, watchers and the leaderboard need the Windows dev box.
+- **(2026-10-05) SGLang `--mem-fraction-static 0.98` OOMs on the milestone-2
+  stack** a few seconds into serving: Triton kernels load lazily after
+  start-up and need the ~4 GB that 0.96 leaves free.
+- **(2026-10-02) The Kaggle check-run notebook and a "date has changed"
+  notice are not a clock** -- arm scheduled submissions from `date -u`, not
+  from an assumed time: one submission was armed for a UTC time that had
+  already passed and would never have fired.
+
+- **(2026-09-21) `kaggle kernels push` needs `PYTHONUTF8=1` on this box.** Kaggle
+  CLI 2.2.3 reads the notebook with the system ANSI codepage (cp1252), and every
+  notebook in the Duck/anim lineage carries non-ASCII characters (32 bytes in
+  `arc3-duck-nvfp4-hud.ipynb`), so the push dies with
+  `'charmap' codec can't decode byte 0x9d`. Verified directly: the file genuinely
+  fails a cp1252 decode. Set `PYTHONUTF8=1` for any kernel push in this lineage.
+- **(2026-09-21) An env var does NOT reach `segment_layer` just because you set
+  it.** `segment_layer` runs in the Python-tool **sandbox subprocess**, which
+  `inference/agent/python_tool_sandbox.py` launches with an explicit *allowlist*
+  env, not the parent's. A new flag must be added to that allowlist or the
+  feature is a **silent no-op with the entire prompt change still in place** --
+  every prompt describing a field that never exists, and all notebook asserts
+  green. That is the hardest failure shape to detect after the fact; it is the
+  same class as this file's `action_input` bug.
+- **(2026-09-21) Check a new branch's merge base before merging it.** The HUD arm
+  was branched off `f1dba78` while three PRs landed on `master` the same day; its
+  diff vs `master` showed **3,964 deletions**, and merging it as-is would have
+  silently removed the entire AVO result from `master`. `git merge-base
+  --is-ancestor origin/master HEAD` takes a second and catches it.
+
 - **(2026-09-05) All three real submission notebooks had silently shrunk the
   gateway-readiness wait from the official reference's proven 600s down to
   90s -- found only by diffing our notebook against `arcprize/
@@ -4138,18 +5216,6 @@ above to narrow it down without spending more of the daily quota.
   mid-sweep. On this dev box specifically, `E:` is a second drive with
   real free space (`Get-PSDrive` to check current free space on any
   drive) -- worth checking before assuming C: is the only option.
-- **The harness's anonymous `ARC_API_KEY` expires within roughly a day,
-  not just between machines/sessions.** Hit this repeatedly across this
-  project's later sessions -- every game-listing call returns HTTP 401,
-  `main.py` silently proceeds with an empty game list, and every agent
-  run in that state produces a technically-valid recording file with zero
-  real actions and zero levels (which can look exactly like a real agent
-  regression if you're mid-comparison, not an infrastructure issue).
-  Refresh via `curl https://three.arcprize.org/api/games/anonkey` and
-  update `.env`'s `ARC_API_KEY` -- and if a comparison run ever comes back
-  suspiciously empty (0 runs found, or every agent scoring 0 across the
-  board), check for this *first*, before assuming a code change broke
-  something.
 - **A deterministic `argmax` over a salience/variance map will default to
   the same fixed index every time the map is flat or near-flat, not a
   "no preference" no-op.** `Hypothesis`'s original click-location
@@ -4239,23 +5305,21 @@ above to narrow it down without spending more of the daily quota.
     a garbage-in-garbage-out training run that still runs to completion
     without erroring.
 
-- **The anonymous `ARC_API_KEY` in `ARC-AGI-3-Agents/.env` can expire
-  between sessions**, even in fully offline mode -- `main.py` always hits
-  the *real* `{ROOT_URL}/api/games` endpoint to get the game list before
-  anything else happens (offline mode only affects gameplay stepping, not
-  this initial listing call), and an expired/invalid key makes that
-  request return HTTP 401. When it does, `main.py` logs the 401, gets an
-  empty game list, and exits immediately -- every agent run in that state
-  silently produces a fully-valid-looking recording file with zero
-  actions and zero levels, which can look exactly like a real agent
-  failure if you're mid-debugging something else (this happened while
-  evaluating Stage 5 -- a first "0 levels completed across 200 runs"
-  result briefly looked like a hypothesis-bundle bug before the real
-  cause turned out to be an expired key). Get a fresh one with
-  `curl https://three.arcprize.org/api/games/anonkey` and update
-  `ARC_API_KEY` in `.env`; a quick single-game run is enough to confirm
-  it's fixed (watch for a nonzero total action count instead of an
-  immediate "No games available to play" error in the log).
+- **The anonymous `ARC_API_KEY` in `ARC-AGI-3-Agents/.env` expires within
+  roughly a day -- between sessions and even within one** (merged from two
+  earlier near-duplicate entries). `main.py` always hits the *real*
+  `{ROOT_URL}/api/games` endpoint to get the game list before anything else
+  (offline mode only affects gameplay stepping), and an expired key returns
+  HTTP 401. `main.py` logs the 401, gets an empty game list, and exits; every
+  agent run in that state silently produces a valid-looking recording file
+  with zero actions and zero levels, which looks exactly like a real agent
+  regression (a first "0 levels completed across 200 runs" Stage 5 result
+  briefly looked like a hypothesis-bundle bug for this reason). If a
+  comparison run comes back suspiciously empty (0 runs found, or every agent
+  scoring 0), check this *first*. Get a fresh key with
+  `curl https://three.arcprize.org/api/games/anonkey`, update `ARC_API_KEY`
+  in `.env`, and confirm with a quick single-game run (nonzero action count,
+  no "No games available to play" in the log).
 - **A Kaggle `dataset_sources` attachment mounts at
   `/kaggle/input/datasets/<owner>/<slug>/`, not `/kaggle/input/<slug>/`**
   -- unlike a competition attachment, which *does* mount at the

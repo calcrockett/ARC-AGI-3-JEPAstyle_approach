@@ -1,0 +1,30 @@
+{
+ "id": "read-1012-d-only",
+ "ops": [
+  {
+   "op": "kernel_output",
+   "kernel": "calamitychasm/arc3-jad-exp081-draft",
+   "grep": [
+    "harness patch applied successfully",
+    "our harness patches applied successfully: 6",
+    "#OURS_FORM ok version=d_prime",
+    "#OURS_FRESH replaced=",
+    "priority gate active: 14 concurrent streams",
+    "48 layers x 448 experts, router sha256 for every layer",
+    "ours: FR-Spec map hot_tokens_64k_arc.pt written",
+    "ours: MTP draft",
+    "(manifest 6f408d58fd81, dense b677e0c4234c)",
+    "MTP draft not mounted",
+    "MTP draft /kaggle",
+    "stuck in a loop",
+    "ours (--fail-fast): server watchdog on",
+    "ours (--fail-fast): the",
+    "ours: inputs mounted after",
+    "DEADLINE at",
+    "READY after",
+    "analyzer failed"
+   ],
+   "show_lines": 3
+  }
+ ]
+}

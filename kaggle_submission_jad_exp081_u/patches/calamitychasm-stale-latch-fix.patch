@@ -1,0 +1,31 @@
+calamitychasm C2 (STALE_LATCH_FIX) for arm C+U (calamitychasm/arc3-jad-exp081-u): a caught StaleStateActionError
+releases the per-snippet stale-state latch, at most 3 times per snippet. Applied after the six exp-081 patches and
+ours-10. Rationale and semantics: experiments/stage7_milestone2_improvements.md section 12.2.
+
+diff --git a/ARC3-Inference/inference/agent/python_tool_sandbox.py b/ARC3-Inference/inference/agent/python_tool_sandbox.py
+--- a/ARC3-Inference/inference/agent/python_tool_sandbox.py
++++ b/ARC3-Inference/inference/agent/python_tool_sandbox.py
+@@ -568,6 +568,8 @@ _SANDBOX_BOOTSTRAP = textwrap.dedent(
+         # armed when an action changes nothing; scoped to THIS snippet because
+         # the closure is rebuilt per execution, so no reset path can be missed
+         _stale_state: list[str] = []
++        # calamitychasm STALE_LATCH_FIX: how many refusals this snippet may still release (see action() below)
++        _stale_releases = [3]
+ 
+         # Raised when a snippet tries to act after the attempt or level ended.
+         # Derives from BaseException, not Exception, so a defensive
+@@ -627,6 +629,14 @@ _SANDBOX_BOOTSTRAP = textwrap.dedent(
+             if action_result.get("stop_reason") == "reset_not_first":
+                 raise RuntimeError(str(action_result.get("stop_detail")))
+             if action_result.get("stop_reason") == "stale_state":
++                # calamitychasm STALE_LATCH_FIX: the refused action never executed, so no later result could clear
++                # the latch, and every later action() in this snippet was refused, caught or not. Release it here,
++                # so a snippet that catches this error (as its message invites) can act again; an uncaught one ends
++                # as before, and the next no-op re-arms it. At most 3 releases per snippet: the no-op repeat guards
++                # are off in this notebook, so this bounds what a caught blind loop of no-ops can spend.
++                if _stale_releases[0] > 0:
++                    _stale_releases[0] -= 1
++                    del _stale_state[:]
+                 raise StaleStateActionError(
+                     str(action_result.get("stop_detail") or "stale state")
+                 )

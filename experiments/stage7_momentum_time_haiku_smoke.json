@@ -1,0 +1,83 @@
+{
+  "error": null,
+  "wall_s": 438.7,
+  "sim_clock_end": 1500.0,
+  "runs": [
+    {
+      "game": "ft09-0d8bbf25",
+      "state": "gave_up",
+      "levels": 0,
+      "actions": 1,
+      "final_score": 0.0,
+      "note": "tokens=0"
+    },
+    {
+      "game": "vc33-5430563c",
+      "state": "gave_up",
+      "levels": 0,
+      "actions": 3,
+      "final_score": 0.0,
+      "note": "tokens=0"
+    },
+    {
+      "game": "tu93-0768757b",
+      "state": "gave_up",
+      "levels": 0,
+      "actions": 2,
+      "final_score": 0.0,
+      "note": "tokens=0"
+    },
+    {
+      "game": "sk48-d8078629",
+      "state": "gave_up",
+      "levels": 0,
+      "actions": 1,
+      "final_score": 0.0,
+      "note": "tokens=0"
+    }
+  ],
+  "policy": {
+    "params": {
+      "base_s": 900.0,
+      "momentum_s": 450.0,
+      "stall_s": 630.0,
+      "hard_mult": 1.5
+    },
+    "games_seen": 4,
+    "decisions": {
+      "stall": 4
+    },
+    "log": [
+      [
+        "ft09-0d8bbf25",
+        "stall",
+        750.0,
+        0
+      ],
+      [
+        "vc33-5430563c",
+        "stall",
+        750.0,
+        0
+      ],
+      [
+        "sk48-d8078629",
+        "stall",
+        750.0,
+        0
+      ],
+      [
+        "tu93-0768757b",
+        "stall",
+        750.0,
+        0
+      ]
+    ]
+  },
+  "relay": {
+    "calls": 24,
+    "tool_calls": 20,
+    "text_replies": 4,
+    "bad_replies": 0
+  }
+}
