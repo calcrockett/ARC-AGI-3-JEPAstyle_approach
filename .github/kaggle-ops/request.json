@@ -1,1 +1,4 @@
-{"id": "jadu-push-1", "ops": [{"op": "status"}, {"op": "push_kernel", "dir": "kaggle_submission_jad_exp081_u/notebook"}]}
+{"id": "jad81-tx-alloc-1", "ops": [{"op": "kernel_output", "kernel": "calamitychasm/arc3-jad-exp081",
+  "grep": ["DEADLINE at", "READY after"],
+  "transcripts": {"games": "all", "max_lines_per_game": 30, "first_turns": 0, "last_turns": 1, "turn_chars": 300,
+                  "list_actions": 0}}]}
