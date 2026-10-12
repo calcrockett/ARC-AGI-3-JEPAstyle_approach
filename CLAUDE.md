@@ -120,41 +120,78 @@ is the level-memory patch (+4.7). **2026-10-07 and 2026-10-08 had NO submissions
 
 ### Submission schedule (from 2026-10-10)
 
-One slot per UTC day. Explore-then-exploit; read this before each daily submit. Verify the day's slot is empty first
+One slot per UTC day. Read this before each daily submit. Verify the day's slot is empty first
 (`SKIPPED_ALREADY_SUBMITTED_TODAY` otherwise).
 
-**Explore, 10-10 to 10-17.** A and B alternate (4 draws each), no incumbent draws (incumbent already n=5):
+**Adopted 2026-10-12 (`experiments/stage7_milestone2_improvements.md` section 16, 16.7): the C family takes every slot from 10-13.** The
+explore/exploit split and the drop rule below are superseded. Arm B, the incumbent and arm A get **no slots** unless the standing rule
+under "Decision rules" fires. Already submitted: 10-10 A (26.59), 10-12 C v2 draw 1 (57089293, PENDING until ~09:00 UTC); 10-11 was lost.
 
-| date | arm |
-|---|---|
-| 10-10 | A turbo-tail |
-| 10-11 | B turbo-lossless-tail -- **LOST** (session restart, nothing submitted; B n=0) |
-| 10-12 | **C jad-exp081 v2** (was A; submitted, ref 57089293) |
-| 10-13 | B |
-| 10-14 | C jad-exp081 v2 (was A) |
-| 10-15 | B |
-| 10-16 | C jad-exp081 v2 (was A) |
-| 10-17 | B |
+**The bundle kernel `calamitychasm/arc3-jad-exp081-ulm` (C+U+LM: arm C v2 + C1/C2 patches + level memory) is being built and is NOT yet
+checked.** Its check run (section 16.5: 25 x 121 min, pass / kill / near-pass lines there) has not run. Do not submit it until a
+check run has PASSED for the version you submit; until then, and if its check run is killed or only near-passes, use C+U v1 in its
+slots. The C+U row, the C+LM row and section 12.5 hold their own check-run results (C+U passed: 114 levels / 50.26; C+LM passed).
 
-**From 10-18, exploit.** Give all remaining slots (~16) to the arm with the better mean, if that mean is at least ~1 point
-above the incumbent's. If neither is, alternate the better arm and the incumbent. Re-check the means weekly. A variant that
-passes its check run (turbo-tail-hic16, or the strategy audit) may take over an arm's remaining slots only if it is the same
-mechanism with better measured throughput (e.g. hic16 replacing A); the audit needs clearly favourable evidence.
-Keep the drop rule: after 4 draws, drop an arm whose mean is more than 2.2 below the incumbent's.
+| date | kernel (version) | submit request | note |
+|---|---|---|---|
+| 10-10 | A turbo-tail v1 | done | 26.59 (57029829) |
+| 10-11 | -- | -- | **LOST** (session restart) |
+| 10-12 | C jad-exp081 v2 | done | draw 1, ref 57089293, PENDING |
+| 10-13 | **C+U v1** (`arc3-jad-exp081-u`); if C draw 1 < 28: **C v2** instead | `jadu-submit-1` (C: `jad81-submit-N`) | first hidden draw of the passed variant; pools into mu_C |
+| 10-14 | **C v2** (`arc3-jad-exp081`); if C draw 1 < 28: **C+U v1** instead | `jad81-submit-N` (C+U: `jadu-submit-N`) | C verbatim n=2 (n=3 on 10-19, n=4 on 10-25) |
+| 10-15 .. 11-02 | **bundle C+U+LM v1** (`arc3-jad-exp081-ulm`) **only if its check run passed**, else **C+U v1** | `jadulm-submit-N` (bundle) / `jadu-submit-N` (C+U) | the bundle from 10-15 (the MC assumed 10-16); the bundle's check run must have PASSED for that version first |
+| 10-18 | bundle (or C+U) | | checkpoint 1: re-run the standing rule |
+| 10-19 | **C v2** | `jad81-submit-N` | C verbatim n=3, the selection-eligible fallback |
+| 10-24 | bundle (or C+U) | | last date for a serving swap (C+hic16 or C+draft), see below |
+| 10-25 | **C v2** | `jad81-submit-N` | C verbatim n=4; checkpoint 2: re-run the standing rule |
+| 11-02 | bundle (or C+U) | | submit at 00:00 UTC; scored by ~09:00; final selection by 12:00 UTC |
+
+Every other date from 10-15 to 11-02 is the bundle (or C+U) -- about 16-17 bundle draws, 4 C verbatim (with 10-12), 1-2 C+U, 0 incumbent / A / B.
+Use the version each kernel's check run used: **C v2; C+U, C+LM and the bundle v1.** Bump the request `id` and the message draw number
+(`N` = that kernel's own draw count) every time. Pre-checks every day: no PENDING submission, the day's slot empty.
+
+**Decision rules (section 16.6; the posterior method is in 16.2 and 16.6).**
+1. **After C draw 1 (57089293, x) scores**, with the main prior N(31.8, 2.2):
+   - **High, x >= 33**: run the table unchanged. If the bundle's check run has passed in time, it may start on 10-14 (C v2 then moves to 10-15).
+   - **Mid, 28 <= x < 33**: run the table unchanged (one draw cannot overturn the prior; P(C > incumbent) stays >= 0.68).
+   - **Low, x < 28**: do not abandon the family on n=1. **Swap 10-13 and 10-14**: C v2 on 10-13 (a clean second read of the base), then C+U v1 on 10-14.
+     From then on the standing rule decides.
+2. **Standing rule, re-evaluated after every C-family score from 10-15 on (and always on 10-18 and 10-25).** Compute the pooled **C-family
+   posterior** for the C base: start from the main prior N(31.8, 2.2); update on every C-family draw (C, C+U, C+LM, bundle) after
+   subtracting that variant's prior effect mean (C+U +0.7, C+LM +1.5, bundle +1.9 = +0.7 +1.5 -0.3, hic16 +0.6) and widening each
+   draw's variance by the effect spreads (the linear-Gaussian joint model of 16.2, per-draw sd 3). Add JustAdev742's exp-081-family hidden
+   draws (exp-085) at half weight (sigma 4.2). Then:
+   - **posterior >= 28.4** (incumbent mean 29.42 minus 1): stay on the table.
+   - **27.4 <= posterior < 28.4 with >= 3 C-family draws**: alternate the bundle (or C+U) and the incumbent, incumbent on odd days.
+   - **posterior < 27.4 with >= 4 C-family draws**: incumbent only (`inc-submit-N`).
+   - Worked examples (16.6): draws 28, 26, 27 give 28.8 (stay); 25, 25, 26 give 27.8 (alternate).
+3. **Serving swap, once.** C+hic16 (`arc3-jad-exp081-hic16`) or C+draft (the MTP drafter, section 15) may replace the bundle kernel **once, no later than 10-24**,
+   and **only after passing its own check run** (C+hic16: section 14.3; the swapped kernel must also be rebuilt on the bundle and pass a
+   swap check run, section 16.5). The swapped kernel's draws pool with the bundle's as "same harness, faster serving", but it needs n >= 2 of
+   its own before one of its draws may be selected.
+
 Incumbent so far (n=5): 33.29, 28.18, 31.03, 29.38, 25.21 (mean 29.42, sd 3.03); draw 5 (57017233) scored 25.21, the lowest draw yet.
 If JustAdev742's hidden draw (56980485) lands <= ~28, prefer B over A.
 **It landed: 27.97** (JustAdev742 `docs/status.md`, read 2026-10-10; n=1) -> prefer B over A.
 Arm A (turbo-tail) draw 1 = **26.59** (57029829, n=1; 2.8 below the incumbent mean 29.42, inside the incumbent's own range 25.21-33.29; nothing separable yet).
-**Update 2026-10-12 00:15 UTC:** the 10-11 B slot was lost to a session restart (B n=0, A n=1, C n=1 pending). Arm C's v2 check run PASSED (789.9 tok/s, accept 3.12, 111 levels, 48.03), so per the arm C row C took arm A's remaining explore slots 10-12, 10-14, 10-16 (A is dropped from the explore schedule at n=1, 26.59); B keeps 10-13, 10-15, 10-17. C draw 1 = ref 57089293, PENDING since 00:13 UTC. **C uses kernel `calamitychasm/arc3-jad-exp081` version 2 and the `jad81-submit-1` example under "Examples for arc3-jad-exp081 (arm C)" below (bump the id to `jad81-submit-N` and the message draw number each time); it prints no `INPUT_RESOLVED` and has no counters.** Next: 10-13 arm B (`ttl-submit-1`; only after 57089293 scores, ~09:00 UTC, since Kaggle allows 1 PENDING submission per team). The drop rule needs n >= 4 per arm, so it cannot fire yet; the "from 10-18, exploit" comparison will have B n <= 3 (10-13/15/17), so decide then whether B gets extra draws first.
+**Update 2026-10-12 00:15 UTC (the arm-B 10-13/15/17 plan in this paragraph is SUPERSEDED by the section-16 schedule above; the C facts stand):** the 10-11 B slot was lost to a session restart (B n=0, A n=1, C n=1 pending). Arm C's v2 check run PASSED (789.9 tok/s, accept 3.12, 111 levels, 48.03), so per the arm C row C took arm A's remaining explore slots 10-12, 10-14, 10-16 (A is dropped from the explore schedule at n=1, 26.59); B keeps 10-13, 10-15, 10-17. C draw 1 = ref 57089293, PENDING since 00:13 UTC. **C uses kernel `calamitychasm/arc3-jad-exp081` version 2 and the `jad81-submit-1` example under "Examples for arc3-jad-exp081 (arm C)" below (bump the id to `jad81-submit-N` and the message draw number each time); it prints no `INPUT_RESOLVED` and has no counters.** Next: 10-13 arm B (`ttl-submit-1`; only after 57089293 scores, ~09:00 UTC, since Kaggle allows 1 PENDING submission per team). The drop rule needs n >= 4 per arm, so it cannot fire yet; the "from 10-18, exploit" comparison will have B n <= 3 (10-13/15/17), so decide then whether B gets extra draws first.
 
-**Final selection.** Select BOTH slots explicitly before 2026-11-02 23:59 UTC; do not rely on auto-selection. Choose the
-highest public draw of each of the top-2 arms by mean, each arm needing n >= 3. Reasons:
+**Final selection (section 16.6, adopted 2026-10-12).** Select BOTH slots explicitly before 2026-11-02 23:59 UTC (aim for 11-02 12:00 UTC,
+after the 11-02 draw has scored); do not rely on auto-selection.
+1. Compute the posterior (16.2 model) for every kernel with n >= 3.
+2. If the leading family's posterior is >= 0.5 above the best other family's: select the **two highest public draws within the leading
+   family** (`best2`), among that family's kernels whose posterior is within 1.0 of the leader's. Normally that is the bundle's top two, or the
+   bundle's top plus C verbatim's top.
+3. If the top two families are within 0.5 of each other: select the **top public draw of each** (`each2`).
+4. Never select a kernel with n < 3, or a serving-swapped kernel with n < 2 of its own.
+Reasons and caveats:
 - Each run plays all ~110 games, so the public and private halves (55 + 55 games) are likely scored in the same run.
 - Kaggle normally counts the best of the selected submissions. This is assumed: `rules.md` paraphrases and does not confirm
-  it, so verify on the live rules page.
-- Monte Carlo (scratchpad script, n/a in repo): if public and private correlate (rho >= 0.3), picking top public draws beats
-  random draws of the same arm by 11-20 points of P(top 1%) at the 33.4 bar. If rho = 0 (a rerun), it costs almost nothing.
-- Modelled P(top 1%) is about 0.5 at today's bar of 33.4, falling to about 0.2 if the bar reaches 36.
+  it, so **verify on the live rules page** before 11-02.
+- Monte Carlo (section 16.4): `best2` beats `each2` by 0.02-0.09 P(top 1%) at bar 35 and is never more than 0.02 worse; if public and
+  private correlate (rho >= 0.3) the top public draws of the kernel drawn most beat random draws, and at rho = 0 they cost almost nothing.
+- Expected P(top 1%) for the section-16 schedule at private bar 35: 0.55 / 0.67 / 0.78 at rho 0 / 0.3 / 0.6 (main prior), 0.38 / 0.51 / 0.62 under the
+  skeptical prior. The private bar is 0-2 below the public one (16.3).
 
 Leaderboard 02:33 UTC 2026-10-10 (kaggle-ops status): 4,078 teams; top-1% bar 33.37 (rank 41); we are rank 44 at 33.29; top-5% 31.00 (rank 204); top-10% 29.53 (rank 408); #1 59.17. 57017233 scored 25.21 (COMPLETE by 03:37 UTC); re-read at 03:37 UTC: 4,078 teams, we are rank 45 at 33.29, top-1% bar 33.37 (rank 41), top-5% 31.00, top-10% 29.53.
 Re-read 13:02 UTC 2026-10-10 (kaggle-ops `status-1010c`): 4,095 teams; #1 Yi-Chia Chen 62.96, #2 Tufa Labs 56.52, #3 mtg 44.32; top-1% bar 33.42 (rank 41), top-5% 31.05 (rank 205), top-10% 29.61 (rank 410); we are rank 46 at 33.29 (best draw). Kernels: hic16 (both arms), tail, lossless-tail, level-memory, vllm-s14 COMPLETE v1; `dprime` and `dprime-ff` not pushed (`kernels.get` denied, as expected).
@@ -167,11 +204,13 @@ Re-read 06:38 UTC 2026-10-12 (kaggle-ops `read-1012-lmu`, run 38213052774): 4,19
 
 Submit as early after 00:00 UTC as possible: only one submission may be pending and scoring takes ~9 h, so a late submission blocks the next day's slot.
 
-Submit requests (one per commit, new `id` every time, bump the draw number in `message`; `version` 1 for A, B and the incumbent, **2 for C**):
-- Arm C (10-12, 10-14, 10-16): the `jad81-submit-1` example under "Examples for arc3-jad-exp081 (arm C)" below, **`version` 2** (not 1), ids `jad81-submit-N`.
-- Arm A (no longer scheduled; n=1): the `tt-submit-1` example under "Examples for the tail kernels" below (kernel `calamitychasm/arc3-m2-turbo-tail`).
-- Arm B: the same request with `calamitychasm/arc3-m2-turbo-lossless-tail`, ids `ttl-*`, and no `SPEC_ACCEPT 0.5` marker.
-- Incumbent (no `INPUT_RESOLVED`, no variant counters):
+Submit requests (one per commit, new `id` every time, bump the draw number `N` in `message`; `version` **2 for C**, **1 for C+U, C+LM, the bundle**, A, B and the incumbent):
+- Arm C (10-12, 10-14, 10-19, 10-25; swapped to 10-13 on a low draw 1): the `jad81-submit-1` example under "Examples for arc3-jad-exp081 (arm C)" below, **`version` 2** (not 1), ids `jad81-submit-N`, message `m2 jad exp081 draw N`.
+- **Arm C+U (10-13, and the bundle's slots until the bundle passes or if it fails): the `jadu-submit-1` example under "Examples for arc3-jad-exp081-u (arm C+U)" below, `kernel` `calamitychasm/arc3-jad-exp081-u`, `version` 1, ids `jadu-submit-N`, message format `m2 jad exp081 u draw N`** (e.g. `m2 jad exp081 u draw 1`); markers include `our harness patches applied successfully: 8`, `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1`; counters `untried_summary.json`, `stale_latch_summary.json` with the `require_zero` in that example.
+- **Bundle C+U+LM (10-15 on, after its check run passes): `jadulm-submit-1`, `kernel` `calamitychasm/arc3-jad-exp081-ulm`, `version` 1, ids `jadulm-submit-N`, message `m2 jad exp081 ulm draw N`.** PLACEHOLDER: the exact request is to be filled in by the agent that builds the kernel (an "Examples for arc3-jad-exp081-ulm" block below). It should be arm C's six markers with `...successfully: 8`, plus `STALE_LATCH_FIX installed`, `UNTRIED_NOTICE installed mode=i1` and `LEVEL_MEMORY installed`; counters `untried_summary.json`, `stale_latch_summary.json`, `level_memory_summary.json`; `require_zero` errors / tracker_errors / i2_lines / `stale_refused_after_released` (see 16.5). Do not submit it before that block exists and its check run has passed.
+- Arm A (not scheduled; n=1): the `tt-submit-1` example under "Examples for the tail kernels" below (kernel `calamitychasm/arc3-m2-turbo-tail`).
+- Arm B (not scheduled; n=0): the same request with `calamitychasm/arc3-m2-turbo-lossless-tail`, ids `ttl-*`, and no `SPEC_ACCEPT 0.5` marker.
+- Incumbent (not scheduled unless the standing rule fires; no `INPUT_RESOLVED`, no variant counters):
   ```json
   {"id": "inc-submit-N", "ops": [{"op": "submit", "kernel": "calamitychasm/arc3-m2-level-memory", "version": 1,
     "message": "m2 level memory draw N",
@@ -309,8 +348,8 @@ Builders: `scripts/_build_m2_level_memory_kernel.py [--history-cache] [--tried-f
    draft vocab file). Respect the 2-GPU-session limit: push only via `scripts/kaggle_push_queue.py`
    (a first push rejected at the limit never mounts its datasets). Do not run a submission slot and a
    speed check at the same time.
-4. **Submission plan.** Follow "Submission schedule (from 2026-10-10)" above (explore A/B 10-10..10-17, then exploit, drop rule;
-   select BOTH final slots explicitly: the highest public draw of each of the top-2 arms by mean, each with n >= 3).
+4. **Submission plan.** Follow "Submission schedule (from 2026-10-10)" above (the section-16 table: C+U 10-13, C 10-14, the bundle or C+U
+   from 10-15, C verbatim on 10-19 and 10-25; decision rules and the final-selection rule are there).
    `arc3-m2-lm-tail` gets no slots on its own.
 5. **Delete the stray remote branch `wip-histcache-inherited`** (content already merged; the cloud proxy
    blocks ref deletion, so do it from the dev box or GitHub).
