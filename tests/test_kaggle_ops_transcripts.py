@@ -231,6 +231,17 @@ def test_parse_request_validates_new_transcript_keys():
             ko.parse_request(json.dumps({"id": "x", "ops": [dict(ok, transcripts=dict(ok["transcripts"], **bad))]}))
 
 
+def test_sample_chars_widens_the_sample(tmp_path, capsys):
+    rec = record([opener(1, 1), asst("x", "action(1)"), tool("StaleStateActionError " + "p" * 600 + " TAIL_MARK")])
+    write_game(tmp_path, recs=[rec])
+    _, narrow = report(tmp_path, {"games": ["sp80"], "samples": {"StaleStateActionError": 1}}, capsys)
+    _, wide = report(tmp_path, {"games": ["sp80"], "samples": {"StaleStateActionError": 1}, "sample_chars": 1000}, capsys)
+    assert "TAIL_MARK" not in narrow and "TAIL_MARK" in wide
+    with pytest.raises(ko.RequestError):
+        ko.parse_request(json.dumps({"id": "x", "ops": [{"op": "kernel_output", "kernel": K,
+                                                         "transcripts": {"games": "all", "sample_chars": 5}}]}))
+
+
 def test_files_without_request_logs(tmp_path, capsys):
     res, out = report(tmp_path, {"games": "all"}, capsys)
     assert res == {"files": 0} and "no *requests.jsonl" in out

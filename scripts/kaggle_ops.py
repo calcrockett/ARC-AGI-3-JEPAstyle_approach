@@ -166,7 +166,7 @@ def _check_transcripts(t: Any, i: int) -> None:
                            and all(isinstance(x, str) and re.fullmatch(r"[\w.-]{1,40}", x) for x in g)):
         raise RequestError(f"ops[{i}]: transcripts.games must be \"all\" or a non-empty list of game ids")
     for key, lo, hi in (("max_lines_per_game", 10, 500), ("turn_chars", 100, 2000), ("first_turns", 0, 10),
-                        ("last_turns", 0, 10), ("list_actions", 0, 100)):
+                        ("last_turns", 0, 10), ("list_actions", 0, 100), ("sample_chars", 100, 4000)):
         v = t.get(key)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
             raise RequestError(f"ops[{i}]: transcripts.{key} must be an integer in {lo}..{hi}")
@@ -1105,7 +1105,8 @@ def tx_scan_file(path: Path, cfg: dict) -> dict:
                         a = max(m.start() - 150, 0)
                         samples[lab].append({"level": cur["level"], "rec": info["records"],
                                              "step": lv(cur["level"])["steps"][1], "n_in_result": len(pat.findall(it["text"])),
-                                             "text": it["text"][a:m.end() + 250], "code": last_code[-300:],
+                                             "text": it["text"][a:m.end() + int(cfg.get("sample_chars", 250))],
+                                             "code": last_code[-300:],
                                              "except": "except" in last_code})
             if st:
                 info["markers"] += 1
@@ -1225,7 +1226,7 @@ def tx_game_lines(game: str, path: Path, root: Path, cfg: dict) -> tuple[list[st
         tail.append(f"  first {len(items)} tool results containing {lab!r}:")
         for x in items:
             tail.append(f"   [L{x['level']} rec {x['rec']} step {x['step']}, {x['n_in_result']}x in this result, prior code had "
-                        f"except={x['except']}] result: {_tx_flat(x['text'], 380)}")
+                        f"except={x['except']}] result: {_tx_flat(x['text'], 150 + int(cfg.get('sample_chars', 250)))}")
             tail.append(f"      prior code tail: {_tx_flat(x['code'], 240, tail=True)}")
         if not items:
             tail.append("   (none)")
@@ -1300,8 +1301,9 @@ def transcripts_report(out: Path, cfg: dict) -> dict:
         for path in paths:
             head, timeline, tail, small = tx_game_lines(game, path, out, cfg)
             lines = _tx_fit_budget(head, timeline, tail, min(per_game, TX_TOTAL_LINES - printed))
+            cap = max(TX_LINE_CHARS, 400 + int(cfg.get("sample_chars", 0)))
             for ln in lines:
-                print("  " + ln[:TX_LINE_CHARS])
+                print("  " + ln[:cap])
             printed += len(lines)
             summary["games"][game if len(paths) == 1 else f"{game}:{path.name}"] = small
             if printed >= TX_TOTAL_LINES:
