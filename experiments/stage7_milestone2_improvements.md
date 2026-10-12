@@ -1234,7 +1234,7 @@ each). Nine games were read: sp80, lf52, g50t, bp35, sk48, wa30, tn36, vc33, cn0
 `try/except`: its stdout reads `retry StaleStateActionError` three times in a row, then `bot cap clicks -1`, and the snippet ended
 in an uncaught `StaleStateActionError: MOUSE(row=58, col=46) was not executed. The action immediately before it,
 MOUSE(row=58, col=46), was a no-op`. That is three caught refusals each followed by a retry that was refused again, which is the
-deadlock 11.3 derived from the source. It is the only snippet of that shape in the nine games; the other 25-odd refusals are
+deadlock 11.3 derived from the source. It is the only snippet of that shape in the nine games; the other ~20 refusals in the nine games are
 single stops. So the bug is real on arm C, but in this run it cost a few actions in one level.
 
 **Verdicts for the three checks you asked about.**
